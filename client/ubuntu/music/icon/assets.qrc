@@ -1,0 +1,23 @@
+<RCC>
+    <qresource prefix="/">
+        <file>assets.qrc</file>
+        <file>play-next.png</file>
+        <file>play-prev.png</file>
+        <file>playmode.png</file>
+        <file>play-pause.png</file>
+        <file>volume-mute.png</file>
+        <file>volume.png</file>
+        <file>bk1.png</file>
+        <file>play-playing.png</file>
+        <file>bk2.jpg</file>
+        <file>bk3.jpg</file>
+        <file>jianglan.ttf</file>
+        <file>theme.png</file>
+        <file>add-dir.png</file>
+        <file>playmode-loop.png</file>
+        <file>playmode-rand.png</file>
+        <file>playmode-single.png</file>
+        <file>bk4.jpg</file>
+        <file>app-icon.ico</file>
+    </qresource>
+</RCC>
