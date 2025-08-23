@@ -26,27 +26,17 @@
 class CEvent
 {
 public:
-	CEvent();
+	CEvent(int fd):epfd_(fd){};
 	~CEvent();
-	int Register_event(int fd, uint32_t );
+	int register_event(int fd, uint32_t );
 	int modify_event(int fd, uint32_t);
-	int unRegister_event(int fd);
+	int unregister_event(int fd);
 
-	void SetNoblocking(int v_sockfd);
-	inline void set_listenFd(int fd) { listenfd_ = fd; };
+	void set_nonblocking(int v_sockfd);
 
-	static void* EventHandle(void* arg);
 
-public:
+private:
 	int epfd_;
-
-private:
-	int listenfd_;
-
-private:
+	//struct epoll_event events[EPOLL_MAX_SIZE];
 	
-	bool is_running;
-	pthread_t  m_tid;
-	struct epoll_event events[EPOLL_MAX_SIZE];
-	CThreadPool<CTask> *pool;
 };

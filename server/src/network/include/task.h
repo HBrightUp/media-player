@@ -13,7 +13,7 @@ public:
     virtual int process() = 0;
     void SetConnFd(int data);   //设置接收的套接字连接号。
     int GetConnFd();
-    virtual ~CTask() {}
+    virtual ~CTask();
     
 };
 
@@ -21,9 +21,6 @@ public:
 class CAcceptTask : public CTask {
     public:
         int process() override;
-        void setListenFd(int fd);
-    private:
-        int listenfd_;
 };  
 
 class CReadTask : public CTask {

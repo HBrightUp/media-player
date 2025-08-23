@@ -5,204 +5,82 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include<cstring>
+#include<format>
 #include"../include/server.h"
 #include"../../common/include/common.h"
 #include"../include/event.h"
+#include"../../logger/include/log.h"
 
-Server* Server::Instance() {
+Server& Server::Instance() {
     static Server s;
-    return &s;
+    return s;
 } 
 
 Server::~Server() {
-
+    if(pthread_cancel(epollThreadId_) == 0) {
+        pthread_join(epollThreadId_, (void **)nullptr);
+    }
 }
 
-void Server::set_server_info(const std::string& ip, const unsigned short port) {
+void Server::init(const std::string& ip, const unsigned short port) {
     ip_ = ip;
     port_ = port;
 }
 
-bool Server::run() {
-    struct epoll_event ev, event_list[EPOLL_MAX_SIZE];
-    
-    //epfd_ = epoll_create(256); 
-    event = new CEvent();
+bool Server::start() {
 
-    struct sockaddr_in clientaddr;
-    socklen_t clilenaddrLen;
-    struct sockaddr_in serveraddr;
-    
+    auto& log = Logger::getInstance();
+   
+
+    epfd_ = epoll_create(EPOLL_MAX_SIZE);
+    if(epfd_  < 0) {
+        return false;
+    }
+    event.reset(new CEvent(epfd_));
+
     listenfd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd_ < 0) {
-       print_log("Create server socket failed!");
-    } else {
-        std::cout << "Listenfd: " << listenfd_ << std::endl;
-    }
+       return false;
+    } 
 
-    //set_nonblocking(listenfd_);
-    event->set_listenFd(listenfd_);
-    event->SetNoblocking(listenfd_);
-
+    log.print(std::format("listenFd: {}", listenfd_));
+    
+    event->set_nonblocking(listenfd_);
+    event->register_event(listenfd_,  EPOLLIN | EPOLLET);
 
     int opt = 1;
     if (setsockopt(listenfd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        print_log("Set reuse of server port failed!");
+        return false;
     }
- 
-    // ev.data.fd = listenfd_;
-    // ev.events = EPOLLIN | EPOLLET;
-    // epoll_ctl(event->epfd, EPOLL_CTL_ADD, listenfd_, &ev);
 
-    event->Register_event(listenfd_,  EPOLLIN | EPOLLET);
-
-
+    struct sockaddr_in serveraddr;
     memset(&serveraddr, 0, sizeof(serveraddr));
     serveraddr.sin_family     = AF_INET;
-    serveraddr.sin_addr.s_addr=htonl(INADDR_ANY); 
-    serveraddr.sin_port       = htons(SERVER_PORT);
+    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY); 
+    serveraddr.sin_port       = htons(port_);
 
     if(0 != bind(listenfd_, (struct sockaddr *)&serveraddr, sizeof(serveraddr)))
     {
-        print_log("Server bind port failed!");
+        log.print(std::format("bind failed, port: {}", port_));
+        return false;
     }
 
-    if(0 != listen(listenfd_, SERVER_PORT)) 
+    if(0 != listen(listenfd_, port_)) 
     {
-        print_log("Server listen port failed!");
+        log.print(std::format("listen failed, port: {}", port_));
+        return false;
     }
 
-    int nfds, connfd, sockfd,len;
-    clilenaddrLen = sizeof(struct sockaddr_in);
-    char line_buff[MAX_BUFFER_READ_ONCE_TIME];
+    pthread_create(&epollThreadId_, nullptr, &Server::EventHandle, (void*)this);
 
-    std::cout << "main thread load finish" << std::endl;
+  
+    pool.reset( new CThreadPool<CTask>());
+
     while (true)
     {
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
     
-    
-}
-
-bool Server::start() {
-    
-    // struct epoll_event ev, event_list[EPOLL_MAX_SIZE];
-    
-    // epfd_ = epoll_create(256); 
-    
-
-    // struct sockaddr_in clientaddr;
-    // socklen_t clilenaddrLen;
-    // struct sockaddr_in serveraddr;
-    
-    // listenfd_ = socket(AF_INET, SOCK_STREAM, 0);
-    // if (listenfd_ < 0) {
-    //    print_log("Create server socket failed!");
-    // }
-
-    // set_nonblocking(listenfd_);
-
-
-
-    // int opt = 1;
-    // if (setsockopt(listenfd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-    //     print_log("Set reuse of server port failed!");
-    // }
- 
-    // ev.data.fd = listenfd_;
-    // ev.events = EPOLLIN | EPOLLET;
-    // epoll_ctl(epfd_, EPOLL_CTL_ADD, listenfd_, &ev);
-
-    // memset(&serveraddr, 0, sizeof(serveraddr));
-    // serveraddr.sin_family     = AF_INET;
-    // serveraddr.sin_addr.s_addr=htonl(INADDR_ANY); 
-    // serveraddr.sin_port       = htons(SERVER_PORT);
-
-    // if(0 != bind(listenfd_, (struct sockaddr *)&serveraddr, sizeof(serveraddr)))
-    // {
-    //     print_log("Server bind port failed!");
-    // }
-
-    // if(0 != listen(listenfd_, SERVER_PORT)) 
-    // {
-    //     print_log("Server listen port failed!");
-    // }
-
-    // int nfds, connfd, sockfd,len;
-    // clilenaddrLen = sizeof(struct sockaddr_in);
-    // char line_buff[MAX_BUFFER_READ_ONCE_TIME];
-
-    // while(true) {
-        
-    //     nfds = epoll_wait(epfd_, event_list, EPOLL_MAX_SIZE, SERVER_EVENT_TIMEOUT); 
-    //     for(int i = 0; i < nfds; ++i)
-    //     {
-    //         if( event_list[i].data.fd == listenfd_ ) 
-    //         {
-    //             connfd = accept(listenfd_, (struct sockaddr *)&clientaddr, &clilenaddrLen);
-    //             if(connfd < 0)
-    //             {
-    //                 print_log("Accept client failed!");
-    //                 return 1;                
-    //             }
- 
-    //             set_nonblocking(connfd);
- 
-    //             char *str = inet_ntoa(clientaddr.sin_addr);
-    //             int port = ntohs(clientaddr.sin_port);
- 
-    //             std::cout << "accapt a connection from " << str << ":" << port << std::endl;
-
-    //             ev.data.fd = connfd;
-    //             ev.events = EPOLLIN | EPOLLET;
-    //             //ev.events=EPOLLIN;
-    //             epoll_ctl(epfd_, EPOLL_CTL_ADD, connfd, &ev); 
-
-    //         } else if(event_list[i].events & EPOLLIN)  {
-    //             if ( (sockfd = event_list[i].data.fd) < 0) {
-    //                 continue; 
-    //             }
-                 
-    //             std::cout << "start read." << std::endl;
-    //             if ( (len = read(sockfd, line_buff, MAX_BUFFER_READ_ONCE_TIME)) < 0)  {
-                
-    //                 if (errno == ECONNRESET)
-    //                 {
-    //                     close(sockfd);
-    //                     event_list[i].data.fd = -1;
-    //                 }
-    //                 else {
-    //                     print_log("Read data  error!");
-    //                 }
-                        
-    //             } else if (len == 0) {
-    //                 close(sockfd);
-    //                 event_list[i].data.fd = -1;
-    //             }
- 
-    //             line_buff[len] = '\0';
-    //             std::cout << "read " << line_buff << std::endl;
- 
-    //             ev.data.fd = sockfd;
-    //             ev.events = EPOLLOUT | EPOLLET; 
-    //             epoll_ctl(epfd_,EPOLL_CTL_MOD, sockfd, &ev);
- 
-    //         }
-    //         else if(event_list[i].events & EPOLLOUT) // 如果有数据发送
-    //         {
-    //             sockfd = event_list[i].data.fd;
-    //             write(sockfd, line_buff, len);
-               
-    //             ev.data.fd = sockfd;
-    //             ev.events = EPOLLIN | EPOLLET;
-    //             epoll_ctl(epfd_, EPOLL_CTL_MOD, sockfd, &ev);
-    //         }
-    //     }
-    
-    // }
-
-    return true;
 }
 
 bool Server::set_nonblocking(const int sock)
@@ -221,3 +99,55 @@ bool Server::set_nonblocking(const int sock)
     return true;
 }
 
+
+void* Server::EventHandle(void* arg)
+{
+	
+	Server &s = *(Server*)arg;
+	int nfds, connfd;
+	Logger& log = Logger::getInstance();
+	
+	while(true) {
+		//log.print("epoll_wait start work");
+		nfds = epoll_wait(s.epfd_, s.events, EPOLL_MAX_SIZE, 1000);
+		if(nfds > 0) {
+			for(int i = 0; i < nfds; ++i) {
+				connfd = s.events[i].data.fd;
+				log.print(std::format("epoll_wait  connfd: {}", connfd));
+			
+				if( connfd == s.listenfd_ ) {
+					CTask* t = new CAcceptTask();
+					t->SetConnFd(connfd);
+					s.pool->append(t);
+
+				} else if(s.events[i].events & EPOLLIN)  {
+
+					if ( connfd < 0)  {
+						continue;
+					}
+
+					log.print(std::format("Addread task, fd: {}", connfd));
+		
+					CTask* t = new CReadTask();
+					t->SetConnFd(connfd);
+
+					
+					s.pool->append(t);
+				} else {
+					log.print(std::format("Add write task, fd: {}", connfd));
+					
+					CTask* t = new CWriteTask();
+					t->SetConnFd(connfd);
+					s.pool->append(t);
+				}
+			}
+		} else if (nfds == 0) {
+			continue;
+		} else {
+			log.print("epoll_wait  faild.");
+			break;
+		}
+	}
+	
+	return nullptr;
+}

@@ -5,7 +5,8 @@
 #include<mutex>
 #include<condition_variable>
 #include<queue>
-
+#include<format>
+#include"../../logger/include/log.h"
 
 
 const int MAX_THREADS = 1000;
@@ -14,7 +15,7 @@ template<class T>
 class CThreadPool {
 
     public:
-        CThreadPool(int nums = 1);
+        CThreadPool(int nums = 3);
         ~CThreadPool();
         std::queue<T*> tasks_queue;
         bool append(T* request);
@@ -38,7 +39,6 @@ CThreadPool<T>::CThreadPool(int nums):stop(false) {
     }
 
     for(int i = 0; i < nums; ++i) {
-        std::cout << "create thread number is: "  << i << std::endl;
         work_threads.emplace_back(worker, this);
     }
 }
@@ -74,7 +74,6 @@ template<class T>
 
 template<class T> 
 void CThreadPool<T>::run() {
-    std::cout << "run +++" << std::endl;
 
     while(!stop) {
         std::unique_lock<std::mutex> lck(this->queue_mutex);
@@ -86,12 +85,16 @@ void CThreadPool<T>::run() {
              continue;
         } 
 
+        Logger::getInstance().print(std::format(" Number of current task:  {}", this->tasks_queue.size()));
+
         T* request = tasks_queue.front();
         tasks_queue.pop();
 
+        lck.unlock();
         
         if (request) {
             request->process();
+            delete request;
         }
         
     }
