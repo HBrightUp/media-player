@@ -1,0 +1,1 @@
+protoc ./music.proto  --cpp_out=./

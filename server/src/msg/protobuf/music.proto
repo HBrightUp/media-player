@@ -1,0 +1,13 @@
+syntax  = "proto3";
+
+message Login {
+    string name = 1;
+    string pwd = 2;
+    int32 age = 3;
+}
+
+message Response {
+    int32 code = 1;
+    int32 reserved1= 2;
+    string reserved2 = 3;
+}

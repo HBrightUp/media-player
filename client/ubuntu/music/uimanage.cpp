@@ -6,6 +6,9 @@ UiManage::UiManage() {
 
     connect(login_.get(), &Login::login_send_message, this, &UiManage::login_message_rev);
 
+    client_.reset( new TcpClient);
+
+    client_.get()->start();
 }
 
 void UiManage::start(){

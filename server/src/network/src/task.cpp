@@ -79,7 +79,7 @@ int CReadTask::process() {
                 break;
             } else {
                 Server::Instance().event.get()->unregister_event(connfd);
-              
+                //close(connfd);
                 break; 
             }
         } else if ( read_n == 0) {

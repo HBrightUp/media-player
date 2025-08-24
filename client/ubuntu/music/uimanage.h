@@ -5,6 +5,7 @@
 #include"login.h"
 #include"player.h"
 #include"video.h"
+#include"./tcpclient.h"
 
 class UiManage:public QObject
 {
@@ -22,7 +23,7 @@ class UiManage:public QObject
         QScopedPointer<Login> login_;
         QScopedPointer<Player> player_;
         QScopedPointer<Video> video_;
-
+        QScopedPointer<TcpClient> client_;
 };
 
 #endif // UIMANAGE_H
