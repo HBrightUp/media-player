@@ -13,24 +13,9 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Multimedia MultimediaW
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets)
 find_package(Qt6 COMPONENTS Network REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core)
-find_package(Protobuf REQUIRED)
 
 
 
-message("start build")
-FILE(GLOB proto_files ${CMAKE_CURRENT_SOURCE_DIR}/proto/*.proto)
-FOREACH(proto_file ${proto_files})
-    STRING(REGEX REPLACE "[^/]proto" "" proto_file_name ${proto_file})
-    LIST(APPEND PROTO_SRCS "${proto_file_name}.pb.cc")
-        ADD_CUSTOM_COMMAND(
-                OUTPUT "${proto_file_name}.pb.h" "${proto_file_name}.pb.cc"
-                COMMAND protoc --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
-                       --cpp_out=${CMAKE_CURRENT_SOURCE_DIR}/proto/ ${proto_file}
-                DEPENDS ${proto_file}
-        )
-ENDFOREACH(proto_file)
-message(STATUS ${PROTO_SRCS})
-include_directories(./proto)
 
 
 
@@ -73,7 +58,7 @@ endif()
 
 target_link_libraries(music PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Multimedia  Qt${QT_VERSION_MAJOR}::MultimediaWidgets Qt6::Network )
 target_link_libraries(music PRIVATE Qt6::Core)
-target_link_libraries(music PRIVATE Protobuf::protobuf)
+
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
 # If you are developing for iOS or macOS you should consider setting an
