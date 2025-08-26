@@ -1,5 +1,7 @@
 syntax  = "proto3";
 
+package media;
+
 message Login {
     string name = 1;
     string pwd = 2;
