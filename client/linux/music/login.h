@@ -2,6 +2,9 @@
 #define LOGIN_H
 
 #include <QDialog>
+#include"./msg_assembly.h"
+#include"./music.pb.h"
+#include"./signals_type.h"
 
 namespace Ui {
 class Login;
@@ -16,7 +19,7 @@ public:
     ~Login();
 
 signals:
-    void login_send_message(int, QString);
+    void login_send_message(SignalsType signal, std::string);
 
 private slots:
     void on_btn_login_clicked();

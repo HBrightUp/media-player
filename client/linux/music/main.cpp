@@ -3,8 +3,8 @@
 #include <QApplication>
 #include<QFontDatabase>
 #include<QDebug>
-
 #include"uimanage.h"
+
 
 
 int main(int argc, char *argv[])

@@ -6,6 +6,8 @@
 #include"player.h"
 #include"video.h"
 #include"./tcpclient.h"
+#include"msg_assembly.h"
+#include"./signals_type.h"
 
 class UiManage:public QObject
 {
@@ -15,8 +17,9 @@ class UiManage:public QObject
         void start();
 
     private slots:
-        void login_message_rev(int, QString);
-        void player_message_rev(int, QString);
+        void login_message_rev(const SignalsType, const std::string&);
+        void login_success_rev();
+        //void player_message_rev(MessageType, std::string);
 
     private:
 

@@ -8,13 +8,19 @@ set(CMAKE_AUTORCC ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_PREFIX_PATH "~/Qt/6.9.2/gcc_64")
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets)
+
+
 find_package(Qt6 COMPONENTS Network REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Protobuf REQUIRED)
 
-
+include_directories("/usr/local/include/")
 
 
 
@@ -35,7 +41,15 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         login.h login.cpp login.ui
         uimanage.h uimanage.cpp
         video.h video.cpp video.ui
+
+        music.pb.cc
+        music.pb.h
+        msg_assembly.h
+        msg_assembly.cpp
         tcpclient.h tcpclient.cpp
+        signals_type.h
+
+
     )
 # Define target properties for Android with Qt 6 as:
 #    set_property(TARGET music APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR
@@ -57,6 +71,9 @@ else()
 endif()
 
 target_link_libraries(music PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Multimedia  Qt${QT_VERSION_MAJOR}::MultimediaWidgets Qt6::Network )
+target_link_libraries(music PRIVATE Qt6::Core)
+target_link_libraries(music PRIVATE protobuf::libprotobuf)
+target_link_libraries(music PRIVATE Qt6::Core)
 target_link_libraries(music PRIVATE Qt6::Core)
 
 
