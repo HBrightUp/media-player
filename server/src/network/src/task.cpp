@@ -10,6 +10,7 @@
 #include"../../logger/include/log.h"
 #include"../include/event.h"
 #include"../include/server.h"
+#include"../include/msg_manage.h"
 
 
 
@@ -41,7 +42,7 @@ int CAcceptTask::process() {
         clientFd = accept(connfd, (struct sockaddr *)&clientaddr, &clilenaddrLen);
         if(clientFd == -1 )
         {
-            log.print("Accetp connect failed!");
+            //log.print("Accetp connect finished!");
             return -1;                
         }
 
@@ -66,8 +67,12 @@ int CReadTask::process() {
     int pos = 0;
     int read_n = 0;
     
-    char buf[MAX_BUFFER_READ_ONCE_TIME];
+    //char buf[MAX_BUFFER_READ_ONCE_TIME];
+    char* buf = CMsgManage::getInstance()->getProcessor(connfd)->getReader();
+
     memset(buf, 0, sizeof(buf)/sizeof(char));
+
+
 
     while(true) {
         std::cout << "111" << std::endl;
@@ -79,14 +84,14 @@ int CReadTask::process() {
                 break;
             } else {
                 Server::Instance().event.get()->unregister_event(connfd);
-                //close(connfd);
-                break; 
+                close(connfd);
+                return 0; 
             }
         } else if ( read_n == 0) {
             Logger::getInstance().print(std::format("client exception, fd: {}", connfd));
             Server::Instance().event.get()->unregister_event(connfd);
             close(connfd);
-            break;
+            return 0;
         } else {
             pos += read_n;
 
@@ -100,25 +105,31 @@ int CReadTask::process() {
     buf[pos] = '\0';
     Logger::getInstance().print(std::format("{} received data: {}", connfd, buf));
 
+    CMsgManage::getInstance()->getProcessor(connfd)->process();
+
+
      Server::Instance().event->modify_event(connfd, EPOLLOUT | EPOLLET);
     return 0;
 }
 
 int CWriteTask::process() {
 
-    int write_n, pos;
-    char buf[MAX_BUFFER_READ_ONCE_TIME];
+    int write_n;
+    int pos = 0;
+    //char buf[MAX_BUFFER_READ_ONCE_TIME];
     
-    memset(buf, 0, sizeof(buf)/sizeof(char));
+    //memset(buf, 0, sizeof(buf)/sizeof(char));
 
-    std::string str = "hello, " + std::to_string(connfd);
-    int data_size = str.length();
-    memcpy(buf, str.c_str(), data_size);
+    //std::string str = "hello, " + std::to_string(connfd);
+   
+    //memcpy(buf, str.c_str(), data_size);
+
+    char* buf = CMsgManage::getInstance()->getProcessor(connfd)->getWriter();
+    int data_size = CMsgManage::getInstance()->getProcessor(connfd)->getWriteDataLen();
     
-    bool is_success = false;
-
     while(true) {
         write_n = write(connfd, buf + pos, data_size);
+        std::cout << "write_n: " << write_n << std::endl;
         if(write_n < 0) {
             if(errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue;
@@ -130,13 +141,13 @@ int CWriteTask::process() {
             pos += write_n;
             data_size -= write_n;
         } else {
-            is_success = true;
+       
             break;
         }
     }
 
-    Logger::getInstance().print(std::format("Send data to {}: {}", connfd, buf));
+    Logger::getInstance().print(std::format("Send data to {}, len: {}, data: {}", connfd, data_size, buf));
 
     Server::Instance().event->modify_event(connfd, EPOLLIN | EPOLLET);
-    return is_success ? 0 : -1;
+    return 0;
 }

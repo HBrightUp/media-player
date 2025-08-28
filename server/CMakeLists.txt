@@ -8,15 +8,18 @@ set(CMAKE_BUILD_TYPE "Debug")
 
 project(server)
 
+find_package(Protobuf REQUIRED)
 
 add_subdirectory(src)
 
 
 add_executable(${PROJECT_NAME} main.cpp)
 
-
 target_link_libraries(${PROJECT_NAME} 
     network
     common
     logger
+    stdc++fs
+    msgprotobuf
+    protobuf::libprotobuf
 )

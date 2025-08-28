@@ -1,2 +1,0 @@
-/usr/bin/ar qc libnetwork.a CMakeFiles/network.dir/server.cpp.o CMakeFiles/network.dir/event.cpp.o CMakeFiles/network.dir/threadpool.cpp.o CMakeFiles/network.dir/task.cpp.o
-/usr/bin/ranlib libnetwork.a

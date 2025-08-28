@@ -6,6 +6,8 @@ add_library( network
     event.cpp
     threadpool.cpp
     task.cpp
+    msg_process.cpp
+    msg_manage.cpp
     ${HEADERS}
 )
 
