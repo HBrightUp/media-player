@@ -19,6 +19,7 @@ target_link_libraries(${PROJECT_NAME}
     network
     common
     logger
+    filemanager
     stdc++fs
     msgprotobuf
     protobuf::libprotobuf

@@ -45,7 +45,8 @@ void CMsgProcessor::process() {
             login(content.c_str() + MSG_HEADER_SIZE);
             break;
         }
-        case media::MsgType::REQEST_MUSIC_LIST: {
+        case media::MsgType::PLAY_ONLINE_RANDOM: {
+             play_online_random(content.c_str() + MSG_HEADER_SIZE);
             break;
         }
         case media::MsgType::DOWN_ONE_MUSIC: {
@@ -60,16 +61,23 @@ void CMsgProcessor::process() {
 
 }
 
+bool CMsgProcessor::play_online_random(const char* pdata) {
+    bool is_success = false;
+
+
+    return true;
+}
+
 bool CMsgProcessor::login(const char* pdata) {
     
     bool is_success = false;
     media::Login login;
     login.ParseFromString(pdata);
 
-    std::cout << "name: " << login.name() << std::endl;
+    std::cout << "name: " << login.username() << std::endl;
     std::cout << "pwd: " << login.pwd() << std::endl;
 
-    if (login.name() == "hml" && login.pwd() == "123") {
+    if (login.username() == "hml" && login.pwd() == "123") {
         is_success = true;
     }
 

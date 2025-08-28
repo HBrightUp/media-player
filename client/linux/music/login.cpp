@@ -44,7 +44,8 @@ void Login::on_btn_login_clicked()
     // QString pwd = ui->le_password->text();
 
     media::Login login;
-    login.set_name(ui->le_name->text().toStdString().c_str());
+    userName_ = ui->le_name->text();
+    login.set_username(userName_.toStdString().c_str());
     login.set_pwd(ui->le_password->text().toStdString().c_str());
 
     std::string serialized_string;

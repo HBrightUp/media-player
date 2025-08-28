@@ -18,6 +18,7 @@ public:
     explicit Login(QWidget *parent = nullptr);
     ~Login();
 
+    inline QString get_user_name() { return userName_; }
 signals:
     void login_send_message(SignalsType signal, std::string);
 
@@ -29,6 +30,7 @@ private slots:
 private:
     Ui::Login *ui;
     QPoint winPos_;
+    QString userName_;
 
     // QWidget interface
 protected:

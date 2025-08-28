@@ -20,6 +20,7 @@ class CMsgProcessor {
         void getRandomList();
 
         bool login(const char* pdata);
+        bool play_online_random(const char* pdata);
     
 
 

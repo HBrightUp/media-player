@@ -181,6 +181,16 @@ image: url(:/front-64.png)</string>
       </widget>
      </item>
      <item>
+      <widget class="QPushButton" name="btn_online">
+       <property name="styleSheet">
+        <string notr="true"/>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QPushButton" name="btn_volume">
        <property name="styleSheet">
         <string notr="true"/>

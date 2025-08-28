@@ -53,8 +53,11 @@ private slots:
     void media_durationChanged(qint64 duration);
     void load_next_theme();
 
+    void on_btn_online_clicked();
+
 signals:
     void send_message(int msg_id, QString data);
+    void play_online_random();
 
 private:
     Ui::Player *ui;

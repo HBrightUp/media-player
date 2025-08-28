@@ -148,6 +148,9 @@ void Player::init_ui() {
     ui->btn_next->setIcon(QIcon(":/play-next.png"));
     ui->btn_next->setIconSize(ui->btn_next->size());
 
+    ui->btn_online->setIcon(QIcon(":/add-dir.png"));
+    ui->btn_online->setIconSize(ui->btn_online->size());
+
     set_mute(false);
 
     // set default director of music.
@@ -456,7 +459,16 @@ void Player::keyReleaseEvent(QKeyEvent *event) {
 }
 
 
+void Player::on_btn_online_clicked()
+{
+    if (!playlist_.empty()) {
+        playlist_.clear();
+        ui->list_music->clear();
+    }
+
+    emit play_online_random();
 
 
 
+}
 

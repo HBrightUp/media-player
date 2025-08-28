@@ -6,13 +6,13 @@ package media;
 enum MsgType{
     RESPONSE = 0;
     LOGIN = 1;
-    REQEST_MUSIC_LIST = 2;
+    PLAY_ONLINE_RANDOM = 2;
     DOWN_ONE_MUSIC = 3;
 }
 
 
 message Login {
-    string name = 1;
+    string userName = 1;
     string pwd = 2;
 }
 
@@ -21,4 +21,17 @@ message Response {
     int32 code = 2;
     int32 reserved1 = 3;
     string reserved2 = 4;
+}
+
+message PlayOnlineRandom {
+    string userName = 1;
+}
+
+message PlayOnlineRandomRsp{
+    repeated string  musicName = 1;
+}
+
+message DownOneMusic {
+    string  userName = 1;
+    string  musicName = 2;
 }
