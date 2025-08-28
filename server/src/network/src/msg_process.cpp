@@ -1,6 +1,8 @@
 #include<iostream>
 
 #include <vector>
+#include<dirent.h>
+#include<sys/stat.h>
 #include"../include/msg_process.h"
 #include"../../msg/protobuf/music.pb.h"
 
@@ -64,8 +66,71 @@ void CMsgProcessor::process() {
 bool CMsgProcessor::play_online_random(const char* pdata) {
     bool is_success = false;
 
+    std::string dirPath = "/home/hml/Downloads";
+    std::string extension = ".mp3";  
 
+    std::vector<std::string> files = getFilesWithExtension(dirPath, extension);
+
+    media::PlayOnlineRandomRsp rsp;
+
+    for (const auto& file : files) {
+        rsp.add_musicname(file);
+    }
+
+    std::string rspStr = rsp.SerializeAsString();
+ 
+    if (rspStr.length() <= 0) {
+        return false;
+    } 
+
+    std::cout << "serialized play online random size: " << rspStr.length() << std::endl;
+
+    std::string cmd = std::to_string(static_cast<int>(media::MsgType::  PLAY_ONLINE_RANDOM_RESPONSE));
+    std::string msg = cmd + ":" + rspStr;
+    writenLen_ = msg.length();
+    memcpy(writebuf, msg.c_str(), writenLen_);
+    writebuf[writenLen_] = 0;
     return true;
+}
+
+bool CMsgProcessor::hasExtension(const std::string& filename, const std::string& extension) {
+    if (filename.length() >= extension.length()) {
+        return (0 == filename.compare(filename.length() - extension.length(), extension.length(), extension));
+    }
+    return false;
+}
+
+std::vector<std::string> CMsgProcessor::getFilesWithExtension(const std::string& dirPath, const std::string& extension) {
+    std::vector<std::string> files;
+    DIR* dir = opendir(dirPath.c_str());
+
+    if (dir == nullptr) {
+        std::cerr << "Unable to open directory: " << dirPath << std::endl;
+        return files;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        std::string filename = entry->d_name;
+     
+        if (filename == "." || filename == "..") {
+            continue;
+        }
+
+        std::string fullPath = dirPath + "/" + filename;
+
+
+        struct stat fileStat;
+        if (stat(fullPath.c_str(), &fileStat) == 0) {
+       
+            if (S_ISREG(fileStat.st_mode) && hasExtension(filename, extension)) {
+                files.push_back(filename);
+            }
+        }
+    }
+
+    closedir(dir);
+    return files;
 }
 
 bool CMsgProcessor::login(const char* pdata) {

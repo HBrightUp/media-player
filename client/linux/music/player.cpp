@@ -466,9 +466,28 @@ void Player::on_btn_online_clicked()
         ui->list_music->clear();
     }
 
+    qInfo() <<  "send play online random";
     emit play_online_random();
 
 
+
+}
+
+void Player::update_music_list_from_server(const QVector<std::string>& musicList) {
+    for(const auto& item : musicList) {
+        ui->list_music->addItem(QString::fromStdString(item));
+    }
+
+    //playlist_.append(musicList.begin(),musicList.end());
+
+}
+
+
+void Player::on_list_music_itemDoubleClicked(QListWidgetItem *item)
+{
+    qInfo() << "double clicked";
+    QString music_name = ui->list_music->currentItem()->text();
+    qInfo()<< music_name;
 
 }
 

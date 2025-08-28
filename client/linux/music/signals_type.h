@@ -5,6 +5,7 @@
 enum SignalsType{
     ENU_LOGIN = 1,
     ENU_LOGIN_SUCCESS,
+    ENU_PLAY_ONLINE_RANDOM,
 };
 
 

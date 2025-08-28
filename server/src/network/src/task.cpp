@@ -108,7 +108,7 @@ int CReadTask::process() {
     CMsgManage::getInstance()->getProcessor(connfd)->process();
 
 
-     Server::Instance().event->modify_event(connfd, EPOLLOUT | EPOLLET);
+    Server::Instance().event->modify_event(connfd, EPOLLOUT | EPOLLET);
     return 0;
 }
 

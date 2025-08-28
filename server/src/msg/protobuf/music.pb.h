@@ -84,7 +84,8 @@ enum MsgType : int {
   RESPONSE = 0,
   LOGIN = 1,
   PLAY_ONLINE_RANDOM = 2,
-  DOWN_ONE_MUSIC = 3,
+  PLAY_ONLINE_RANDOM_RESPONSE = 3,
+  DOWN_ONE_MUSIC = 4,
   MsgType_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   MsgType_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
 };

@@ -154,13 +154,14 @@ const char descriptor_table_protodef_music_2eproto[] PROTOBUF_SECTION_VARIABLE(p
   "yOnlineRandom\022\020\n\010userName\030\001 \001(\t\"(\n\023PlayO"
   "nlineRandomRsp\022\021\n\tmusicName\030\001 \003(\t\"3\n\014Dow"
   "nOneMusic\022\020\n\010userName\030\001 \001(\t\022\021\n\tmusicName"
-  "\030\002 \001(\t*N\n\007MsgType\022\014\n\010RESPONSE\020\000\022\t\n\005LOGIN"
-  "\020\001\022\026\n\022PLAY_ONLINE_RANDOM\020\002\022\022\n\016DOWN_ONE_M"
-  "USIC\020\003b\006proto3"
+  "\030\002 \001(\t*o\n\007MsgType\022\014\n\010RESPONSE\020\000\022\t\n\005LOGIN"
+  "\020\001\022\026\n\022PLAY_ONLINE_RANDOM\020\002\022\037\n\033PLAY_ONLIN"
+  "E_RANDOM_RESPONSE\020\003\022\022\n\016DOWN_ONE_MUSIC\020\004b"
+  "\006proto3"
   ;
 static ::PROTOBUF_NAMESPACE_ID::internal::once_flag descriptor_table_music_2eproto_once;
 const ::PROTOBUF_NAMESPACE_ID::internal::DescriptorTable descriptor_table_music_2eproto = {
-  false, false, 374, descriptor_table_protodef_music_2eproto, "music.proto", 
+  false, false, 407, descriptor_table_protodef_music_2eproto, "music.proto", 
   &descriptor_table_music_2eproto_once, nullptr, 0, 5,
   schemas, file_default_instances, TableStruct_music_2eproto::offsets,
   file_level_metadata_music_2eproto, file_level_enum_descriptors_music_2eproto, file_level_service_descriptors_music_2eproto,
@@ -182,6 +183,7 @@ bool MsgType_IsValid(int value) {
     case 1:
     case 2:
     case 3:
+    case 4:
       return true;
     default:
       return false;

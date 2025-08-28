@@ -21,6 +21,8 @@ class UiManage:public QObject
         void login_success_rev();
         //void player_message_rev(MessageType, std::string);
         void play_online_random_recv();
+        void play_online_random_response_recv(const QVector<std::string>& musicList);
+
 
     private:
 

@@ -8,6 +8,7 @@ UiManage::UiManage() {
 
     connect(login_.get(), &Login::login_send_message, this, &UiManage::login_message_rev);
     connect(client_.get(), &TcpClient::login_success, this, &UiManage::login_success_rev);
+    connect(client_.get(), &TcpClient::play_online_random_response, this, &UiManage::play_online_random_response_recv);
 
 }
 
@@ -39,6 +40,8 @@ void UiManage::login_success_rev(){
 
 void  UiManage::play_online_random_recv() {
 
+    qInfo() << "received play online random.";
+
     media::PlayOnlineRandom online;
     online.set_username(userName_.toStdString());
 
@@ -48,16 +51,11 @@ void  UiManage::play_online_random_recv() {
     CMsgAssembly ass;
     std::string msgdata = ass.assembly(media::MsgType::PLAY_ONLINE_RANDOM, serialized);
 
+    qInfo() << "send server data size: " << msgdata.size();
     client_->writeData(msgdata);
 
 }
 
-// void UiManage::player_message_rev(MessageType msg_id, QString data) {
-//     qInfo() << msg_id << data;
-//     player_.get()->hide();
-
-//     video_.reset(new Video);
-//     //connect(video_.get(), &Video::send_message, this, &UiManage::player_message_rev);
-
-//     video_->show();
-// }
+void UiManage::play_online_random_response_recv(const QVector<std::string>& musicList) {
+    player_.get()->update_music_list_from_server(musicList);
+}

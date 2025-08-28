@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem> 
+#include<vector>
 #include"../../common/include/common.h"
 
 
@@ -21,6 +22,8 @@ class CMsgProcessor {
 
         bool login(const char* pdata);
         bool play_online_random(const char* pdata);
+        bool hasExtension(const std::string& filename, const std::string& extension);
+        std::vector<std::string> getFilesWithExtension(const std::string& dirPath, const std::string& extension);
     
 
 

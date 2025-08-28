@@ -31,6 +31,8 @@ public:
     Player(QWidget *parent = nullptr);
     ~Player();
 
+    void update_music_list_from_server(const QVector<std::string>& musicList);
+
 private slots:
     void on_btn_directory_clicked();
     void on_btn_play_clicked();
@@ -54,6 +56,8 @@ private slots:
     void load_next_theme();
 
     void on_btn_online_clicked();
+
+    void on_list_music_itemDoubleClicked(QListWidgetItem *item);
 
 signals:
     void send_message(int msg_id, QString data);

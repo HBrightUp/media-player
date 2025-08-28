@@ -8,6 +8,7 @@
 #include<QMutex>
 #include<QThread>
 #include<QWaitCondition>
+#include<QVector>
 #include"./msg_assembly.h"
 #include"./msgprocessor.h"
 #include"./signals_type.h"
@@ -29,10 +30,12 @@ public slots:
 
     void run() override;
     void parseMsgHeader(const  QByteArray& data);
-    void parseResponse(const QByteArray& msg, const qint32 offest);
+    void parseResponse(const QByteArray& msgData, const qint32 offest);
+    void parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32 offest);
 
 signals:
     void login_success();
+    void play_online_random_response(const QVector<std::string>& musicList);
 
 private:
     QTcpSocket *socket_;

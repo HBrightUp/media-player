@@ -91,12 +91,32 @@ void TcpClient::parseMsgHeader(const QByteArray& msgData) {
     qInfo()<< "cmd: " << cmd ;
     switch (cmd) {
         case media::MsgType::RESPONSE: {
-        parseResponse(msgData, pos + 1);
+            parseResponse(msgData, pos + 1);
+            break;
+        }
+        case media::MsgType::PLAY_ONLINE_RANDOM_RESPONSE: {
+            parsePlayOnlineRandomRsp(msgData, pos + 1);
             break;
         }
         default:
             break;
     }
+}
+
+void TcpClient::parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32 offest) {
+    media::PlayOnlineRandomRsp rsp;
+    rsp.ParseFromString((msgData.right(msgData.size() - offest )).toStdString());
+
+    qInfo() << rsp.musicname_size();
+
+    QVector<std::string> v;
+    for(const auto& name :  rsp.musicname())
+    {
+        v.push_back(name);
+        qInfo() << "name: " << name;
+    }
+
+    emit play_online_random_response(v);
 }
 void TcpClient::parseResponse(const QByteArray& msgData, const qint32 offest) {
     media::Response rsp;
