@@ -62,6 +62,7 @@ private slots:
 signals:
     void send_message(int msg_id, QString data);
     void play_online_random();
+    void download_single_music(const QString& musicName);
 
 private:
     Ui::Player *ui;

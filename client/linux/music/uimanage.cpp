@@ -35,6 +35,7 @@ void UiManage::login_success_rev(){
     login_.reset();
     player_.reset(new Player);
     connect(player_.get(), &Player::play_online_random, this, &UiManage::play_online_random_recv);
+    connect(player_.get(), &Player::download_single_music, this, &UiManage::download_single_music_recv);
     player_.get()->show();
 }
 
@@ -58,4 +59,19 @@ void  UiManage::play_online_random_recv() {
 
 void UiManage::play_online_random_response_recv(const QVector<std::string>& musicList) {
     player_.get()->update_music_list_from_server(musicList);
+}
+
+void UiManage::download_single_music_recv(const QString& musicName) {
+    media::DownloadSingleMusic singleMusic;
+    singleMusic.set_username(userName_.toStdString());
+    singleMusic.set_musicname(musicName.toStdString());
+
+    std::string serialized;
+    singleMusic.SerializeToString(&serialized);
+
+    CMsgAssembly ass;
+    std::string msgdata = ass.assembly(media::MsgType::DOWNLOAD_SINGLE_MUSIC, serialized);
+
+    qInfo() << "send message of download single music to server, size: " << msgdata.size();
+    client_->writeData(msgdata);
 }

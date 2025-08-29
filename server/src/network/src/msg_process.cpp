@@ -3,17 +3,23 @@
 #include <vector>
 #include<dirent.h>
 #include<sys/stat.h>
+#include<cstdio>
 #include"../include/msg_process.h"
 #include"../../msg/protobuf/music.pb.h"
+#include"../../filemanager/include/file_manager.h"
+#include"../../logger/include/log.h"
 
 
 
 CMsgProcessor::CMsgProcessor() {
     writenLen_ = 0;
+    writebuf = new char[MAX_BUFFER_WRITE_ONCE_TIME];
 }
 
 CMsgProcessor::~CMsgProcessor() {
-
+    if (writebuf != nullptr) {
+        delete writebuf;
+    }
 }
 
 char* CMsgProcessor::getReader() {
@@ -28,30 +34,30 @@ int CMsgProcessor::getWriteDataLen() {
     return writenLen_;
 }
 
-void CMsgProcessor::process() {
+bool CMsgProcessor::process() {
 
     std::string content(readbuf);
 
     int pos = content.find(':');
     if(pos < 0) {
-        return ;
+        return false;
     }
-
     
     media::MsgType cmd = static_cast<media::MsgType >(content[0] - '0') ;
 
     std::cout << "content:" << content << ", pos: " << pos << ",cmd: " << cmd <<std::endl;
-
+    bool is_success;
     switch (cmd){
         case media::MsgType::LOGIN: {
-            login(content.c_str() + MSG_HEADER_SIZE);
+            is_success = login(content.c_str() + MSG_HEADER_SIZE);
             break;
         }
         case media::MsgType::PLAY_ONLINE_RANDOM: {
-             play_online_random(content.c_str() + MSG_HEADER_SIZE);
+            is_success = play_online_random(content.c_str() + MSG_HEADER_SIZE);
             break;
         }
-        case media::MsgType::DOWN_ONE_MUSIC: {
+        case media::MsgType::DOWNLOAD_SINGLE_MUSIC: {
+            is_success = download_single_music(content.c_str() + MSG_HEADER_SIZE);
             break;
         }
         default: {
@@ -60,7 +66,64 @@ void CMsgProcessor::process() {
     }
 
 
+    return is_success;
+}
 
+bool CMsgProcessor::download_single_music(const char* pdata) {
+
+    std::cout << "download_single_music+++" << std::endl;
+    media::DownloadSingleMusic music;
+
+    music.ParseFromString(pdata);
+    std::string filename = music.musicname();
+    std::cout << "music name: " << filename << std::endl;
+
+    std::string filepath = CFileManager::getInstance().filePath(filename);
+    if (filepath.empty()) {
+        Logger::getInstance().print("not find file: ", filename);
+        return false;
+    }
+
+    FILE *file = fopen(filepath.c_str(), "rb");
+    if(!file) {
+        Logger::getInstance().print("Open file failed, path of file: ", filepath);
+        return false;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long fileSize = ftell(file);
+    rewind(file);
+
+    if (fileSize > MAX_BUFFER_WRITE_ONCE_TIME) {
+        Logger::getInstance().print("file size too large, path of file: ", filepath);
+        return false;
+    }
+
+    size_t bytesRead = fread(writebuf, 1, fileSize, file);
+    if (bytesRead != fileSize) {
+        Logger::getInstance().print("read file failed.");
+        return false;
+    }
+
+    fclose(file);
+
+    std::string cmd = std::to_string(static_cast<int>(media::MsgType::DOWNLOAD_SINGLE_MUSIC_RESPONSE));
+    media::DownloadSingleMusicRsp rsp;
+    rsp.set_musicname(filename);
+    rsp.set_filesize(fileSize);
+    rsp.set_data(writebuf, fileSize);
+
+    std::string serialized_rsp;
+    rsp.SerializeToString(&serialized_rsp); 
+
+    std::cout << "serialized size of download single music: " << serialized_rsp.length() << std::endl;
+
+    std::string msg = cmd + ":" + serialized_rsp;
+    writenLen_ = msg.length();
+    memcpy(writebuf, msg.c_str(), writenLen_);
+    writebuf[writenLen_] = 0;
+
+    return true;
 }
 
 bool CMsgProcessor::play_online_random(const char* pdata) {

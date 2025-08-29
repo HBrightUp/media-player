@@ -105,10 +105,11 @@ int CReadTask::process() {
     buf[pos] = '\0';
     Logger::getInstance().print(std::format("{} received data: {}", connfd, buf));
 
-    CMsgManage::getInstance()->getProcessor(connfd)->process();
+    bool is_success = CMsgManage::getInstance()->getProcessor(connfd)->process();
+    if(is_success) {
+        Server::Instance().event->modify_event(connfd, EPOLLOUT | EPOLLET);
+    }
 
-
-    Server::Instance().event->modify_event(connfd, EPOLLOUT | EPOLLET);
     return 0;
 }
 

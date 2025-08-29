@@ -489,5 +489,6 @@ void Player::on_list_music_itemDoubleClicked(QListWidgetItem *item)
     QString music_name = ui->list_music->currentItem()->text();
     qInfo()<< music_name;
 
+    emit  download_single_music(music_name);
 }
 

@@ -16,7 +16,7 @@ class CMsgProcessor {
         char* getWriter();
         int getWriteDataLen();
 
-        void process();
+        bool process();
     private:
         void getRandomList();
 
@@ -24,12 +24,12 @@ class CMsgProcessor {
         bool play_online_random(const char* pdata);
         bool hasExtension(const std::string& filename, const std::string& extension);
         std::vector<std::string> getFilesWithExtension(const std::string& dirPath, const std::string& extension);
-    
 
+        bool download_single_music(const char* pdata);
 
     private:
         char readbuf[MAX_BUFFER_READ_ONCE_TIME];
-        char writebuf[MAX_BUFFER_READ_ONCE_TIME];
+        char* writebuf;
         uint writenLen_;
 
 };

@@ -70,21 +70,35 @@ struct PlayOnlineRandomRspDefaultTypeInternal {
   };
 };
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PlayOnlineRandomRspDefaultTypeInternal _PlayOnlineRandomRsp_default_instance_;
-constexpr DownOneMusic::DownOneMusic(
+constexpr DownloadSingleMusic::DownloadSingleMusic(
   ::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized)
   : username_(&::PROTOBUF_NAMESPACE_ID::internal::fixed_address_empty_string)
   , musicname_(&::PROTOBUF_NAMESPACE_ID::internal::fixed_address_empty_string){}
-struct DownOneMusicDefaultTypeInternal {
-  constexpr DownOneMusicDefaultTypeInternal()
+struct DownloadSingleMusicDefaultTypeInternal {
+  constexpr DownloadSingleMusicDefaultTypeInternal()
     : _instance(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized{}) {}
-  ~DownOneMusicDefaultTypeInternal() {}
+  ~DownloadSingleMusicDefaultTypeInternal() {}
   union {
-    DownOneMusic _instance;
+    DownloadSingleMusic _instance;
   };
 };
-PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT DownOneMusicDefaultTypeInternal _DownOneMusic_default_instance_;
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT DownloadSingleMusicDefaultTypeInternal _DownloadSingleMusic_default_instance_;
+constexpr DownloadSingleMusicRsp::DownloadSingleMusicRsp(
+  ::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized)
+  : musicname_(&::PROTOBUF_NAMESPACE_ID::internal::fixed_address_empty_string)
+  , data_(&::PROTOBUF_NAMESPACE_ID::internal::fixed_address_empty_string)
+  , filesize_(0){}
+struct DownloadSingleMusicRspDefaultTypeInternal {
+  constexpr DownloadSingleMusicRspDefaultTypeInternal()
+    : _instance(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized{}) {}
+  ~DownloadSingleMusicRspDefaultTypeInternal() {}
+  union {
+    DownloadSingleMusicRsp _instance;
+  };
+};
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT DownloadSingleMusicRspDefaultTypeInternal _DownloadSingleMusicRsp_default_instance_;
 }  // namespace media
-static ::PROTOBUF_NAMESPACE_ID::Metadata file_level_metadata_music_2eproto[5];
+static ::PROTOBUF_NAMESPACE_ID::Metadata file_level_metadata_music_2eproto[6];
 static const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* file_level_enum_descriptors_music_2eproto[1];
 static constexpr ::PROTOBUF_NAMESPACE_ID::ServiceDescriptor const** file_level_service_descriptors_music_2eproto = nullptr;
 
@@ -122,20 +136,30 @@ const uint32_t TableStruct_music_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(pr
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::media::PlayOnlineRandomRsp, musicname_),
   ~0u,  // no _has_bits_
-  PROTOBUF_FIELD_OFFSET(::media::DownOneMusic, _internal_metadata_),
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusic, _internal_metadata_),
   ~0u,  // no _extensions_
   ~0u,  // no _oneof_case_
   ~0u,  // no _weak_field_map_
   ~0u,  // no _inlined_string_donated_
-  PROTOBUF_FIELD_OFFSET(::media::DownOneMusic, username_),
-  PROTOBUF_FIELD_OFFSET(::media::DownOneMusic, musicname_),
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusic, username_),
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusic, musicname_),
+  ~0u,  // no _has_bits_
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusicRsp, _internal_metadata_),
+  ~0u,  // no _extensions_
+  ~0u,  // no _oneof_case_
+  ~0u,  // no _weak_field_map_
+  ~0u,  // no _inlined_string_donated_
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusicRsp, musicname_),
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusicRsp, filesize_),
+  PROTOBUF_FIELD_OFFSET(::media::DownloadSingleMusicRsp, data_),
 };
 static const ::PROTOBUF_NAMESPACE_ID::internal::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::media::Login)},
   { 8, -1, -1, sizeof(::media::Response)},
   { 18, -1, -1, sizeof(::media::PlayOnlineRandom)},
   { 25, -1, -1, sizeof(::media::PlayOnlineRandomRsp)},
-  { 32, -1, -1, sizeof(::media::DownOneMusic)},
+  { 32, -1, -1, sizeof(::media::DownloadSingleMusic)},
+  { 40, -1, -1, sizeof(::media::DownloadSingleMusicRsp)},
 };
 
 static ::PROTOBUF_NAMESPACE_ID::Message const * const file_default_instances[] = {
@@ -143,7 +167,8 @@ static ::PROTOBUF_NAMESPACE_ID::Message const * const file_default_instances[] =
   reinterpret_cast<const ::PROTOBUF_NAMESPACE_ID::Message*>(&::media::_Response_default_instance_),
   reinterpret_cast<const ::PROTOBUF_NAMESPACE_ID::Message*>(&::media::_PlayOnlineRandom_default_instance_),
   reinterpret_cast<const ::PROTOBUF_NAMESPACE_ID::Message*>(&::media::_PlayOnlineRandomRsp_default_instance_),
-  reinterpret_cast<const ::PROTOBUF_NAMESPACE_ID::Message*>(&::media::_DownOneMusic_default_instance_),
+  reinterpret_cast<const ::PROTOBUF_NAMESPACE_ID::Message*>(&::media::_DownloadSingleMusic_default_instance_),
+  reinterpret_cast<const ::PROTOBUF_NAMESPACE_ID::Message*>(&::media::_DownloadSingleMusicRsp_default_instance_),
 };
 
 const char descriptor_table_protodef_music_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
@@ -152,17 +177,20 @@ const char descriptor_table_protodef_music_2eproto[] PROTOBUF_SECTION_VARIABLE(p
   "\001 \001(\0162\016.media.MsgType\022\014\n\004code\030\002 \001(\005\022\021\n\tr"
   "eserved1\030\003 \001(\005\022\021\n\treserved2\030\004 \001(\t\"$\n\020Pla"
   "yOnlineRandom\022\020\n\010userName\030\001 \001(\t\"(\n\023PlayO"
-  "nlineRandomRsp\022\021\n\tmusicName\030\001 \003(\t\"3\n\014Dow"
-  "nOneMusic\022\020\n\010userName\030\001 \001(\t\022\021\n\tmusicName"
-  "\030\002 \001(\t*o\n\007MsgType\022\014\n\010RESPONSE\020\000\022\t\n\005LOGIN"
-  "\020\001\022\026\n\022PLAY_ONLINE_RANDOM\020\002\022\037\n\033PLAY_ONLIN"
-  "E_RANDOM_RESPONSE\020\003\022\022\n\016DOWN_ONE_MUSIC\020\004b"
-  "\006proto3"
+  "nlineRandomRsp\022\021\n\tmusicName\030\001 \003(\t\":\n\023Dow"
+  "nloadSingleMusic\022\020\n\010userName\030\001 \001(\t\022\021\n\tmu"
+  "sicName\030\002 \001(\t\"K\n\026DownloadSingleMusicRsp\022"
+  "\021\n\tmusicName\030\001 \001(\t\022\020\n\010fileSize\030\002 \001(\005\022\014\n\004"
+  "data\030\003 \001(\014*\232\001\n\007MsgType\022\014\n\010RESPONSE\020\000\022\t\n\005"
+  "LOGIN\020\001\022\026\n\022PLAY_ONLINE_RANDOM\020\002\022\037\n\033PLAY_"
+  "ONLINE_RANDOM_RESPONSE\020\003\022\031\n\025DOWNLOAD_SIN"
+  "GLE_MUSIC\020\004\022\"\n\036DOWNLOAD_SINGLE_MUSIC_RES"
+  "PONSE\020\005b\006proto3"
   ;
 static ::PROTOBUF_NAMESPACE_ID::internal::once_flag descriptor_table_music_2eproto_once;
 const ::PROTOBUF_NAMESPACE_ID::internal::DescriptorTable descriptor_table_music_2eproto = {
-  false, false, 407, descriptor_table_protodef_music_2eproto, "music.proto", 
-  &descriptor_table_music_2eproto_once, nullptr, 0, 5,
+  false, false, 535, descriptor_table_protodef_music_2eproto, "music.proto", 
+  &descriptor_table_music_2eproto_once, nullptr, 0, 6,
   schemas, file_default_instances, TableStruct_music_2eproto::offsets,
   file_level_metadata_music_2eproto, file_level_enum_descriptors_music_2eproto, file_level_service_descriptors_music_2eproto,
 };
@@ -184,6 +212,7 @@ bool MsgType_IsValid(int value) {
     case 2:
     case 3:
     case 4:
+    case 5:
       return true;
     default:
       return false;
@@ -1126,20 +1155,20 @@ void PlayOnlineRandomRsp::InternalSwap(PlayOnlineRandomRsp* other) {
 
 // ===================================================================
 
-class DownOneMusic::_Internal {
+class DownloadSingleMusic::_Internal {
  public:
 };
 
-DownOneMusic::DownOneMusic(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+DownloadSingleMusic::DownloadSingleMusic(::PROTOBUF_NAMESPACE_ID::Arena* arena,
                          bool is_message_owned)
   : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
   SharedCtor();
   if (!is_message_owned) {
     RegisterArenaDtor(arena);
   }
-  // @@protoc_insertion_point(arena_constructor:media.DownOneMusic)
+  // @@protoc_insertion_point(arena_constructor:media.DownloadSingleMusic)
 }
-DownOneMusic::DownOneMusic(const DownOneMusic& from)
+DownloadSingleMusic::DownloadSingleMusic(const DownloadSingleMusic& from)
   : ::PROTOBUF_NAMESPACE_ID::Message() {
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
   username_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
@@ -1158,10 +1187,10 @@ DownOneMusic::DownOneMusic(const DownOneMusic& from)
     musicname_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, from._internal_musicname(), 
       GetArenaForAllocation());
   }
-  // @@protoc_insertion_point(copy_constructor:media.DownOneMusic)
+  // @@protoc_insertion_point(copy_constructor:media.DownloadSingleMusic)
 }
 
-inline void DownOneMusic::SharedCtor() {
+inline void DownloadSingleMusic::SharedCtor() {
 username_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
   username_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
@@ -1172,31 +1201,31 @@ musicname_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAl
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
-DownOneMusic::~DownOneMusic() {
-  // @@protoc_insertion_point(destructor:media.DownOneMusic)
+DownloadSingleMusic::~DownloadSingleMusic() {
+  // @@protoc_insertion_point(destructor:media.DownloadSingleMusic)
   if (GetArenaForAllocation() != nullptr) return;
   SharedDtor();
   _internal_metadata_.Delete<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
-inline void DownOneMusic::SharedDtor() {
+inline void DownloadSingleMusic::SharedDtor() {
   GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
   username_.DestroyNoArena(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
   musicname_.DestroyNoArena(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
 }
 
-void DownOneMusic::ArenaDtor(void* object) {
-  DownOneMusic* _this = reinterpret_cast< DownOneMusic* >(object);
+void DownloadSingleMusic::ArenaDtor(void* object) {
+  DownloadSingleMusic* _this = reinterpret_cast< DownloadSingleMusic* >(object);
   (void)_this;
 }
-void DownOneMusic::RegisterArenaDtor(::PROTOBUF_NAMESPACE_ID::Arena*) {
+void DownloadSingleMusic::RegisterArenaDtor(::PROTOBUF_NAMESPACE_ID::Arena*) {
 }
-void DownOneMusic::SetCachedSize(int size) const {
+void DownloadSingleMusic::SetCachedSize(int size) const {
   _cached_size_.Set(size);
 }
 
-void DownOneMusic::Clear() {
-// @@protoc_insertion_point(message_clear_start:media.DownOneMusic)
+void DownloadSingleMusic::Clear() {
+// @@protoc_insertion_point(message_clear_start:media.DownloadSingleMusic)
   uint32_t cached_has_bits = 0;
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
@@ -1206,7 +1235,7 @@ void DownOneMusic::Clear() {
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
-const char* DownOneMusic::_InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) {
+const char* DownloadSingleMusic::_InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) {
 #define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
   while (!ctx->Done(&ptr)) {
     uint32_t tag;
@@ -1217,7 +1246,7 @@ const char* DownOneMusic::_InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_I
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 10)) {
           auto str = _internal_mutable_username();
           ptr = ::PROTOBUF_NAMESPACE_ID::internal::InlineGreedyStringParser(str, ptr, ctx);
-          CHK_(::PROTOBUF_NAMESPACE_ID::internal::VerifyUTF8(str, "media.DownOneMusic.userName"));
+          CHK_(::PROTOBUF_NAMESPACE_ID::internal::VerifyUTF8(str, "media.DownloadSingleMusic.userName"));
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1227,7 +1256,7 @@ const char* DownOneMusic::_InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_I
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 18)) {
           auto str = _internal_mutable_musicname();
           ptr = ::PROTOBUF_NAMESPACE_ID::internal::InlineGreedyStringParser(str, ptr, ctx);
-          CHK_(::PROTOBUF_NAMESPACE_ID::internal::VerifyUTF8(str, "media.DownOneMusic.musicName"));
+          CHK_(::PROTOBUF_NAMESPACE_ID::internal::VerifyUTF8(str, "media.DownloadSingleMusic.musicName"));
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1255,9 +1284,9 @@ failure:
 #undef CHK_
 }
 
-uint8_t* DownOneMusic::_InternalSerialize(
+uint8_t* DownloadSingleMusic::_InternalSerialize(
     uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
-  // @@protoc_insertion_point(serialize_to_array_start:media.DownOneMusic)
+  // @@protoc_insertion_point(serialize_to_array_start:media.DownloadSingleMusic)
   uint32_t cached_has_bits = 0;
   (void) cached_has_bits;
 
@@ -1266,7 +1295,7 @@ uint8_t* DownOneMusic::_InternalSerialize(
     ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
       this->_internal_username().data(), static_cast<int>(this->_internal_username().length()),
       ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
-      "media.DownOneMusic.userName");
+      "media.DownloadSingleMusic.userName");
     target = stream->WriteStringMaybeAliased(
         1, this->_internal_username(), target);
   }
@@ -1276,7 +1305,7 @@ uint8_t* DownOneMusic::_InternalSerialize(
     ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
       this->_internal_musicname().data(), static_cast<int>(this->_internal_musicname().length()),
       ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
-      "media.DownOneMusic.musicName");
+      "media.DownloadSingleMusic.musicName");
     target = stream->WriteStringMaybeAliased(
         2, this->_internal_musicname(), target);
   }
@@ -1285,12 +1314,12 @@ uint8_t* DownOneMusic::_InternalSerialize(
     target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
   }
-  // @@protoc_insertion_point(serialize_to_array_end:media.DownOneMusic)
+  // @@protoc_insertion_point(serialize_to_array_end:media.DownloadSingleMusic)
   return target;
 }
 
-size_t DownOneMusic::ByteSizeLong() const {
-// @@protoc_insertion_point(message_byte_size_start:media.DownOneMusic)
+size_t DownloadSingleMusic::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:media.DownloadSingleMusic)
   size_t total_size = 0;
 
   uint32_t cached_has_bits = 0;
@@ -1314,21 +1343,21 @@ size_t DownOneMusic::ByteSizeLong() const {
   return MaybeComputeUnknownFieldsSize(total_size, &_cached_size_);
 }
 
-const ::PROTOBUF_NAMESPACE_ID::Message::ClassData DownOneMusic::_class_data_ = {
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData DownloadSingleMusic::_class_data_ = {
     ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSizeCheck,
-    DownOneMusic::MergeImpl
+    DownloadSingleMusic::MergeImpl
 };
-const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*DownOneMusic::GetClassData() const { return &_class_data_; }
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*DownloadSingleMusic::GetClassData() const { return &_class_data_; }
 
-void DownOneMusic::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to,
+void DownloadSingleMusic::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to,
                       const ::PROTOBUF_NAMESPACE_ID::Message& from) {
-  static_cast<DownOneMusic *>(to)->MergeFrom(
-      static_cast<const DownOneMusic &>(from));
+  static_cast<DownloadSingleMusic *>(to)->MergeFrom(
+      static_cast<const DownloadSingleMusic &>(from));
 }
 
 
-void DownOneMusic::MergeFrom(const DownOneMusic& from) {
-// @@protoc_insertion_point(class_specific_merge_from_start:media.DownOneMusic)
+void DownloadSingleMusic::MergeFrom(const DownloadSingleMusic& from) {
+// @@protoc_insertion_point(class_specific_merge_from_start:media.DownloadSingleMusic)
   GOOGLE_DCHECK_NE(&from, this);
   uint32_t cached_has_bits = 0;
   (void) cached_has_bits;
@@ -1342,18 +1371,18 @@ void DownOneMusic::MergeFrom(const DownOneMusic& from) {
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
-void DownOneMusic::CopyFrom(const DownOneMusic& from) {
-// @@protoc_insertion_point(class_specific_copy_from_start:media.DownOneMusic)
+void DownloadSingleMusic::CopyFrom(const DownloadSingleMusic& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:media.DownloadSingleMusic)
   if (&from == this) return;
   Clear();
   MergeFrom(from);
 }
 
-bool DownOneMusic::IsInitialized() const {
+bool DownloadSingleMusic::IsInitialized() const {
   return true;
 }
 
-void DownOneMusic::InternalSwap(DownOneMusic* other) {
+void DownloadSingleMusic::InternalSwap(DownloadSingleMusic* other) {
   using std::swap;
   auto* lhs_arena = GetArenaForAllocation();
   auto* rhs_arena = other->GetArenaForAllocation();
@@ -1370,10 +1399,283 @@ void DownOneMusic::InternalSwap(DownOneMusic* other) {
   );
 }
 
-::PROTOBUF_NAMESPACE_ID::Metadata DownOneMusic::GetMetadata() const {
+::PROTOBUF_NAMESPACE_ID::Metadata DownloadSingleMusic::GetMetadata() const {
   return ::PROTOBUF_NAMESPACE_ID::internal::AssignDescriptors(
       &descriptor_table_music_2eproto_getter, &descriptor_table_music_2eproto_once,
       file_level_metadata_music_2eproto[4]);
+}
+
+// ===================================================================
+
+class DownloadSingleMusicRsp::_Internal {
+ public:
+};
+
+DownloadSingleMusicRsp::DownloadSingleMusicRsp(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                         bool is_message_owned)
+  : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
+  SharedCtor();
+  if (!is_message_owned) {
+    RegisterArenaDtor(arena);
+  }
+  // @@protoc_insertion_point(arena_constructor:media.DownloadSingleMusicRsp)
+}
+DownloadSingleMusicRsp::DownloadSingleMusicRsp(const DownloadSingleMusicRsp& from)
+  : ::PROTOBUF_NAMESPACE_ID::Message() {
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  musicname_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    musicname_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_musicname().empty()) {
+    musicname_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, from._internal_musicname(), 
+      GetArenaForAllocation());
+  }
+  data_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    data_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_data().empty()) {
+    data_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, from._internal_data(), 
+      GetArenaForAllocation());
+  }
+  filesize_ = from.filesize_;
+  // @@protoc_insertion_point(copy_constructor:media.DownloadSingleMusicRsp)
+}
+
+inline void DownloadSingleMusicRsp::SharedCtor() {
+musicname_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  musicname_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+data_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  data_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+filesize_ = 0;
+}
+
+DownloadSingleMusicRsp::~DownloadSingleMusicRsp() {
+  // @@protoc_insertion_point(destructor:media.DownloadSingleMusicRsp)
+  if (GetArenaForAllocation() != nullptr) return;
+  SharedDtor();
+  _internal_metadata_.Delete<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+inline void DownloadSingleMusicRsp::SharedDtor() {
+  GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+  musicname_.DestroyNoArena(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
+  data_.DestroyNoArena(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
+}
+
+void DownloadSingleMusicRsp::ArenaDtor(void* object) {
+  DownloadSingleMusicRsp* _this = reinterpret_cast< DownloadSingleMusicRsp* >(object);
+  (void)_this;
+}
+void DownloadSingleMusicRsp::RegisterArenaDtor(::PROTOBUF_NAMESPACE_ID::Arena*) {
+}
+void DownloadSingleMusicRsp::SetCachedSize(int size) const {
+  _cached_size_.Set(size);
+}
+
+void DownloadSingleMusicRsp::Clear() {
+// @@protoc_insertion_point(message_clear_start:media.DownloadSingleMusicRsp)
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  musicname_.ClearToEmpty();
+  data_.ClearToEmpty();
+  filesize_ = 0;
+  _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+const char* DownloadSingleMusicRsp::_InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) {
+#define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
+  while (!ctx->Done(&ptr)) {
+    uint32_t tag;
+    ptr = ::PROTOBUF_NAMESPACE_ID::internal::ReadTag(ptr, &tag);
+    switch (tag >> 3) {
+      // string musicName = 1;
+      case 1:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 10)) {
+          auto str = _internal_mutable_musicname();
+          ptr = ::PROTOBUF_NAMESPACE_ID::internal::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(::PROTOBUF_NAMESPACE_ID::internal::VerifyUTF8(str, "media.DownloadSingleMusicRsp.musicName"));
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 fileSize = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 16)) {
+          filesize_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // bytes data = 3;
+      case 3:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 26)) {
+          auto str = _internal_mutable_data();
+          ptr = ::PROTOBUF_NAMESPACE_ID::internal::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      default:
+        goto handle_unusual;
+    }  // switch
+  handle_unusual:
+    if ((tag == 0) || ((tag & 7) == 4)) {
+      CHK_(ptr);
+      ctx->SetLastTag(tag);
+      goto message_done;
+    }
+    ptr = UnknownFieldParse(
+        tag,
+        _internal_metadata_.mutable_unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(),
+        ptr, ctx);
+    CHK_(ptr != nullptr);
+  }  // while
+message_done:
+  return ptr;
+failure:
+  ptr = nullptr;
+  goto message_done;
+#undef CHK_
+}
+
+uint8_t* DownloadSingleMusicRsp::_InternalSerialize(
+    uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:media.DownloadSingleMusicRsp)
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  // string musicName = 1;
+  if (!this->_internal_musicname().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_musicname().data(), static_cast<int>(this->_internal_musicname().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "media.DownloadSingleMusicRsp.musicName");
+    target = stream->WriteStringMaybeAliased(
+        1, this->_internal_musicname(), target);
+  }
+
+  // int32 fileSize = 2;
+  if (this->_internal_filesize() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::WriteInt32ToArray(2, this->_internal_filesize(), target);
+  }
+
+  // bytes data = 3;
+  if (!this->_internal_data().empty()) {
+    target = stream->WriteBytesMaybeAliased(
+        3, this->_internal_data(), target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormat::InternalSerializeUnknownFieldsToArray(
+        _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:media.DownloadSingleMusicRsp)
+  return target;
+}
+
+size_t DownloadSingleMusicRsp::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:media.DownloadSingleMusicRsp)
+  size_t total_size = 0;
+
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  // string musicName = 1;
+  if (!this->_internal_musicname().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_musicname());
+  }
+
+  // bytes data = 3;
+  if (!this->_internal_data().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::BytesSize(
+        this->_internal_data());
+  }
+
+  // int32 fileSize = 2;
+  if (this->_internal_filesize() != 0) {
+    total_size += ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::Int32SizePlusOne(this->_internal_filesize());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_cached_size_);
+}
+
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData DownloadSingleMusicRsp::_class_data_ = {
+    ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSizeCheck,
+    DownloadSingleMusicRsp::MergeImpl
+};
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*DownloadSingleMusicRsp::GetClassData() const { return &_class_data_; }
+
+void DownloadSingleMusicRsp::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to,
+                      const ::PROTOBUF_NAMESPACE_ID::Message& from) {
+  static_cast<DownloadSingleMusicRsp *>(to)->MergeFrom(
+      static_cast<const DownloadSingleMusicRsp &>(from));
+}
+
+
+void DownloadSingleMusicRsp::MergeFrom(const DownloadSingleMusicRsp& from) {
+// @@protoc_insertion_point(class_specific_merge_from_start:media.DownloadSingleMusicRsp)
+  GOOGLE_DCHECK_NE(&from, this);
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (!from._internal_musicname().empty()) {
+    _internal_set_musicname(from._internal_musicname());
+  }
+  if (!from._internal_data().empty()) {
+    _internal_set_data(from._internal_data());
+  }
+  if (from._internal_filesize() != 0) {
+    _internal_set_filesize(from._internal_filesize());
+  }
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void DownloadSingleMusicRsp::CopyFrom(const DownloadSingleMusicRsp& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:media.DownloadSingleMusicRsp)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+bool DownloadSingleMusicRsp::IsInitialized() const {
+  return true;
+}
+
+void DownloadSingleMusicRsp::InternalSwap(DownloadSingleMusicRsp* other) {
+  using std::swap;
+  auto* lhs_arena = GetArenaForAllocation();
+  auto* rhs_arena = other->GetArenaForAllocation();
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(),
+      &musicname_, lhs_arena,
+      &other->musicname_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(),
+      &data_, lhs_arena,
+      &other->data_, rhs_arena
+  );
+  swap(filesize_, other->filesize_);
+}
+
+::PROTOBUF_NAMESPACE_ID::Metadata DownloadSingleMusicRsp::GetMetadata() const {
+  return ::PROTOBUF_NAMESPACE_ID::internal::AssignDescriptors(
+      &descriptor_table_music_2eproto_getter, &descriptor_table_music_2eproto_once,
+      file_level_metadata_music_2eproto[5]);
 }
 
 // @@protoc_insertion_point(namespace_scope)
@@ -1391,8 +1693,11 @@ template<> PROTOBUF_NOINLINE ::media::PlayOnlineRandom* Arena::CreateMaybeMessag
 template<> PROTOBUF_NOINLINE ::media::PlayOnlineRandomRsp* Arena::CreateMaybeMessage< ::media::PlayOnlineRandomRsp >(Arena* arena) {
   return Arena::CreateMessageInternal< ::media::PlayOnlineRandomRsp >(arena);
 }
-template<> PROTOBUF_NOINLINE ::media::DownOneMusic* Arena::CreateMaybeMessage< ::media::DownOneMusic >(Arena* arena) {
-  return Arena::CreateMessageInternal< ::media::DownOneMusic >(arena);
+template<> PROTOBUF_NOINLINE ::media::DownloadSingleMusic* Arena::CreateMaybeMessage< ::media::DownloadSingleMusic >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::media::DownloadSingleMusic >(arena);
+}
+template<> PROTOBUF_NOINLINE ::media::DownloadSingleMusicRsp* Arena::CreateMaybeMessage< ::media::DownloadSingleMusicRsp >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::media::DownloadSingleMusicRsp >(arena);
 }
 PROTOBUF_NAMESPACE_CLOSE
 

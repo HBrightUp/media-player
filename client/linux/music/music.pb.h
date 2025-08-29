@@ -47,7 +47,7 @@ struct TableStruct_music_2eproto {
     PROTOBUF_SECTION_VARIABLE(protodesc_cold);
   static const ::PROTOBUF_NAMESPACE_ID::internal::AuxiliaryParseTableField aux[]
     PROTOBUF_SECTION_VARIABLE(protodesc_cold);
-  static const ::PROTOBUF_NAMESPACE_ID::internal::ParseTable schema[5]
+  static const ::PROTOBUF_NAMESPACE_ID::internal::ParseTable schema[6]
     PROTOBUF_SECTION_VARIABLE(protodesc_cold);
   static const ::PROTOBUF_NAMESPACE_ID::internal::FieldMetadata field_metadata[];
   static const ::PROTOBUF_NAMESPACE_ID::internal::SerializationTable serialization_table[];
@@ -55,9 +55,12 @@ struct TableStruct_music_2eproto {
 };
 extern const ::PROTOBUF_NAMESPACE_ID::internal::DescriptorTable descriptor_table_music_2eproto;
 namespace media {
-class DownOneMusic;
-struct DownOneMusicDefaultTypeInternal;
-extern DownOneMusicDefaultTypeInternal _DownOneMusic_default_instance_;
+class DownloadSingleMusic;
+struct DownloadSingleMusicDefaultTypeInternal;
+extern DownloadSingleMusicDefaultTypeInternal _DownloadSingleMusic_default_instance_;
+class DownloadSingleMusicRsp;
+struct DownloadSingleMusicRspDefaultTypeInternal;
+extern DownloadSingleMusicRspDefaultTypeInternal _DownloadSingleMusicRsp_default_instance_;
 class Login;
 struct LoginDefaultTypeInternal;
 extern LoginDefaultTypeInternal _Login_default_instance_;
@@ -72,7 +75,8 @@ struct ResponseDefaultTypeInternal;
 extern ResponseDefaultTypeInternal _Response_default_instance_;
 }  // namespace media
 PROTOBUF_NAMESPACE_OPEN
-template<> ::media::DownOneMusic* Arena::CreateMaybeMessage<::media::DownOneMusic>(Arena*);
+template<> ::media::DownloadSingleMusic* Arena::CreateMaybeMessage<::media::DownloadSingleMusic>(Arena*);
+template<> ::media::DownloadSingleMusicRsp* Arena::CreateMaybeMessage<::media::DownloadSingleMusicRsp>(Arena*);
 template<> ::media::Login* Arena::CreateMaybeMessage<::media::Login>(Arena*);
 template<> ::media::PlayOnlineRandom* Arena::CreateMaybeMessage<::media::PlayOnlineRandom>(Arena*);
 template<> ::media::PlayOnlineRandomRsp* Arena::CreateMaybeMessage<::media::PlayOnlineRandomRsp>(Arena*);
@@ -85,13 +89,14 @@ enum MsgType : int {
   LOGIN = 1,
   PLAY_ONLINE_RANDOM = 2,
   PLAY_ONLINE_RANDOM_RESPONSE = 3,
-  DOWN_ONE_MUSIC = 4,
+  DOWNLOAD_SINGLE_MUSIC = 4,
+  DOWNLOAD_SINGLE_MUSIC_RESPONSE = 5,
   MsgType_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   MsgType_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
 };
 bool MsgType_IsValid(int value);
 constexpr MsgType MsgType_MIN = RESPONSE;
-constexpr MsgType MsgType_MAX = DOWN_ONE_MUSIC;
+constexpr MsgType MsgType_MAX = DOWNLOAD_SINGLE_MUSIC_RESPONSE;
 constexpr int MsgType_ARRAYSIZE = MsgType_MAX + 1;
 
 const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* MsgType_descriptor();
@@ -773,24 +778,24 @@ class PlayOnlineRandomRsp final :
 };
 // -------------------------------------------------------------------
 
-class DownOneMusic final :
-    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.DownOneMusic) */ {
+class DownloadSingleMusic final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.DownloadSingleMusic) */ {
  public:
-  inline DownOneMusic() : DownOneMusic(nullptr) {}
-  ~DownOneMusic() override;
-  explicit constexpr DownOneMusic(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+  inline DownloadSingleMusic() : DownloadSingleMusic(nullptr) {}
+  ~DownloadSingleMusic() override;
+  explicit constexpr DownloadSingleMusic(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
 
-  DownOneMusic(const DownOneMusic& from);
-  DownOneMusic(DownOneMusic&& from) noexcept
-    : DownOneMusic() {
+  DownloadSingleMusic(const DownloadSingleMusic& from);
+  DownloadSingleMusic(DownloadSingleMusic&& from) noexcept
+    : DownloadSingleMusic() {
     *this = ::std::move(from);
   }
 
-  inline DownOneMusic& operator=(const DownOneMusic& from) {
+  inline DownloadSingleMusic& operator=(const DownloadSingleMusic& from) {
     CopyFrom(from);
     return *this;
   }
-  inline DownOneMusic& operator=(DownOneMusic&& from) noexcept {
+  inline DownloadSingleMusic& operator=(DownloadSingleMusic&& from) noexcept {
     if (this == &from) return *this;
     if (GetOwningArena() == from.GetOwningArena()
   #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
@@ -813,20 +818,20 @@ class DownOneMusic final :
   static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
     return default_instance().GetMetadata().reflection;
   }
-  static const DownOneMusic& default_instance() {
+  static const DownloadSingleMusic& default_instance() {
     return *internal_default_instance();
   }
-  static inline const DownOneMusic* internal_default_instance() {
-    return reinterpret_cast<const DownOneMusic*>(
-               &_DownOneMusic_default_instance_);
+  static inline const DownloadSingleMusic* internal_default_instance() {
+    return reinterpret_cast<const DownloadSingleMusic*>(
+               &_DownloadSingleMusic_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
     4;
 
-  friend void swap(DownOneMusic& a, DownOneMusic& b) {
+  friend void swap(DownloadSingleMusic& a, DownloadSingleMusic& b) {
     a.Swap(&b);
   }
-  inline void Swap(DownOneMusic* other) {
+  inline void Swap(DownloadSingleMusic* other) {
     if (other == this) return;
   #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
     if (GetOwningArena() != nullptr &&
@@ -839,7 +844,7 @@ class DownOneMusic final :
       ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
     }
   }
-  void UnsafeArenaSwap(DownOneMusic* other) {
+  void UnsafeArenaSwap(DownloadSingleMusic* other) {
     if (other == this) return;
     GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
     InternalSwap(other);
@@ -847,13 +852,13 @@ class DownOneMusic final :
 
   // implements Message ----------------------------------------------
 
-  DownOneMusic* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
-    return CreateMaybeMessage<DownOneMusic>(arena);
+  DownloadSingleMusic* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<DownloadSingleMusic>(arena);
   }
   using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
-  void CopyFrom(const DownOneMusic& from);
+  void CopyFrom(const DownloadSingleMusic& from);
   using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
-  void MergeFrom(const DownOneMusic& from);
+  void MergeFrom(const DownloadSingleMusic& from);
   private:
   static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to, const ::PROTOBUF_NAMESPACE_ID::Message& from);
   public:
@@ -870,15 +875,15 @@ class DownOneMusic final :
   void SharedCtor();
   void SharedDtor();
   void SetCachedSize(int size) const final;
-  void InternalSwap(DownOneMusic* other);
+  void InternalSwap(DownloadSingleMusic* other);
 
   private:
   friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
   static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
-    return "media.DownOneMusic";
+    return "media.DownloadSingleMusic";
   }
   protected:
-  explicit DownOneMusic(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+  explicit DownloadSingleMusic(::PROTOBUF_NAMESPACE_ID::Arena* arena,
                        bool is_message_owned = false);
   private:
   static void ArenaDtor(void* object);
@@ -926,7 +931,7 @@ class DownOneMusic final :
   std::string* _internal_mutable_musicname();
   public:
 
-  // @@protoc_insertion_point(class_scope:media.DownOneMusic)
+  // @@protoc_insertion_point(class_scope:media.DownloadSingleMusic)
  private:
   class _Internal;
 
@@ -935,6 +940,184 @@ class DownOneMusic final :
   typedef void DestructorSkippable_;
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr username_;
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr musicname_;
+  mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  friend struct ::TableStruct_music_2eproto;
+};
+// -------------------------------------------------------------------
+
+class DownloadSingleMusicRsp final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.DownloadSingleMusicRsp) */ {
+ public:
+  inline DownloadSingleMusicRsp() : DownloadSingleMusicRsp(nullptr) {}
+  ~DownloadSingleMusicRsp() override;
+  explicit constexpr DownloadSingleMusicRsp(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  DownloadSingleMusicRsp(const DownloadSingleMusicRsp& from);
+  DownloadSingleMusicRsp(DownloadSingleMusicRsp&& from) noexcept
+    : DownloadSingleMusicRsp() {
+    *this = ::std::move(from);
+  }
+
+  inline DownloadSingleMusicRsp& operator=(const DownloadSingleMusicRsp& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline DownloadSingleMusicRsp& operator=(DownloadSingleMusicRsp&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const DownloadSingleMusicRsp& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const DownloadSingleMusicRsp* internal_default_instance() {
+    return reinterpret_cast<const DownloadSingleMusicRsp*>(
+               &_DownloadSingleMusicRsp_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    5;
+
+  friend void swap(DownloadSingleMusicRsp& a, DownloadSingleMusicRsp& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(DownloadSingleMusicRsp* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(DownloadSingleMusicRsp* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  DownloadSingleMusicRsp* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<DownloadSingleMusicRsp>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const DownloadSingleMusicRsp& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom(const DownloadSingleMusicRsp& from);
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to, const ::PROTOBUF_NAMESPACE_ID::Message& from);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _cached_size_.Get(); }
+
+  private:
+  void SharedCtor();
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(DownloadSingleMusicRsp* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "media.DownloadSingleMusicRsp";
+  }
+  protected:
+  explicit DownloadSingleMusicRsp(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  private:
+  static void ArenaDtor(void* object);
+  inline void RegisterArenaDtor(::PROTOBUF_NAMESPACE_ID::Arena* arena);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kMusicNameFieldNumber = 1,
+    kDataFieldNumber = 3,
+    kFileSizeFieldNumber = 2,
+  };
+  // string musicName = 1;
+  void clear_musicname();
+  const std::string& musicname() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_musicname(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_musicname();
+  PROTOBUF_NODISCARD std::string* release_musicname();
+  void set_allocated_musicname(std::string* musicname);
+  private:
+  const std::string& _internal_musicname() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_musicname(const std::string& value);
+  std::string* _internal_mutable_musicname();
+  public:
+
+  // bytes data = 3;
+  void clear_data();
+  const std::string& data() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_data(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_data();
+  PROTOBUF_NODISCARD std::string* release_data();
+  void set_allocated_data(std::string* data);
+  private:
+  const std::string& _internal_data() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_data(const std::string& value);
+  std::string* _internal_mutable_data();
+  public:
+
+  // int32 fileSize = 2;
+  void clear_filesize();
+  int32_t filesize() const;
+  void set_filesize(int32_t value);
+  private:
+  int32_t _internal_filesize() const;
+  void _internal_set_filesize(int32_t value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:media.DownloadSingleMusicRsp)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr musicname_;
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr data_;
+  int32_t filesize_;
   mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   friend struct ::TableStruct_music_2eproto;
 };
@@ -1302,44 +1485,44 @@ PlayOnlineRandomRsp::mutable_musicname() {
 
 // -------------------------------------------------------------------
 
-// DownOneMusic
+// DownloadSingleMusic
 
 // string userName = 1;
-inline void DownOneMusic::clear_username() {
+inline void DownloadSingleMusic::clear_username() {
   username_.ClearToEmpty();
 }
-inline const std::string& DownOneMusic::username() const {
-  // @@protoc_insertion_point(field_get:media.DownOneMusic.userName)
+inline const std::string& DownloadSingleMusic::username() const {
+  // @@protoc_insertion_point(field_get:media.DownloadSingleMusic.userName)
   return _internal_username();
 }
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
-void DownOneMusic::set_username(ArgT0&& arg0, ArgT... args) {
+void DownloadSingleMusic::set_username(ArgT0&& arg0, ArgT... args) {
  
  username_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
-  // @@protoc_insertion_point(field_set:media.DownOneMusic.userName)
+  // @@protoc_insertion_point(field_set:media.DownloadSingleMusic.userName)
 }
-inline std::string* DownOneMusic::mutable_username() {
+inline std::string* DownloadSingleMusic::mutable_username() {
   std::string* _s = _internal_mutable_username();
-  // @@protoc_insertion_point(field_mutable:media.DownOneMusic.userName)
+  // @@protoc_insertion_point(field_mutable:media.DownloadSingleMusic.userName)
   return _s;
 }
-inline const std::string& DownOneMusic::_internal_username() const {
+inline const std::string& DownloadSingleMusic::_internal_username() const {
   return username_.Get();
 }
-inline void DownOneMusic::_internal_set_username(const std::string& value) {
+inline void DownloadSingleMusic::_internal_set_username(const std::string& value) {
   
   username_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
 }
-inline std::string* DownOneMusic::_internal_mutable_username() {
+inline std::string* DownloadSingleMusic::_internal_mutable_username() {
   
   return username_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
 }
-inline std::string* DownOneMusic::release_username() {
-  // @@protoc_insertion_point(field_release:media.DownOneMusic.userName)
+inline std::string* DownloadSingleMusic::release_username() {
+  // @@protoc_insertion_point(field_release:media.DownloadSingleMusic.userName)
   return username_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
 }
-inline void DownOneMusic::set_allocated_username(std::string* username) {
+inline void DownloadSingleMusic::set_allocated_username(std::string* username) {
   if (username != nullptr) {
     
   } else {
@@ -1352,45 +1535,45 @@ inline void DownOneMusic::set_allocated_username(std::string* username) {
     username_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  // @@protoc_insertion_point(field_set_allocated:media.DownOneMusic.userName)
+  // @@protoc_insertion_point(field_set_allocated:media.DownloadSingleMusic.userName)
 }
 
 // string musicName = 2;
-inline void DownOneMusic::clear_musicname() {
+inline void DownloadSingleMusic::clear_musicname() {
   musicname_.ClearToEmpty();
 }
-inline const std::string& DownOneMusic::musicname() const {
-  // @@protoc_insertion_point(field_get:media.DownOneMusic.musicName)
+inline const std::string& DownloadSingleMusic::musicname() const {
+  // @@protoc_insertion_point(field_get:media.DownloadSingleMusic.musicName)
   return _internal_musicname();
 }
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
-void DownOneMusic::set_musicname(ArgT0&& arg0, ArgT... args) {
+void DownloadSingleMusic::set_musicname(ArgT0&& arg0, ArgT... args) {
  
  musicname_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
-  // @@protoc_insertion_point(field_set:media.DownOneMusic.musicName)
+  // @@protoc_insertion_point(field_set:media.DownloadSingleMusic.musicName)
 }
-inline std::string* DownOneMusic::mutable_musicname() {
+inline std::string* DownloadSingleMusic::mutable_musicname() {
   std::string* _s = _internal_mutable_musicname();
-  // @@protoc_insertion_point(field_mutable:media.DownOneMusic.musicName)
+  // @@protoc_insertion_point(field_mutable:media.DownloadSingleMusic.musicName)
   return _s;
 }
-inline const std::string& DownOneMusic::_internal_musicname() const {
+inline const std::string& DownloadSingleMusic::_internal_musicname() const {
   return musicname_.Get();
 }
-inline void DownOneMusic::_internal_set_musicname(const std::string& value) {
+inline void DownloadSingleMusic::_internal_set_musicname(const std::string& value) {
   
   musicname_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
 }
-inline std::string* DownOneMusic::_internal_mutable_musicname() {
+inline std::string* DownloadSingleMusic::_internal_mutable_musicname() {
   
   return musicname_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
 }
-inline std::string* DownOneMusic::release_musicname() {
-  // @@protoc_insertion_point(field_release:media.DownOneMusic.musicName)
+inline std::string* DownloadSingleMusic::release_musicname() {
+  // @@protoc_insertion_point(field_release:media.DownloadSingleMusic.musicName)
   return musicname_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
 }
-inline void DownOneMusic::set_allocated_musicname(std::string* musicname) {
+inline void DownloadSingleMusic::set_allocated_musicname(std::string* musicname) {
   if (musicname != nullptr) {
     
   } else {
@@ -1403,12 +1586,140 @@ inline void DownOneMusic::set_allocated_musicname(std::string* musicname) {
     musicname_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  // @@protoc_insertion_point(field_set_allocated:media.DownOneMusic.musicName)
+  // @@protoc_insertion_point(field_set_allocated:media.DownloadSingleMusic.musicName)
+}
+
+// -------------------------------------------------------------------
+
+// DownloadSingleMusicRsp
+
+// string musicName = 1;
+inline void DownloadSingleMusicRsp::clear_musicname() {
+  musicname_.ClearToEmpty();
+}
+inline const std::string& DownloadSingleMusicRsp::musicname() const {
+  // @@protoc_insertion_point(field_get:media.DownloadSingleMusicRsp.musicName)
+  return _internal_musicname();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void DownloadSingleMusicRsp::set_musicname(ArgT0&& arg0, ArgT... args) {
+ 
+ musicname_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:media.DownloadSingleMusicRsp.musicName)
+}
+inline std::string* DownloadSingleMusicRsp::mutable_musicname() {
+  std::string* _s = _internal_mutable_musicname();
+  // @@protoc_insertion_point(field_mutable:media.DownloadSingleMusicRsp.musicName)
+  return _s;
+}
+inline const std::string& DownloadSingleMusicRsp::_internal_musicname() const {
+  return musicname_.Get();
+}
+inline void DownloadSingleMusicRsp::_internal_set_musicname(const std::string& value) {
+  
+  musicname_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
+}
+inline std::string* DownloadSingleMusicRsp::_internal_mutable_musicname() {
+  
+  return musicname_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
+}
+inline std::string* DownloadSingleMusicRsp::release_musicname() {
+  // @@protoc_insertion_point(field_release:media.DownloadSingleMusicRsp.musicName)
+  return musicname_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
+}
+inline void DownloadSingleMusicRsp::set_allocated_musicname(std::string* musicname) {
+  if (musicname != nullptr) {
+    
+  } else {
+    
+  }
+  musicname_.SetAllocated(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), musicname,
+      GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (musicname_.IsDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited())) {
+    musicname_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:media.DownloadSingleMusicRsp.musicName)
+}
+
+// int32 fileSize = 2;
+inline void DownloadSingleMusicRsp::clear_filesize() {
+  filesize_ = 0;
+}
+inline int32_t DownloadSingleMusicRsp::_internal_filesize() const {
+  return filesize_;
+}
+inline int32_t DownloadSingleMusicRsp::filesize() const {
+  // @@protoc_insertion_point(field_get:media.DownloadSingleMusicRsp.fileSize)
+  return _internal_filesize();
+}
+inline void DownloadSingleMusicRsp::_internal_set_filesize(int32_t value) {
+  
+  filesize_ = value;
+}
+inline void DownloadSingleMusicRsp::set_filesize(int32_t value) {
+  _internal_set_filesize(value);
+  // @@protoc_insertion_point(field_set:media.DownloadSingleMusicRsp.fileSize)
+}
+
+// bytes data = 3;
+inline void DownloadSingleMusicRsp::clear_data() {
+  data_.ClearToEmpty();
+}
+inline const std::string& DownloadSingleMusicRsp::data() const {
+  // @@protoc_insertion_point(field_get:media.DownloadSingleMusicRsp.data)
+  return _internal_data();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void DownloadSingleMusicRsp::set_data(ArgT0&& arg0, ArgT... args) {
+ 
+ data_.SetBytes(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:media.DownloadSingleMusicRsp.data)
+}
+inline std::string* DownloadSingleMusicRsp::mutable_data() {
+  std::string* _s = _internal_mutable_data();
+  // @@protoc_insertion_point(field_mutable:media.DownloadSingleMusicRsp.data)
+  return _s;
+}
+inline const std::string& DownloadSingleMusicRsp::_internal_data() const {
+  return data_.Get();
+}
+inline void DownloadSingleMusicRsp::_internal_set_data(const std::string& value) {
+  
+  data_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
+}
+inline std::string* DownloadSingleMusicRsp::_internal_mutable_data() {
+  
+  return data_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
+}
+inline std::string* DownloadSingleMusicRsp::release_data() {
+  // @@protoc_insertion_point(field_release:media.DownloadSingleMusicRsp.data)
+  return data_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
+}
+inline void DownloadSingleMusicRsp::set_allocated_data(std::string* data) {
+  if (data != nullptr) {
+    
+  } else {
+    
+  }
+  data_.SetAllocated(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), data,
+      GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (data_.IsDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited())) {
+    data_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:media.DownloadSingleMusicRsp.data)
 }
 
 #ifdef __GNUC__
   #pragma GCC diagnostic pop
 #endif  // __GNUC__
+// -------------------------------------------------------------------
+
 // -------------------------------------------------------------------
 
 // -------------------------------------------------------------------

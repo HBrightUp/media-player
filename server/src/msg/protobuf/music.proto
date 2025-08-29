@@ -8,7 +8,8 @@ enum MsgType{
     LOGIN = 1;
     PLAY_ONLINE_RANDOM = 2;
     PLAY_ONLINE_RANDOM_RESPONSE = 3;
-    DOWN_ONE_MUSIC = 4;
+    DOWNLOAD_SINGLE_MUSIC = 4;
+    DOWNLOAD_SINGLE_MUSIC_RESPONSE = 5;
 }
 
 
@@ -32,7 +33,13 @@ message PlayOnlineRandomRsp{
     repeated string  musicName = 1;
 }
 
-message DownOneMusic {
+message DownloadSingleMusic {
     string  userName = 1;
     string  musicName = 2;
+}
+
+message DownloadSingleMusicRsp {
+    string musicName = 1;
+    int32  fileSize = 2;
+    bytes  data = 3;
 }
