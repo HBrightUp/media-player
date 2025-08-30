@@ -2,9 +2,17 @@
 #include <filesystem> 
 #include<vector>
 #include"../../common/include/common.h"
+#include"../../msg/protobuf/music.pb.h"
 
 
 const uint  MSG_HEADER_SIZE = 2;
+
+
+struct MsgHeader{
+    media::MsgType type;
+    uint32_t datalen;
+    uint32_t  datapos;
+};
 
 class CMsgProcessor {
 
@@ -26,6 +34,7 @@ class CMsgProcessor {
         std::vector<std::string> getFilesWithExtension(const std::string& dirPath, const std::string& extension);
 
         bool download_single_music(const char* pdata);
+        MsgHeader parseMsgHeader();
 
     private:
         char readbuf[MAX_BUFFER_READ_ONCE_TIME];

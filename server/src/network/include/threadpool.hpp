@@ -85,7 +85,7 @@ void CThreadPool<T>::run() {
              continue;
         } 
 
-        Logger::getInstance().print(std::format(" Number of current task:  {}", this->tasks_queue.size()));
+        //Logger::getInstance().print(std::format(" Number of current task:  {}", this->tasks_queue.size()));
 
         T* request = tasks_queue.front();
         tasks_queue.pop();

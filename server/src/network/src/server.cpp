@@ -113,7 +113,7 @@ void* Server::EventHandle(void* arg)
 		if(nfds > 0) {
 			for(int i = 0; i < nfds; ++i) {
 				connfd = s.events[i].data.fd;
-				log.print(std::format("epoll_wait  connfd: {}", connfd));
+				//log.print(std::format("epoll_wait  connfd: {}", connfd));
 			
 				if( connfd == s.listenfd_ ) {
 					CTask* t = new CAcceptTask();
@@ -133,13 +133,20 @@ void* Server::EventHandle(void* arg)
 
 					
 					s.pool->append(t);
-				} else {
+				} else if(s.events[i].events & EPOLLOUT) {
 					log.print(std::format("Add write task, fd: {}", connfd));
 					
 					CTask* t = new CWriteTask();
 					t->SetConnFd(connfd);
 					s.pool->append(t);
-				}
+
+                    //WARNING: Since EPOLLOUT events are triggered frequently, as soon as the write task enters the queue, 
+                    //turn off the EPOLLOUT monitoring immediately, otherwise it may trigger multiple repeated write operations.
+                    Server::Instance().event->modify_event(connfd, EPOLLIN | EPOLLET);
+
+				} else {
+                    log.print("other event: ", static_cast<unsigned int>(s.events[i].events));
+                }
 			}
 		} else if (nfds == 0) {
 			continue;

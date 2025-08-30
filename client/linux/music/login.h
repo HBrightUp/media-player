@@ -20,7 +20,7 @@ public:
 
     inline QString get_user_name() { return userName_; }
 signals:
-    void login_send_message(SignalsType signal, std::string);
+    void login_send_message(const std::string& msg);
 
 private slots:
     void on_btn_login_clicked();

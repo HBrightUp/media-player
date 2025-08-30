@@ -183,6 +183,7 @@ Player::~Player()
 
 void Player::on_btn_directory_clicked()
 {
+    ui->list_music->clear();
     QString path = QFileDialog::getExistingDirectory(this, "Select directory of music:", "/home/hml/Music");
     if (path.isEmpty()) {
         return ;
@@ -463,13 +464,13 @@ void Player::on_btn_online_clicked()
 {
     if (!playlist_.empty()) {
         playlist_.clear();
-        ui->list_music->clear();
+
     }
+
+    ui->list_music->clear();
 
     qInfo() <<  "send play online random";
     emit play_online_random();
-
-
 
 }
 

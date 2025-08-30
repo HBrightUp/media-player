@@ -4,8 +4,9 @@
 #include<dirent.h>
 #include<sys/stat.h>
 #include<cstdio>
+#include <arpa/inet.h>
 #include"../include/msg_process.h"
-#include"../../msg/protobuf/music.pb.h"
+
 #include"../../filemanager/include/file_manager.h"
 #include"../../logger/include/log.h"
 
@@ -34,30 +35,54 @@ int CMsgProcessor::getWriteDataLen() {
     return writenLen_;
 }
 
+MsgHeader CMsgProcessor::parseMsgHeader() {
+
+    MsgHeader header;
+
+    header.type = static_cast<media::MsgType>(readbuf[0] - '0');
+
+    char buf[16];
+    memset(buf, 0, sizeof(buf));
+    
+    for(int i = 2; i < MAX_BUFFER_READ_ONCE_TIME; ++i) {
+        if (readbuf[i] == ':') {
+            //memcpy((void*)header.datalen, (void*)readbuf[2], i - 2);
+            memcpy(buf, readbuf + 2, i - 2);
+            header.datapos = i + 1;
+            break;
+        }
+    }
+
+    std::string lenBuf(buf);
+    header.datalen = std::stoi(lenBuf);
+
+    std::cout << "type: " << header.type << ", datalen: " << header.datalen << std::endl;
+
+    return header;
+}
+
+
 bool CMsgProcessor::process() {
 
-    std::string content(readbuf);
 
-    int pos = content.find(':');
-    if(pos < 0) {
-        return false;
-    }
+ 
     
-    media::MsgType cmd = static_cast<media::MsgType >(content[0] - '0') ;
 
-    std::cout << "content:" << content << ", pos: " << pos << ",cmd: " << cmd <<std::endl;
+    MsgHeader msgheader =  parseMsgHeader();
+    uint32_t pos = msgheader.datapos;
+    
     bool is_success;
-    switch (cmd){
-        case media::MsgType::LOGIN: {
-            is_success = login(content.c_str() + MSG_HEADER_SIZE);
+    switch (msgheader.type){
+        case media::MsgType::ENU_LOGIN: {
+            is_success = login(readbuf + pos);
             break;
         }
-        case media::MsgType::PLAY_ONLINE_RANDOM: {
-            is_success = play_online_random(content.c_str() + MSG_HEADER_SIZE);
+        case media::MsgType::ENU_PLAY_ONLINE_RANDOM: {
+            is_success = play_online_random(readbuf + pos);
             break;
         }
-        case media::MsgType::DOWNLOAD_SINGLE_MUSIC: {
-            is_success = download_single_music(content.c_str() + MSG_HEADER_SIZE);
+        case media::MsgType::ENU_DOWNLOAD_SINGLE_MUSIC: {
+            is_success = download_single_music(readbuf + pos);
             break;
         }
         default: {
@@ -71,7 +96,8 @@ bool CMsgProcessor::process() {
 
 bool CMsgProcessor::download_single_music(const char* pdata) {
 
-    std::cout << "download_single_music+++" << std::endl;
+    auto& log = Logger::getInstance();
+
     media::DownloadSingleMusic music;
 
     music.ParseFromString(pdata);
@@ -107,7 +133,9 @@ bool CMsgProcessor::download_single_music(const char* pdata) {
 
     fclose(file);
 
-    std::string cmd = std::to_string(static_cast<int>(media::MsgType::DOWNLOAD_SINGLE_MUSIC_RESPONSE));
+    log.print("music name: ", filename, ", filesize: ", fileSize);
+
+    std::string cmd = std::to_string(static_cast<int>(media::MsgType::ENU_DOWNLOAD_SINGLE_MUSIC_RSP));
     media::DownloadSingleMusicRsp rsp;
     rsp.set_musicname(filename);
     rsp.set_filesize(fileSize);
@@ -116,9 +144,9 @@ bool CMsgProcessor::download_single_music(const char* pdata) {
     std::string serialized_rsp;
     rsp.SerializeToString(&serialized_rsp); 
 
-    std::cout << "serialized size of download single music: " << serialized_rsp.length() << std::endl;
+    log.print("Process download singel music, serialized data size: ", serialized_rsp.length());
 
-    std::string msg = cmd + ":" + serialized_rsp;
+    std::string msg = cmd + ":" + std::to_string(serialized_rsp.size()) + ":" +  serialized_rsp;
     writenLen_ = msg.length();
     memcpy(writebuf, msg.c_str(), writenLen_);
     writebuf[writenLen_] = 0;
@@ -129,6 +157,7 @@ bool CMsgProcessor::download_single_music(const char* pdata) {
 bool CMsgProcessor::play_online_random(const char* pdata) {
     bool is_success = false;
 
+    auto& log = Logger::getInstance();
     std::string dirPath = "/home/hml/Downloads";
     std::string extension = ".mp3";  
 
@@ -146,10 +175,13 @@ bool CMsgProcessor::play_online_random(const char* pdata) {
         return false;
     } 
 
-    std::cout << "serialized play online random size: " << rspStr.length() << std::endl;
+    
+    log.print("Process play online random, serialized data size: ", rspStr.length());
 
-    std::string cmd = std::to_string(static_cast<int>(media::MsgType::  PLAY_ONLINE_RANDOM_RESPONSE));
-    std::string msg = cmd + ":" + rspStr;
+
+
+    std::string cmd = std::to_string(static_cast<int>(media::MsgType::ENU_PLAY_ONLINE_RANDOM_RSP));
+    std::string msg = cmd + ":" + std::to_string(rspStr.size()) + ":" + rspStr;
     writenLen_ = msg.length();
     memcpy(writebuf, msg.c_str(), writenLen_);
     writebuf[writenLen_] = 0;
@@ -175,7 +207,7 @@ std::vector<std::string> CMsgProcessor::getFilesWithExtension(const std::string&
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
         std::string filename = entry->d_name;
-     
+    
         if (filename == "." || filename == "..") {
             continue;
         }
@@ -202,24 +234,23 @@ bool CMsgProcessor::login(const char* pdata) {
     media::Login login;
     login.ParseFromString(pdata);
 
-    std::cout << "name: " << login.username() << std::endl;
-    std::cout << "pwd: " << login.pwd() << std::endl;
+    auto& log = Logger::getInstance();
+    log.print("Process login, username: ", login.username(), ", pwd: ", login.pwd());
 
     if (login.username() == "hml" && login.pwd() == "123") {
         is_success = true;
     }
 
-    std::string cmd = std::to_string(static_cast<int>(media::MsgType::RESPONSE));
-    media::Response rsp;
-    rsp.set_cmd(media::MsgType::LOGIN);
-    rsp.set_code(200);
+    std::string cmd = std::to_string(static_cast<unsigned char>(media::MsgType::ENU_LOGIN_RSP));
+    media::LoginRsp rsp;
+    rsp.set_username(login.username());
 
     std::string serialized_rsp;
     rsp.SerializeToString(&serialized_rsp); 
 
-    std::cout << "serialized_rsp size: " << serialized_rsp.length() << std::endl;
+    //std::cout << "serialized_rsp size: " << serialized_rsp.length() << std::endl;
 
-    std::string msg = cmd + ":" + serialized_rsp;
+    std::string msg = cmd + ":" + std::to_string(serialized_rsp.size()) + ":" + serialized_rsp;
     writenLen_ = msg.length();
     memcpy(writebuf, msg.c_str(), writenLen_);
     writebuf[writenLen_] = 0;

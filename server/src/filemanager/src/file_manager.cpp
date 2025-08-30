@@ -102,8 +102,8 @@ std::vector<std::string> CFileManager::getFilesWithExtension(const std::string& 
 }
 
 void CFileManager::print() {
+    std::cout << "print music list:" << std::endl;
     for (const auto& music : musicMap_) {
-        std::cout << "print music list:" << std::endl;
         std::cout << music.first << ", " << music.second << std::endl;
     }
 }

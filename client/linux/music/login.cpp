@@ -48,13 +48,13 @@ void Login::on_btn_login_clicked()
     login.set_username(userName_.toStdString().c_str());
     login.set_pwd(ui->le_password->text().toStdString().c_str());
 
-    std::string serialized_string;
-    login.SerializeToString(&serialized_string);
+    std::string serialized;
+    login.SerializeToString(&serialized);
 
     CMsgAssembly ass;
-    std::string send_data = ass.assembly(media::MsgType::LOGIN, serialized_string);
+    std::string msg = ass.assembly(media::MsgType::ENU_LOGIN, serialized);
 
-    emit login_send_message(SignalsType::ENU_LOGIN, send_data);
+    emit login_send_message(msg);
 
 }
 

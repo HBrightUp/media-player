@@ -1,8 +1,17 @@
 #include<QDebug>
 #include<QMutexLocker>
+#include<QFile>
 #include "./tcpclient.h"
+#include"./music.pb.h"
 
 TcpClient::TcpClient(const QString &host, quint16 port) {
+
+    isMutiPackage_ = false;
+    musicPackage_ = nullptr;
+    musicPackagePos_ = 0;
+    MsgmutiPackage_ = media::MsgType::ENU_START;
+    musicSavePath_ = std::string(std::getenv("HOME")) + "/Music/";
+
     socket_ = new QTcpSocket(this);
     socket_->connectToHost(host, port);
 
@@ -38,7 +47,6 @@ void TcpClient::onReadyRead() {
     //qDebug() << "Received data from server:" << data;
     QMutexLocker lock(&mutMsgList_);
     msglist_.append(socket_->readAll());
-     qInfo() << "333";
     lock.unlock();
     msgCondition_.wakeOne();
 }
@@ -62,8 +70,8 @@ void TcpClient::run() {
         }
 
         for(const auto& arr : msglist_) {
-            qInfo() << arr;
-            parseMsgHeader(arr);
+            qInfo() << "Size of msg: " << arr.size();
+            parseMsg(arr);
         }
 
         msglist_.clear();
@@ -71,36 +79,155 @@ void TcpClient::run() {
     }
 }
 
-void TcpClient::parseMsgHeader(const QByteArray& msgData) {
+MsgHeader TcpClient::parseMsgHeader(const QByteArray& msgData) {
+    MsgHeader header;
+    int times = 0;
+    int prev_pos;
+    int pos = -1;
+    while ((pos = msgData.indexOf(':', pos + 1)) != -1) {
+        qDebug() << "Found ':' at index:" << pos;
 
-    qint32 pos = msgData.indexOf(':');
-    if (pos < 0) {
-        return ;
-    }
+        ++times;
+        if (times == 1) {
+            header.type = static_cast<media::MsgType>(msgData[pos - 1] - '0');
+            prev_pos = pos;
+        } else if (times == 2) {
+            uint32_t len = 0;
+            QString str = QString::fromUtf8(msgData.mid(prev_pos + 1, pos - prev_pos - 1));
+            qInfo() << "str: " << str ;
+            bool ok = false;
+            header.datalen = str.toUInt(&ok);
 
-    qInfo() << "msgData size: " << msgData.size();
-    qInfo() << "msgData: " << msgData;
+            if(!ok) {
+                qInfo() << "datalen parse error.";
+                break;
+            }
+            header.datapos = pos + 1;
+            prev_pos = pos;
 
-    QString cmdstr = msgData.left(pos);
-    bool ok;
-    qint32 type = cmdstr.toInt(&ok);
-    if (!ok) {
-        return ;
-    }
-    media::MsgType cmd = static_cast<media::MsgType>(type);
-    qInfo()<< "cmd: " << cmd ;
-    switch (cmd) {
-        case media::MsgType::RESPONSE: {
-            parseResponse(msgData, pos + 1);
+        } else {
+            qInfo() << "unknown message.";
             break;
         }
-        case media::MsgType::PLAY_ONLINE_RANDOM_RESPONSE: {
-            parsePlayOnlineRandomRsp(msgData, pos + 1);
+    }
+
+
+    return header;
+}
+bool TcpClient::parseMsg(const QByteArray& msgData) {
+
+    if (isMutiPackage_) {
+        qint32 ret = mergingPackage(msgData);
+        if(ret > 0) {
+            return true;
+        } else if (ret == 0) {
+
+            isMutiPackage_ = false;
+            MsgmutiPackage_ = media::MsgType::ENU_START;
+            if (musicPackage_ != nullptr) {
+                delete[] musicPackage_;
+                musicPackage_ = nullptr;
+            }
+            return true;
+        } else {
+            // exception
+            return false;
+        }
+    }
+
+    //qInfo() << "msgData: " << msgData;
+    MsgHeader header = parseMsgHeader(msgData);
+    qInfo() << "header datalen: " << header.datalen;
+
+    uint32_t pos = header.datapos;
+
+    switch (header.type) {
+        case media::MsgType::ENU_LOGIN_RSP: {
+            parseLoginRsp(msgData, pos);
+            break;
+        }
+        case media::MsgType::ENU_PLAY_ONLINE_RANDOM_RSP: {
+            parsePlayOnlineRandomRsp(msgData, pos);
+            break;
+        }
+        case media::MsgType::ENU_DOWNLOAD_SINGLE_MUSIC_RSP: {
+            qInfo() << "Received single music, size: " << msgData.size();
+
+            parseDownloadSingleMusicRsp(msgData, header, pos);
             break;
         }
         default:
             break;
     }
+
+    return true;
+}
+
+bool TcpClient::saveSingleMusicToFile() {
+
+    media::DownloadSingleMusicRsp rsp;
+
+    rsp.ParseFromArray(musicPackage_, packageTotalSize_);
+    //rsp.ParsePartialFromArray(musicPackage_, packageTotalSize_);
+
+    qInfo() << "Music name: " << rsp.musicname() << ",file size: " << rsp.filesize();
+
+    int len = rsp.data().size();
+    qInfo() << "data size: " << len;
+
+    QString qData = QString::fromStdString(rsp.data());
+
+    qInfo() << "qData size: " << qData.size();
+
+    std::string filePath = std::string(musicSavePath_ + rsp.musicname());
+
+    QFile file(filePath.c_str());
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+
+        file.write(rsp.data().c_str(), rsp.data().size());
+        file.close();
+        qDebug() << "Data successfully written to output.txt";
+    } else {
+        qDebug() << "Failed to open file for writing!";
+    }
+
+
+    return true;
+}
+
+qint32 TcpClient::mergingPackage(const QByteArray& msgData) {
+
+
+    if (musicPackagePos_ <= packageTotalSize_) {
+
+        memcpy(musicPackage_ + musicPackagePos_, msgData.data(), msgData.size());
+        musicPackagePos_ += msgData.size();
+        qInfo() << "mergingPackage musicPackagePos_: " << musicPackagePos_ << ", packageTotalSize_: " << packageTotalSize_;
+    }
+
+
+    if (musicPackagePos_ == packageTotalSize_) {
+        saveSingleMusicToFile();
+        return 0;
+    }
+
+    if (musicPackagePos_ > packageTotalSize_) {
+        return -1;
+    }
+
+    return 1;
+}
+
+void TcpClient::parseDownloadSingleMusicRsp(const QByteArray& msgData, const MsgHeader& header, const qint32 offset) {
+    isMutiPackage_ = true;
+    MsgmutiPackage_ = header.type;
+    packageTotalSize_ = header.datalen;
+    musicPackage_ = new char[packageTotalSize_];
+    musicPackagePos_ = msgData.size() - offset;
+    qInfo() << "parseDownloadSingleMusicRsp musicPackagePos_: " << musicPackagePos_;
+    memcpy(musicPackage_, msgData.data() + offset, musicPackagePos_);
+
+
 }
 
 void TcpClient::parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32 offest) {
@@ -118,15 +245,15 @@ void TcpClient::parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32
 
     emit play_online_random_response(v);
 }
-void TcpClient::parseResponse(const QByteArray& msgData, const qint32 offest) {
-    media::Response rsp;
+void TcpClient::parseLoginRsp(const QByteArray& msgData, const qint32 offest) {
+    media::LoginRsp rsp;
 
     rsp.ParseFromString((msgData.right(msgData.size() - offest )).toStdString());
+    qInfo() << "Parse login rsp, username: " << rsp.username();
 
-    std::cout << "cmd: "<< rsp.cmd() << ", code: " << rsp.code() << std::endl;
 
-    if (rsp.cmd() == media::MsgType::LOGIN && rsp.code() == 200) {
-        qInfo()<< "send login success";
+    if (rsp.username() == "hml") {
+        qInfo()<< "Login success";
         emit login_success();
     }
 }

@@ -4,7 +4,7 @@
 
 UiManage::UiManage() {
     login_.reset(new Login);
-    client_.reset( new TcpClient("0.0.0.0", 1234));
+    client_.reset( new TcpClient("0.0.0.0", 8000));
 
     connect(login_.get(), &Login::login_send_message, this, &UiManage::login_message_rev);
     connect(client_.get(), &TcpClient::login_success, this, &UiManage::login_success_rev);
@@ -17,16 +17,9 @@ void UiManage::start(){
     login_.get()->show();
 }
 
-void UiManage::login_message_rev(SignalsType signal_id, const std::string& buf){
-    qInfo() << "msg id: " << signal_id;
-    // login_.reset();
-    // player_.reset(new Player);
+void UiManage::login_message_rev(const std::string& msg){
 
-    // connect(player_.get(), &Player::send_message, this, &UiManage::player_message_rev);
-    // player_.get()->show();
-
-    qInfo() << "send login msg.";
-    client_->writeData(buf);
+    client_->writeData(msg);
 }
 
 void UiManage::login_success_rev(){
@@ -50,7 +43,7 @@ void  UiManage::play_online_random_recv() {
     online.SerializeToString(&serialized);
 
     CMsgAssembly ass;
-    std::string msgdata = ass.assembly(media::MsgType::PLAY_ONLINE_RANDOM, serialized);
+    std::string msgdata = ass.assembly(media::MsgType::ENU_PLAY_ONLINE_RANDOM, serialized);
 
     qInfo() << "send server data size: " << msgdata.size();
     client_->writeData(msgdata);
@@ -70,7 +63,7 @@ void UiManage::download_single_music_recv(const QString& musicName) {
     singleMusic.SerializeToString(&serialized);
 
     CMsgAssembly ass;
-    std::string msgdata = ass.assembly(media::MsgType::DOWNLOAD_SINGLE_MUSIC, serialized);
+    std::string msgdata = ass.assembly(media::MsgType::ENU_DOWNLOAD_SINGLE_MUSIC, serialized);
 
     qInfo() << "send message of download single music to server, size: " << msgdata.size();
     client_->writeData(msgdata);

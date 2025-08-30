@@ -16,7 +16,8 @@ int main(int argc, char* argv[]) {
     }
 
     CFileManager::getInstance().init();
-    
+    auto& log = Logger::getInstance();
+    log.init("./logfile", LoggerMode::ENU_STDOUT);    
 
     Server& s = Server::Instance();
     s.init(SERVER_IP, std::atoi(argv[1]));

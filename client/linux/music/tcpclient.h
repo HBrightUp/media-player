@@ -13,6 +13,13 @@
 #include"./msgprocessor.h"
 #include"./signals_type.h"
 
+
+struct MsgHeader{
+    media::MsgType type;
+    uint32_t datalen;
+    uint32_t  datapos;
+};
+
 class TcpClient : public QThread
 {
     Q_OBJECT
@@ -29,9 +36,14 @@ public slots:
     void writeData(const std::string& buf);
 
     void run() override;
-    void parseMsgHeader(const  QByteArray& data);
-    void parseResponse(const QByteArray& msgData, const qint32 offest);
+    bool parseMsg(const  QByteArray& msgData);
+    void parseLoginRsp(const QByteArray& msgData, const qint32 offest);
     void parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32 offest);
+private:
+    MsgHeader parseMsgHeader(const QByteArray& msgData);
+    void parseDownloadSingleMusicRsp(const QByteArray& msgData, const MsgHeader& header, const qint32 offest);
+    qint32 mergingPackage(const QByteArray& msgData);
+    bool saveSingleMusicToFile();
 
 signals:
     void login_success();
@@ -42,6 +54,14 @@ private:
     QList<QByteArray> msglist_;
     QMutex mutMsgList_;
     QWaitCondition msgCondition_;
+
+    std::string musicSavePath_;
+
+    bool isMutiPackage_;
+    media::MsgType MsgmutiPackage_;
+    char* musicPackage_;
+    qint32 musicPackagePos_;
+    qint32 packageTotalSize_;
 };
 
 #endif // TCPCLIENT_H

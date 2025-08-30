@@ -17,7 +17,7 @@ class UiManage:public QObject
         void start();
 
     private slots:
-        void login_message_rev(const SignalsType, const std::string&);
+        void login_message_rev(const std::string& msgLogin);
         void login_success_rev();
         //void player_message_rev(MessageType, std::string);
 

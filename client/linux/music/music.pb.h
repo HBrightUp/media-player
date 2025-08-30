@@ -47,7 +47,7 @@ struct TableStruct_music_2eproto {
     PROTOBUF_SECTION_VARIABLE(protodesc_cold);
   static const ::PROTOBUF_NAMESPACE_ID::internal::AuxiliaryParseTableField aux[]
     PROTOBUF_SECTION_VARIABLE(protodesc_cold);
-  static const ::PROTOBUF_NAMESPACE_ID::internal::ParseTable schema[6]
+  static const ::PROTOBUF_NAMESPACE_ID::internal::ParseTable schema[7]
     PROTOBUF_SECTION_VARIABLE(protodesc_cold);
   static const ::PROTOBUF_NAMESPACE_ID::internal::FieldMetadata field_metadata[];
   static const ::PROTOBUF_NAMESPACE_ID::internal::SerializationTable serialization_table[];
@@ -64,39 +64,45 @@ extern DownloadSingleMusicRspDefaultTypeInternal _DownloadSingleMusicRsp_default
 class Login;
 struct LoginDefaultTypeInternal;
 extern LoginDefaultTypeInternal _Login_default_instance_;
+class LoginRsp;
+struct LoginRspDefaultTypeInternal;
+extern LoginRspDefaultTypeInternal _LoginRsp_default_instance_;
+class MsgHeader;
+struct MsgHeaderDefaultTypeInternal;
+extern MsgHeaderDefaultTypeInternal _MsgHeader_default_instance_;
 class PlayOnlineRandom;
 struct PlayOnlineRandomDefaultTypeInternal;
 extern PlayOnlineRandomDefaultTypeInternal _PlayOnlineRandom_default_instance_;
 class PlayOnlineRandomRsp;
 struct PlayOnlineRandomRspDefaultTypeInternal;
 extern PlayOnlineRandomRspDefaultTypeInternal _PlayOnlineRandomRsp_default_instance_;
-class Response;
-struct ResponseDefaultTypeInternal;
-extern ResponseDefaultTypeInternal _Response_default_instance_;
 }  // namespace media
 PROTOBUF_NAMESPACE_OPEN
 template<> ::media::DownloadSingleMusic* Arena::CreateMaybeMessage<::media::DownloadSingleMusic>(Arena*);
 template<> ::media::DownloadSingleMusicRsp* Arena::CreateMaybeMessage<::media::DownloadSingleMusicRsp>(Arena*);
 template<> ::media::Login* Arena::CreateMaybeMessage<::media::Login>(Arena*);
+template<> ::media::LoginRsp* Arena::CreateMaybeMessage<::media::LoginRsp>(Arena*);
+template<> ::media::MsgHeader* Arena::CreateMaybeMessage<::media::MsgHeader>(Arena*);
 template<> ::media::PlayOnlineRandom* Arena::CreateMaybeMessage<::media::PlayOnlineRandom>(Arena*);
 template<> ::media::PlayOnlineRandomRsp* Arena::CreateMaybeMessage<::media::PlayOnlineRandomRsp>(Arena*);
-template<> ::media::Response* Arena::CreateMaybeMessage<::media::Response>(Arena*);
 PROTOBUF_NAMESPACE_CLOSE
 namespace media {
 
 enum MsgType : int {
-  RESPONSE = 0,
-  LOGIN = 1,
-  PLAY_ONLINE_RANDOM = 2,
-  PLAY_ONLINE_RANDOM_RESPONSE = 3,
-  DOWNLOAD_SINGLE_MUSIC = 4,
-  DOWNLOAD_SINGLE_MUSIC_RESPONSE = 5,
+  ENU_START = 0,
+  ENU_LOGIN = 1,
+  ENU_LOGIN_RSP = 2,
+  ENU_PLAY_ONLINE_RANDOM = 3,
+  ENU_PLAY_ONLINE_RANDOM_RSP = 4,
+  ENU_DOWNLOAD_SINGLE_MUSIC = 5,
+  ENU_DOWNLOAD_SINGLE_MUSIC_RSP = 6,
+  ENU_END = 7,
   MsgType_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   MsgType_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
 };
 bool MsgType_IsValid(int value);
-constexpr MsgType MsgType_MIN = RESPONSE;
-constexpr MsgType MsgType_MAX = DOWNLOAD_SINGLE_MUSIC_RESPONSE;
+constexpr MsgType MsgType_MIN = ENU_START;
+constexpr MsgType MsgType_MAX = ENU_END;
 constexpr int MsgType_ARRAYSIZE = MsgType_MAX + 1;
 
 const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* MsgType_descriptor();
@@ -114,6 +120,190 @@ inline bool MsgType_Parse(
     MsgType_descriptor(), name, value);
 }
 // ===================================================================
+
+class MsgHeader final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.MsgHeader) */ {
+ public:
+  inline MsgHeader() : MsgHeader(nullptr) {}
+  ~MsgHeader() override;
+  explicit constexpr MsgHeader(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  MsgHeader(const MsgHeader& from);
+  MsgHeader(MsgHeader&& from) noexcept
+    : MsgHeader() {
+    *this = ::std::move(from);
+  }
+
+  inline MsgHeader& operator=(const MsgHeader& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline MsgHeader& operator=(MsgHeader&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const MsgHeader& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const MsgHeader* internal_default_instance() {
+    return reinterpret_cast<const MsgHeader*>(
+               &_MsgHeader_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    0;
+
+  friend void swap(MsgHeader& a, MsgHeader& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(MsgHeader* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(MsgHeader* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  MsgHeader* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<MsgHeader>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const MsgHeader& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom(const MsgHeader& from);
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to, const ::PROTOBUF_NAMESPACE_ID::Message& from);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _cached_size_.Get(); }
+
+  private:
+  void SharedCtor();
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(MsgHeader* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "media.MsgHeader";
+  }
+  protected:
+  explicit MsgHeader(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  private:
+  static void ArenaDtor(void* object);
+  inline void RegisterArenaDtor(::PROTOBUF_NAMESPACE_ID::Arena* arena);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kResv2FieldNumber = 4,
+    kCmdFieldNumber = 1,
+    kCodeFieldNumber = 2,
+    kResv1FieldNumber = 3,
+  };
+  // string resv2 = 4;
+  void clear_resv2();
+  const std::string& resv2() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_resv2(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_resv2();
+  PROTOBUF_NODISCARD std::string* release_resv2();
+  void set_allocated_resv2(std::string* resv2);
+  private:
+  const std::string& _internal_resv2() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_resv2(const std::string& value);
+  std::string* _internal_mutable_resv2();
+  public:
+
+  // .media.MsgType cmd = 1;
+  void clear_cmd();
+  ::media::MsgType cmd() const;
+  void set_cmd(::media::MsgType value);
+  private:
+  ::media::MsgType _internal_cmd() const;
+  void _internal_set_cmd(::media::MsgType value);
+  public:
+
+  // int32 code = 2;
+  void clear_code();
+  int32_t code() const;
+  void set_code(int32_t value);
+  private:
+  int32_t _internal_code() const;
+  void _internal_set_code(int32_t value);
+  public:
+
+  // int32 resv1 = 3;
+  void clear_resv1();
+  int32_t resv1() const;
+  void set_resv1(int32_t value);
+  private:
+  int32_t _internal_resv1() const;
+  void _internal_set_resv1(int32_t value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:media.MsgHeader)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr resv2_;
+  int cmd_;
+  int32_t code_;
+  int32_t resv1_;
+  mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  friend struct ::TableStruct_music_2eproto;
+};
+// -------------------------------------------------------------------
 
 class Login final :
     public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.Login) */ {
@@ -163,7 +353,7 @@ class Login final :
                &_Login_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
-    0;
+    1;
 
   friend void swap(Login& a, Login& b) {
     a.Swap(&b);
@@ -282,24 +472,24 @@ class Login final :
 };
 // -------------------------------------------------------------------
 
-class Response final :
-    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.Response) */ {
+class LoginRsp final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:media.LoginRsp) */ {
  public:
-  inline Response() : Response(nullptr) {}
-  ~Response() override;
-  explicit constexpr Response(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+  inline LoginRsp() : LoginRsp(nullptr) {}
+  ~LoginRsp() override;
+  explicit constexpr LoginRsp(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
 
-  Response(const Response& from);
-  Response(Response&& from) noexcept
-    : Response() {
+  LoginRsp(const LoginRsp& from);
+  LoginRsp(LoginRsp&& from) noexcept
+    : LoginRsp() {
     *this = ::std::move(from);
   }
 
-  inline Response& operator=(const Response& from) {
+  inline LoginRsp& operator=(const LoginRsp& from) {
     CopyFrom(from);
     return *this;
   }
-  inline Response& operator=(Response&& from) noexcept {
+  inline LoginRsp& operator=(LoginRsp&& from) noexcept {
     if (this == &from) return *this;
     if (GetOwningArena() == from.GetOwningArena()
   #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
@@ -322,20 +512,20 @@ class Response final :
   static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
     return default_instance().GetMetadata().reflection;
   }
-  static const Response& default_instance() {
+  static const LoginRsp& default_instance() {
     return *internal_default_instance();
   }
-  static inline const Response* internal_default_instance() {
-    return reinterpret_cast<const Response*>(
-               &_Response_default_instance_);
+  static inline const LoginRsp* internal_default_instance() {
+    return reinterpret_cast<const LoginRsp*>(
+               &_LoginRsp_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
-    1;
+    2;
 
-  friend void swap(Response& a, Response& b) {
+  friend void swap(LoginRsp& a, LoginRsp& b) {
     a.Swap(&b);
   }
-  inline void Swap(Response* other) {
+  inline void Swap(LoginRsp* other) {
     if (other == this) return;
   #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
     if (GetOwningArena() != nullptr &&
@@ -348,7 +538,7 @@ class Response final :
       ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
     }
   }
-  void UnsafeArenaSwap(Response* other) {
+  void UnsafeArenaSwap(LoginRsp* other) {
     if (other == this) return;
     GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
     InternalSwap(other);
@@ -356,13 +546,13 @@ class Response final :
 
   // implements Message ----------------------------------------------
 
-  Response* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
-    return CreateMaybeMessage<Response>(arena);
+  LoginRsp* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<LoginRsp>(arena);
   }
   using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
-  void CopyFrom(const Response& from);
+  void CopyFrom(const LoginRsp& from);
   using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
-  void MergeFrom(const Response& from);
+  void MergeFrom(const LoginRsp& from);
   private:
   static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message* to, const ::PROTOBUF_NAMESPACE_ID::Message& from);
   public:
@@ -379,15 +569,15 @@ class Response final :
   void SharedCtor();
   void SharedDtor();
   void SetCachedSize(int size) const final;
-  void InternalSwap(Response* other);
+  void InternalSwap(LoginRsp* other);
 
   private:
   friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
   static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
-    return "media.Response";
+    return "media.LoginRsp";
   }
   protected:
-  explicit Response(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+  explicit LoginRsp(::PROTOBUF_NAMESPACE_ID::Arena* arena,
                        bool is_message_owned = false);
   private:
   static void ArenaDtor(void* object);
@@ -404,63 +594,30 @@ class Response final :
   // accessors -------------------------------------------------------
 
   enum : int {
-    kReserved2FieldNumber = 4,
-    kCmdFieldNumber = 1,
-    kCodeFieldNumber = 2,
-    kReserved1FieldNumber = 3,
+    kUserNameFieldNumber = 1,
   };
-  // string reserved2 = 4;
-  void clear_reserved2();
-  const std::string& reserved2() const;
+  // string userName = 1;
+  void clear_username();
+  const std::string& username() const;
   template <typename ArgT0 = const std::string&, typename... ArgT>
-  void set_reserved2(ArgT0&& arg0, ArgT... args);
-  std::string* mutable_reserved2();
-  PROTOBUF_NODISCARD std::string* release_reserved2();
-  void set_allocated_reserved2(std::string* reserved2);
+  void set_username(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_username();
+  PROTOBUF_NODISCARD std::string* release_username();
+  void set_allocated_username(std::string* username);
   private:
-  const std::string& _internal_reserved2() const;
-  inline PROTOBUF_ALWAYS_INLINE void _internal_set_reserved2(const std::string& value);
-  std::string* _internal_mutable_reserved2();
+  const std::string& _internal_username() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_username(const std::string& value);
+  std::string* _internal_mutable_username();
   public:
 
-  // .media.MsgType cmd = 1;
-  void clear_cmd();
-  ::media::MsgType cmd() const;
-  void set_cmd(::media::MsgType value);
-  private:
-  ::media::MsgType _internal_cmd() const;
-  void _internal_set_cmd(::media::MsgType value);
-  public:
-
-  // int32 code = 2;
-  void clear_code();
-  int32_t code() const;
-  void set_code(int32_t value);
-  private:
-  int32_t _internal_code() const;
-  void _internal_set_code(int32_t value);
-  public:
-
-  // int32 reserved1 = 3;
-  void clear_reserved1();
-  int32_t reserved1() const;
-  void set_reserved1(int32_t value);
-  private:
-  int32_t _internal_reserved1() const;
-  void _internal_set_reserved1(int32_t value);
-  public:
-
-  // @@protoc_insertion_point(class_scope:media.Response)
+  // @@protoc_insertion_point(class_scope:media.LoginRsp)
  private:
   class _Internal;
 
   template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
   typedef void InternalArenaConstructable_;
   typedef void DestructorSkippable_;
-  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr reserved2_;
-  int cmd_;
-  int32_t code_;
-  int32_t reserved1_;
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr username_;
   mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   friend struct ::TableStruct_music_2eproto;
 };
@@ -514,7 +671,7 @@ class PlayOnlineRandom final :
                &_PlayOnlineRandom_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
-    2;
+    3;
 
   friend void swap(PlayOnlineRandom& a, PlayOnlineRandom& b) {
     a.Swap(&b);
@@ -665,7 +822,7 @@ class PlayOnlineRandomRsp final :
                &_PlayOnlineRandomRsp_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
-    3;
+    4;
 
   friend void swap(PlayOnlineRandomRsp& a, PlayOnlineRandomRsp& b) {
     a.Swap(&b);
@@ -826,7 +983,7 @@ class DownloadSingleMusic final :
                &_DownloadSingleMusic_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
-    4;
+    5;
 
   friend void swap(DownloadSingleMusic& a, DownloadSingleMusic& b) {
     a.Swap(&b);
@@ -993,7 +1150,7 @@ class DownloadSingleMusicRsp final :
                &_DownloadSingleMusicRsp_default_instance_);
   }
   static constexpr int kIndexInFileMessages =
-    5;
+    6;
 
   friend void swap(DownloadSingleMusicRsp& a, DownloadSingleMusicRsp& b) {
     a.Swap(&b);
@@ -1130,6 +1287,121 @@ class DownloadSingleMusicRsp final :
   #pragma GCC diagnostic push
   #pragma GCC diagnostic ignored "-Wstrict-aliasing"
 #endif  // __GNUC__
+// MsgHeader
+
+// .media.MsgType cmd = 1;
+inline void MsgHeader::clear_cmd() {
+  cmd_ = 0;
+}
+inline ::media::MsgType MsgHeader::_internal_cmd() const {
+  return static_cast< ::media::MsgType >(cmd_);
+}
+inline ::media::MsgType MsgHeader::cmd() const {
+  // @@protoc_insertion_point(field_get:media.MsgHeader.cmd)
+  return _internal_cmd();
+}
+inline void MsgHeader::_internal_set_cmd(::media::MsgType value) {
+  
+  cmd_ = value;
+}
+inline void MsgHeader::set_cmd(::media::MsgType value) {
+  _internal_set_cmd(value);
+  // @@protoc_insertion_point(field_set:media.MsgHeader.cmd)
+}
+
+// int32 code = 2;
+inline void MsgHeader::clear_code() {
+  code_ = 0;
+}
+inline int32_t MsgHeader::_internal_code() const {
+  return code_;
+}
+inline int32_t MsgHeader::code() const {
+  // @@protoc_insertion_point(field_get:media.MsgHeader.code)
+  return _internal_code();
+}
+inline void MsgHeader::_internal_set_code(int32_t value) {
+  
+  code_ = value;
+}
+inline void MsgHeader::set_code(int32_t value) {
+  _internal_set_code(value);
+  // @@protoc_insertion_point(field_set:media.MsgHeader.code)
+}
+
+// int32 resv1 = 3;
+inline void MsgHeader::clear_resv1() {
+  resv1_ = 0;
+}
+inline int32_t MsgHeader::_internal_resv1() const {
+  return resv1_;
+}
+inline int32_t MsgHeader::resv1() const {
+  // @@protoc_insertion_point(field_get:media.MsgHeader.resv1)
+  return _internal_resv1();
+}
+inline void MsgHeader::_internal_set_resv1(int32_t value) {
+  
+  resv1_ = value;
+}
+inline void MsgHeader::set_resv1(int32_t value) {
+  _internal_set_resv1(value);
+  // @@protoc_insertion_point(field_set:media.MsgHeader.resv1)
+}
+
+// string resv2 = 4;
+inline void MsgHeader::clear_resv2() {
+  resv2_.ClearToEmpty();
+}
+inline const std::string& MsgHeader::resv2() const {
+  // @@protoc_insertion_point(field_get:media.MsgHeader.resv2)
+  return _internal_resv2();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void MsgHeader::set_resv2(ArgT0&& arg0, ArgT... args) {
+ 
+ resv2_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:media.MsgHeader.resv2)
+}
+inline std::string* MsgHeader::mutable_resv2() {
+  std::string* _s = _internal_mutable_resv2();
+  // @@protoc_insertion_point(field_mutable:media.MsgHeader.resv2)
+  return _s;
+}
+inline const std::string& MsgHeader::_internal_resv2() const {
+  return resv2_.Get();
+}
+inline void MsgHeader::_internal_set_resv2(const std::string& value) {
+  
+  resv2_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
+}
+inline std::string* MsgHeader::_internal_mutable_resv2() {
+  
+  return resv2_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
+}
+inline std::string* MsgHeader::release_resv2() {
+  // @@protoc_insertion_point(field_release:media.MsgHeader.resv2)
+  return resv2_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
+}
+inline void MsgHeader::set_allocated_resv2(std::string* resv2) {
+  if (resv2 != nullptr) {
+    
+  } else {
+    
+  }
+  resv2_.SetAllocated(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), resv2,
+      GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (resv2_.IsDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited())) {
+    resv2_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:media.MsgHeader.resv2)
+}
+
+// -------------------------------------------------------------------
+
 // Login
 
 // string userName = 1;
@@ -1236,117 +1508,57 @@ inline void Login::set_allocated_pwd(std::string* pwd) {
 
 // -------------------------------------------------------------------
 
-// Response
+// LoginRsp
 
-// .media.MsgType cmd = 1;
-inline void Response::clear_cmd() {
-  cmd_ = 0;
+// string userName = 1;
+inline void LoginRsp::clear_username() {
+  username_.ClearToEmpty();
 }
-inline ::media::MsgType Response::_internal_cmd() const {
-  return static_cast< ::media::MsgType >(cmd_);
-}
-inline ::media::MsgType Response::cmd() const {
-  // @@protoc_insertion_point(field_get:media.Response.cmd)
-  return _internal_cmd();
-}
-inline void Response::_internal_set_cmd(::media::MsgType value) {
-  
-  cmd_ = value;
-}
-inline void Response::set_cmd(::media::MsgType value) {
-  _internal_set_cmd(value);
-  // @@protoc_insertion_point(field_set:media.Response.cmd)
-}
-
-// int32 code = 2;
-inline void Response::clear_code() {
-  code_ = 0;
-}
-inline int32_t Response::_internal_code() const {
-  return code_;
-}
-inline int32_t Response::code() const {
-  // @@protoc_insertion_point(field_get:media.Response.code)
-  return _internal_code();
-}
-inline void Response::_internal_set_code(int32_t value) {
-  
-  code_ = value;
-}
-inline void Response::set_code(int32_t value) {
-  _internal_set_code(value);
-  // @@protoc_insertion_point(field_set:media.Response.code)
-}
-
-// int32 reserved1 = 3;
-inline void Response::clear_reserved1() {
-  reserved1_ = 0;
-}
-inline int32_t Response::_internal_reserved1() const {
-  return reserved1_;
-}
-inline int32_t Response::reserved1() const {
-  // @@protoc_insertion_point(field_get:media.Response.reserved1)
-  return _internal_reserved1();
-}
-inline void Response::_internal_set_reserved1(int32_t value) {
-  
-  reserved1_ = value;
-}
-inline void Response::set_reserved1(int32_t value) {
-  _internal_set_reserved1(value);
-  // @@protoc_insertion_point(field_set:media.Response.reserved1)
-}
-
-// string reserved2 = 4;
-inline void Response::clear_reserved2() {
-  reserved2_.ClearToEmpty();
-}
-inline const std::string& Response::reserved2() const {
-  // @@protoc_insertion_point(field_get:media.Response.reserved2)
-  return _internal_reserved2();
+inline const std::string& LoginRsp::username() const {
+  // @@protoc_insertion_point(field_get:media.LoginRsp.userName)
+  return _internal_username();
 }
 template <typename ArgT0, typename... ArgT>
 inline PROTOBUF_ALWAYS_INLINE
-void Response::set_reserved2(ArgT0&& arg0, ArgT... args) {
+void LoginRsp::set_username(ArgT0&& arg0, ArgT... args) {
  
- reserved2_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
-  // @@protoc_insertion_point(field_set:media.Response.reserved2)
+ username_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:media.LoginRsp.userName)
 }
-inline std::string* Response::mutable_reserved2() {
-  std::string* _s = _internal_mutable_reserved2();
-  // @@protoc_insertion_point(field_mutable:media.Response.reserved2)
+inline std::string* LoginRsp::mutable_username() {
+  std::string* _s = _internal_mutable_username();
+  // @@protoc_insertion_point(field_mutable:media.LoginRsp.userName)
   return _s;
 }
-inline const std::string& Response::_internal_reserved2() const {
-  return reserved2_.Get();
+inline const std::string& LoginRsp::_internal_username() const {
+  return username_.Get();
 }
-inline void Response::_internal_set_reserved2(const std::string& value) {
+inline void LoginRsp::_internal_set_username(const std::string& value) {
   
-  reserved2_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
+  username_.Set(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, value, GetArenaForAllocation());
 }
-inline std::string* Response::_internal_mutable_reserved2() {
+inline std::string* LoginRsp::_internal_mutable_username() {
   
-  return reserved2_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
+  return username_.Mutable(::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::EmptyDefault{}, GetArenaForAllocation());
 }
-inline std::string* Response::release_reserved2() {
-  // @@protoc_insertion_point(field_release:media.Response.reserved2)
-  return reserved2_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
+inline std::string* LoginRsp::release_username() {
+  // @@protoc_insertion_point(field_release:media.LoginRsp.userName)
+  return username_.Release(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArenaForAllocation());
 }
-inline void Response::set_allocated_reserved2(std::string* reserved2) {
-  if (reserved2 != nullptr) {
+inline void LoginRsp::set_allocated_username(std::string* username) {
+  if (username != nullptr) {
     
   } else {
     
   }
-  reserved2_.SetAllocated(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), reserved2,
+  username_.SetAllocated(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), username,
       GetArenaForAllocation());
 #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  if (reserved2_.IsDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited())) {
-    reserved2_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
+  if (username_.IsDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited())) {
+    username_.Set(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), "", GetArenaForAllocation());
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  // @@protoc_insertion_point(field_set_allocated:media.Response.reserved2)
+  // @@protoc_insertion_point(field_set_allocated:media.LoginRsp.userName)
 }
 
 // -------------------------------------------------------------------
@@ -1718,6 +1930,8 @@ inline void DownloadSingleMusicRsp::set_allocated_data(std::string* data) {
 #ifdef __GNUC__
   #pragma GCC diagnostic pop
 #endif  // __GNUC__
+// -------------------------------------------------------------------
+
 // -------------------------------------------------------------------
 
 // -------------------------------------------------------------------

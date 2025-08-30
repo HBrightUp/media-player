@@ -38,7 +38,7 @@ int CAcceptTask::process() {
 
     while(true) {
 
-        log.print("Start accetp  connect...");
+        //log.print("Start accetp  connect...");
         clientFd = accept(connfd, (struct sockaddr *)&clientaddr, &clilenaddrLen);
         if(clientFd == -1 )
         {
@@ -46,14 +46,15 @@ int CAcceptTask::process() {
             return -1;                
         }
 
-        log.print(std::format("accetped client  connect, client fd: {}", clientFd));
-
         Server::Instance().event->set_nonblocking(clientFd);
-
         char *ip = inet_ntoa(clientaddr.sin_addr);
         int port = ntohs(clientaddr.sin_port);
 
-        Logger::getInstance().print(std::format("client connected, ip: {}, port{}", ip, port));
+        //log.print(std::format("accetped client  connect, client fd: {}", clientFd));
+
+        //Logger::getInstance().print(std::format("client connected, ip: {}, port{}", ip, port));
+
+        log.print("Accept client connected, fd: ", clientFd, ",ip: ", ip, ", port: ", port);
 
         Server::Instance().event->register_event(clientFd, EPOLLIN | EPOLLET);
 
@@ -75,7 +76,6 @@ int CReadTask::process() {
 
 
     while(true) {
-        std::cout << "111" << std::endl;
         read_n = read(connfd, buf + pos, MAX_BUFFER_READ_ONCE_TIME - 1);
         Logger::getInstance().print(std::format("receive data, fd: {}, read_n: {}", connfd, read_n));
 
@@ -124,17 +124,23 @@ int CWriteTask::process() {
     //std::string str = "hello, " + std::to_string(connfd);
    
     //memcpy(buf, str.c_str(), data_size);
+    auto& log = Logger::getInstance();
 
     char* buf = CMsgManage::getInstance()->getProcessor(connfd)->getWriter();
     int data_size = CMsgManage::getInstance()->getProcessor(connfd)->getWriteDataLen();
     
+    log.print("Start write task, need to be writenn size: ", data_size);
+
     while(true) {
         write_n = write(connfd, buf + pos, data_size);
-        std::cout << "write_n: " << write_n << std::endl;
+        //log.print("write_n:", write_n);
+
         if(write_n < 0) {
             if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                //log.print("Network busy now.");
                 continue;
             } else {
+                log.print("Other case.");
                 break;
             }
     
@@ -142,13 +148,14 @@ int CWriteTask::process() {
             pos += write_n;
             data_size -= write_n;
         } else {
-       
+            pos += write_n;
             break;
         }
     }
+  
+    log.print("Send to client fd: ", connfd, ", data_size: ", data_size, ", pos: ", pos);
 
-    Logger::getInstance().print(std::format("Send data to {}, len: {}, data: {}", connfd, data_size, buf));
-
-    Server::Instance().event->modify_event(connfd, EPOLLIN | EPOLLET);
+    //WARNING: Because the EPOLLET operation will be triggered again after the write is completed, it is too late to turn it off here.
+   // Server::Instance().event->modify_event(connfd, EPOLLIN | EPOLLET);
     return 0;
 }

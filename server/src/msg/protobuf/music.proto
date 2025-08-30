@@ -4,26 +4,32 @@ package media;
 
 
 enum MsgType{
-    RESPONSE = 0;
-    LOGIN = 1;
-    PLAY_ONLINE_RANDOM = 2;
-    PLAY_ONLINE_RANDOM_RESPONSE = 3;
-    DOWNLOAD_SINGLE_MUSIC = 4;
-    DOWNLOAD_SINGLE_MUSIC_RESPONSE = 5;
+    ENU_START = 0;
+    ENU_LOGIN = 1;
+    ENU_LOGIN_RSP = 2;
+    ENU_PLAY_ONLINE_RANDOM = 3;
+    ENU_PLAY_ONLINE_RANDOM_RSP = 4;
+    ENU_DOWNLOAD_SINGLE_MUSIC = 5;
+    ENU_DOWNLOAD_SINGLE_MUSIC_RSP = 6;
+    ENU_END = 7;
 }
 
+message MsgHeader {
+    MsgType cmd = 1;
+    int32 code = 2;
+    int32 resv1 = 3;
+    string resv2 = 4;
+}
 
 message Login {
     string userName = 1;
     string pwd = 2;
 }
 
-message Response {
-    MsgType cmd = 1;
-    int32 code = 2;
-    int32 reserved1 = 3;
-    string reserved2 = 4;
+message LoginRsp {
+    string userName = 1;
 }
+
 
 message PlayOnlineRandom {
     string userName = 1;
