@@ -340,38 +340,41 @@ void Player::on_btn_playmode_clicked()
 void Player::load_next_theme() {
 
     switch(current_theme_) {
-    case 0: {
-        QPixmap pixmap(":/bk2.jpg");
-        QPixmap scaledPixmap = pixmap.scaled(360, 640, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-        ui->lab_bk->setPixmap(scaledPixmap);
-        current_theme_ = 1;
-        break;
-    }
-    case 1: {
-        QPixmap pixmap(":/bk3.jpg");
-        QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::FastTransformation);
-        ui->lab_bk->setPixmap(scaledPixmap);
-        current_theme_ = 2;
-        break;
-    }
-    case 2: {
-        QPixmap pixmap(":/bk4.jpg");
-        QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-        ui->lab_bk->setPixmap(scaledPixmap);
-        current_theme_ = 3;
-        break;
-    }
-    case 3: {
-        current_theme_ = 4;
-        break;
-    }
-    case 4: {
-        QPixmap pixmap(":/bk1.png");
-        QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-        ui->lab_bk->setPixmap(scaledPixmap);
-        current_theme_ = 0;
-        break;
-    }
+        case 0: {
+            QPixmap pixmap(":/bk2.jpg");
+            QPixmap scaledPixmap = pixmap.scaled(360, 640, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+            ui->lab_bk->setPixmap(scaledPixmap);
+            current_theme_ = 1;
+            break;
+        }
+        case 1: {
+            QPixmap pixmap(":/bk3.jpg");
+            QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::FastTransformation);
+            ui->lab_bk->setPixmap(scaledPixmap);
+            current_theme_ = 2;
+            break;
+        }
+        case 2: {
+            QPixmap pixmap(":/bk4.jpg");
+            QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+            ui->lab_bk->setPixmap(scaledPixmap);
+            current_theme_ = 3;
+            break;
+        }
+        case 3: {
+            QPixmap pixmap(":/bk5.jpg");
+            QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+            ui->lab_bk->setPixmap(scaledPixmap);
+            current_theme_ = 4;
+            break;
+        }
+        case 4: {
+            QPixmap pixmap(":/bk1.png");
+            QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+            ui->lab_bk->setPixmap(scaledPixmap);
+            current_theme_ = 0;
+            break;
+        }
     }
 
     ui->lab_bk->resize(360, 640);
