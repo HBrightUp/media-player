@@ -32,7 +32,7 @@ public:
     ~Player();
 
     void update_music_list_from_server(const QVector<std::string>& musicList);
-
+    void on_download_single_music_finished();
 private slots:
     void on_btn_directory_clicked();
     void on_btn_play_clicked();
@@ -65,6 +65,9 @@ signals:
     void download_single_music(const QString& musicName);
 
 private:
+
+
+private:
     Ui::Player *ui;
     QSharedPointer<QAudioOutput> audio_;
     QSharedPointer<QMediaPlayer> player_;
@@ -76,6 +79,8 @@ private:
     quint8 current_theme_;
     bool is_silder_pressed_;
     PlayMode play_mode_;
+
+    bool lockBtn_;
 
 
     // QWidget interface

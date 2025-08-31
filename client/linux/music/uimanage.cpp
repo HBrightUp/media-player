@@ -9,6 +9,7 @@ UiManage::UiManage() {
     connect(login_.get(), &Login::login_send_message, this, &UiManage::login_message_rev);
     connect(client_.get(), &TcpClient::login_success, this, &UiManage::login_success_rev);
     connect(client_.get(), &TcpClient::play_online_random_response, this, &UiManage::play_online_random_response_recv);
+    connect(client_.get(), &TcpClient::download_single_music_response, this, &UiManage::download_single_music_response_recv);
 
 }
 
@@ -67,4 +68,8 @@ void UiManage::download_single_music_recv(const QString& musicName) {
 
     qInfo() << "send message of download single music to server, size: " << msgdata.size();
     client_->writeData(msgdata);
+}
+
+void UiManage::download_single_music_response_recv() {
+    player_.get()->on_download_single_music_finished();
 }

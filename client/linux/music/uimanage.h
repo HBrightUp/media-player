@@ -25,6 +25,7 @@ class UiManage:public QObject
         void play_online_random_response_recv(const QVector<std::string>& musicList);
 
         void download_single_music_recv(const QString& musicName);
+        void download_single_music_response_recv();
     private:
 
         QScopedPointer<Login> login_;

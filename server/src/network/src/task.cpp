@@ -81,10 +81,11 @@ int CReadTask::process() {
             } else {
                 Server::Instance().event.get()->unregister_event(connfd);
                 close(connfd);
+                log.print("Read from client exception, fd: ", connfd);
                 return 0; 
             }
         } else if ( read_n == 0) {
-            log.print("Read from client exception, fd: ", connfd);
+            log.print("Client closed, fd: ", connfd);
             Server::Instance().event.get()->unregister_event(connfd);
             close(connfd);
             return 0;

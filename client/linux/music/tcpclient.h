@@ -48,6 +48,7 @@ private:
 signals:
     void login_success();
     void play_online_random_response(const QVector<std::string>& musicList);
+    void download_single_music_response();
 
 private:
     QTcpSocket *socket_;

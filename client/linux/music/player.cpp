@@ -21,6 +21,7 @@ Player::Player(QWidget *parent)
     current_theme_ = 0;
     is_silder_pressed_ = false;
     play_mode_ = PlayMode::ENU_LOOP;
+    lockBtn_ = false;
 
     setWindowIcon(QIcon(":/app-icon.ico"));
 
@@ -462,6 +463,11 @@ void Player::keyReleaseEvent(QKeyEvent *event) {
 
 void Player::on_btn_online_clicked()
 {
+    if(lockBtn_) {
+        qInfo() << "btn locked";
+        return ;
+    }
+
     if (!playlist_.empty()) {
         playlist_.clear();
 
@@ -487,9 +493,20 @@ void Player::update_music_list_from_server(const QVector<std::string>& musicList
 void Player::on_list_music_itemDoubleClicked(QListWidgetItem *item)
 {
     qInfo() << "double clicked";
+    if (lockBtn_) {
+        qInfo() << "Btn locked.";
+        return ;
+    }
+
+    lockBtn_ = true;
+
     QString music_name = ui->list_music->currentItem()->text();
     qInfo()<< music_name;
 
     emit  download_single_music(music_name);
 }
 
+void Player::on_download_single_music_finished() {
+    lockBtn_ = false;
+    qInfo() << "btn unlocked.";
+}

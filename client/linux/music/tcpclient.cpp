@@ -70,7 +70,7 @@ void TcpClient::run() {
         }
 
         for(const auto& arr : msglist_) {
-            qInfo() << "Size of msg: " << arr.size();
+            //qInfo() << "Size of msg: " << arr.size();
             parseMsg(arr);
         }
 
@@ -202,16 +202,17 @@ qint32 TcpClient::mergingPackage(const QByteArray& msgData) {
 
         memcpy(musicPackage_ + musicPackagePos_, msgData.data(), msgData.size());
         musicPackagePos_ += msgData.size();
-        qInfo() << "mergingPackage musicPackagePos_: " << musicPackagePos_ << ", packageTotalSize_: " << packageTotalSize_;
+        //qInfo() << "mergingPackage musicPackagePos_: " << musicPackagePos_ << ", packageTotalSize_: " << packageTotalSize_;
     }
-
 
     if (musicPackagePos_ == packageTotalSize_) {
         saveSingleMusicToFile();
+        emit download_single_music_response();
         return 0;
     }
 
     if (musicPackagePos_ > packageTotalSize_) {
+        emit download_single_music_response();
         return -1;
     }
 
@@ -240,7 +241,7 @@ void TcpClient::parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32
     for(const auto& name :  rsp.musicname())
     {
         v.push_back(name);
-        qInfo() << "name: " << name;
+        //qInfo() << "name: " << name;
     }
 
     emit play_online_random_response(v);
