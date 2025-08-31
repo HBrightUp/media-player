@@ -20,9 +20,9 @@ class CMsgProcessor {
         CMsgProcessor();
         ~CMsgProcessor();
 
-        char* getReader();
-        char* getWriter();
-        int getWriteDataLen();
+        char* get_reader();
+        char* get_writer();
+        int get_writen_data_len();
 
         bool process();
     private:
@@ -34,7 +34,7 @@ class CMsgProcessor {
         std::vector<std::string> getFilesWithExtension(const std::string& dirPath, const std::string& extension);
 
         bool download_single_music(const char* pdata);
-        MsgHeader parseMsgHeader();
+        bool parse_message_header(MsgHeader& header);
 
     private:
         char readbuf[MAX_BUFFER_READ_ONCE_TIME];

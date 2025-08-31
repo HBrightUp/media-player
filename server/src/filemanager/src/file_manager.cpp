@@ -29,15 +29,17 @@ bool CFileManager::init() {
     }
 
     getFilesWithExtension(workspacePath_, ".mp3");
-    print();
+    //print();
+    if (musicMap_.size() == 0) {
+        Logger::getInstance().print("music file not found,");
+        return false;
+    }
 
     return true;
 }
 
  bool CFileManager::init_workspace() {
     const std::string work_path = "~/Downloads";  
-    //workspacePath_.resize(PATH_MAX);
-
     workspacePath_ = expandHomeDirectory(work_path);
 
     return true;

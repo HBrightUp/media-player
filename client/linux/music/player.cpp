@@ -148,7 +148,7 @@ void Player::init_ui() {
     ui->btn_next->setIcon(QIcon(":/play-next.png"));
     ui->btn_next->setIconSize(ui->btn_next->size());
 
-    ui->btn_online->setIcon(QIcon(":/add-dir.png"));
+    ui->btn_online->setIcon(QIcon(":/download.png"));
     ui->btn_online->setIconSize(ui->btn_online->size());
 
     set_mute(false);

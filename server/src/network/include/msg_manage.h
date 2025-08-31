@@ -9,16 +9,11 @@ class CMsgManage {
     public:
         static CMsgManage* getInstance();
 
-   
-
-        //char* getReadBuffer(int fd);
-        //char* getWriteBuffer(int fd);
-
-        CMsgProcessor* getProcessor(int fd);
+        CMsgProcessor* get_or_create_processor(const int& fd);
+        void remove_processor(const int& fd);
 
     private:
         CMsgManage();
-
 
     private:
         std::map<int, CMsgProcessor*> msgmap_;

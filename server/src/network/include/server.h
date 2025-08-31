@@ -18,7 +18,6 @@ class Server {
 
     private:
         Server() {};
-        bool set_nonblocking(const int sock);
 
         static void* EventHandle(void* arg);
     

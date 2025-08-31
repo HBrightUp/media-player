@@ -67,17 +67,13 @@ int CReadTask::process() {
 
     int pos = 0;
     int read_n = 0;
-    
-    //char buf[MAX_BUFFER_READ_ONCE_TIME];
-    char* buf = CMsgManage::getInstance()->getProcessor(connfd)->getReader();
-
+    auto& log = Logger::getInstance();
+    char* buf = CMsgManage::getInstance()->get_or_create_processor(connfd)->get_reader();
     memset(buf, 0, sizeof(buf)/sizeof(char));
-
-
 
     while(true) {
         read_n = read(connfd, buf + pos, MAX_BUFFER_READ_ONCE_TIME - 1);
-        Logger::getInstance().print(std::format("receive data, fd: {}, read_n: {}", connfd, read_n));
+        log.print("Receive data, fd: ", connfd, ", size of read: ", read_n);
 
         if (read_n < 0) {
             if(errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -88,13 +84,14 @@ int CReadTask::process() {
                 return 0; 
             }
         } else if ( read_n == 0) {
-            Logger::getInstance().print(std::format("client exception, fd: {}", connfd));
+            log.print("Read from client exception, fd: ", connfd);
             Server::Instance().event.get()->unregister_event(connfd);
             close(connfd);
             return 0;
         } else {
             pos += read_n;
 
+            // need modify
             // overflow, process furture.
             if (read_n == MAX_BUFFER_READ_ONCE_TIME - 1) {
                 break;
@@ -103,11 +100,13 @@ int CReadTask::process() {
     }
 
     buf[pos] = '\0';
-    Logger::getInstance().print(std::format("{} received data: {}", connfd, buf));
+    Logger::getInstance().print("Clien fd-", connfd, " recevied data, size: ", pos);
 
-    bool is_success = CMsgManage::getInstance()->getProcessor(connfd)->process();
+    bool is_success = CMsgManage::getInstance()->get_or_create_processor(connfd)->process();
     if(is_success) {
         Server::Instance().event->modify_event(connfd, EPOLLOUT | EPOLLET);
+    } else {
+        log.print("Server process message failed");
     }
 
     return 0;
@@ -117,29 +116,23 @@ int CWriteTask::process() {
 
     int write_n;
     int pos = 0;
-    //char buf[MAX_BUFFER_READ_ONCE_TIME];
-    
-    //memset(buf, 0, sizeof(buf)/sizeof(char));
 
-    //std::string str = "hello, " + std::to_string(connfd);
-   
-    //memcpy(buf, str.c_str(), data_size);
     auto& log = Logger::getInstance();
-
-    char* buf = CMsgManage::getInstance()->getProcessor(connfd)->getWriter();
-    int data_size = CMsgManage::getInstance()->getProcessor(connfd)->getWriteDataLen();
+    char* buf = CMsgManage::getInstance()->get_or_create_processor(connfd)->get_writer();
+    int data_size = CMsgManage::getInstance()->get_or_create_processor(connfd)->get_writen_data_len();
     
     log.print("Start write task, need to be writenn size: ", data_size);
 
     while(true) {
         write_n = write(connfd, buf + pos, data_size);
-        //log.print("write_n:", write_n);
 
         if(write_n < 0) {
             if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                //log.print("Network busy now.");
                 continue;
             } else {
+                log.print("Write to client exception, fd: ", connfd);
+                Server::Instance().event.get()->unregister_event(connfd);
+                close(connfd);
                 log.print("Other case.");
                 break;
             }

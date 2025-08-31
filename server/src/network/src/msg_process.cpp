@@ -20,59 +20,68 @@ CMsgProcessor::CMsgProcessor() {
 CMsgProcessor::~CMsgProcessor() {
     if (writebuf != nullptr) {
         delete writebuf;
+        writebuf = nullptr;
     }
 }
 
-char* CMsgProcessor::getReader() {
+char* CMsgProcessor::get_reader() {
     return readbuf;
 }
 
-char* CMsgProcessor::getWriter() {
+char* CMsgProcessor::get_writer() {
     return writebuf;
 }
 
-int CMsgProcessor::getWriteDataLen() {
+int CMsgProcessor::get_writen_data_len() {
     return writenLen_;
 }
 
-MsgHeader CMsgProcessor::parseMsgHeader() {
+bool CMsgProcessor::parse_message_header(MsgHeader& header) {
 
-    MsgHeader header;
+    auto& log = Logger::getInstance();
 
     header.type = static_cast<media::MsgType>(readbuf[0] - '0');
+    if (!(header.type > media::MsgType::ENU_START && header.type < media::MsgType::ENU_END)) {
+        log.print("Parse message header failed, msgtype: ", header.type);
+        return false;
+    }
 
-    char buf[16];
-    memset(buf, 0, sizeof(buf));
+    char datalen[16];
+    memset(datalen, 0, sizeof(datalen));
     
+    // here need modify 
     for(int i = 2; i < MAX_BUFFER_READ_ONCE_TIME; ++i) {
         if (readbuf[i] == ':') {
-            //memcpy((void*)header.datalen, (void*)readbuf[2], i - 2);
-            memcpy(buf, readbuf + 2, i - 2);
+            memcpy(datalen, readbuf + 2, i - 2);
             header.datapos = i + 1;
             break;
         }
     }
 
-    std::string lenBuf(buf);
-    header.datalen = std::stoi(lenBuf);
+    std::string strlen(datalen);
+    try {
+        header.datalen = std::stoi(strlen);
+    } catch(const std::exception& e) {
+        log.print("Parse playload datasize failed, error: ", e.what());
+        return false;
+    }
 
-    std::cout << "type: " << header.type << ", datalen: " << header.datalen << std::endl;
-
-    return header;
+    return true;
 }
-
 
 bool CMsgProcessor::process() {
 
+    auto& log = Logger::getInstance();
+    MsgHeader header;
+    if(!parse_message_header(header)) {
+        return false;
+    }
 
- 
-    
-
-    MsgHeader msgheader =  parseMsgHeader();
-    uint32_t pos = msgheader.datapos;
+    uint32_t pos = header.datapos;
+    log.print("Server Start process message:  ", header.type);
     
     bool is_success;
-    switch (msgheader.type){
+    switch (header.type){
         case media::MsgType::ENU_LOGIN: {
             is_success = login(readbuf + pos);
             break;
@@ -86,10 +95,11 @@ bool CMsgProcessor::process() {
             break;
         }
         default: {
-             break;
+            log.print("Unknown message: ", header.type);
+            is_success = false;
+            break;
         }
     }
-
 
     return is_success;
 }
@@ -99,10 +109,10 @@ bool CMsgProcessor::download_single_music(const char* pdata) {
     auto& log = Logger::getInstance();
 
     media::DownloadSingleMusic music;
-
     music.ParseFromString(pdata);
     std::string filename = music.musicname();
-    std::cout << "music name: " << filename << std::endl;
+ 
+    log.print("start download single music: ", filename);
 
     std::string filepath = CFileManager::getInstance().filePath(filename);
     if (filepath.empty()) {
@@ -122,12 +132,14 @@ bool CMsgProcessor::download_single_music(const char* pdata) {
 
     if (fileSize > MAX_BUFFER_WRITE_ONCE_TIME) {
         Logger::getInstance().print("file size too large, path of file: ", filepath);
+        fclose(file);
         return false;
     }
 
     size_t bytesRead = fread(writebuf, 1, fileSize, file);
     if (bytesRead != fileSize) {
         Logger::getInstance().print("read file failed.");
+        fclose(file);
         return false;
     }
 
@@ -174,11 +186,8 @@ bool CMsgProcessor::play_online_random(const char* pdata) {
     if (rspStr.length() <= 0) {
         return false;
     } 
-
     
     log.print("Process play online random, serialized data size: ", rspStr.length());
-
-
 
     std::string cmd = std::to_string(static_cast<int>(media::MsgType::ENU_PLAY_ONLINE_RANDOM_RSP));
     std::string msg = cmd + ":" + std::to_string(rspStr.size()) + ":" + rspStr;
@@ -237,8 +246,8 @@ bool CMsgProcessor::login(const char* pdata) {
     auto& log = Logger::getInstance();
     log.print("Process login, username: ", login.username(), ", pwd: ", login.pwd());
 
-    if (login.username() == "hml" && login.pwd() == "123") {
-        is_success = true;
+    if ( !(login.username() == "hml" && login.pwd() == "123")) {
+        return false;
     }
 
     std::string cmd = std::to_string(static_cast<unsigned char>(media::MsgType::ENU_LOGIN_RSP));
@@ -248,17 +257,13 @@ bool CMsgProcessor::login(const char* pdata) {
     std::string serialized_rsp;
     rsp.SerializeToString(&serialized_rsp); 
 
-    //std::cout << "serialized_rsp size: " << serialized_rsp.length() << std::endl;
-
     std::string msg = cmd + ":" + std::to_string(serialized_rsp.size()) + ":" + serialized_rsp;
     writenLen_ = msg.length();
     memcpy(writebuf, msg.c_str(), writenLen_);
     writebuf[writenLen_] = 0;
 
-    return is_success;
+    return true;
 }
-
-
 
 void CMsgProcessor::getRandomList() {
     std::string path = "~/Music";

@@ -31,50 +31,63 @@ bool Server::start() {
 
     auto& log = Logger::getInstance();
    
-
     epfd_ = epoll_create(EPOLL_MAX_SIZE);
     if(epfd_  < 0) {
+        log.print("Create epoll failed.");
         return false;
     }
     event.reset(new CEvent(epfd_));
 
     listenfd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd_ < 0) {
-       return false;
+        log.print("Init socket failed.");
+        close(epfd_);
+        return false;
     } 
 
-    log.print(std::format("listenFd: {}", listenfd_));
+    log.print("Init socket success, epoll fd: ", epfd_, ", server listen fd: ", listenfd_);
     
-    event->set_nonblocking(listenfd_);
-    event->register_event(listenfd_,  EPOLLIN | EPOLLET);
+    if(!event->set_nonblocking(listenfd_)) {
+        close(listenfd_);
+        close(epfd_);
+        return false;
+    }
+    if(!event->register_event(listenfd_,  EPOLLIN | EPOLLET)) {
+        close(listenfd_);
+        close(epfd_);
+        return false;
+    }
 
     int opt = 1;
     if (setsockopt(listenfd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        log.print("Set reuse of listen port failed.");
+        close(listenfd_);
+        close(epfd_);
         return false;
     }
 
     struct sockaddr_in serveraddr;
     memset(&serveraddr, 0, sizeof(serveraddr));
-    serveraddr.sin_family     = AF_INET;
+    serveraddr.sin_family   = AF_INET;
     serveraddr.sin_addr.s_addr = htonl(INADDR_ANY); 
     serveraddr.sin_port       = htons(port_);
 
-    if(0 != bind(listenfd_, (struct sockaddr *)&serveraddr, sizeof(serveraddr)))
-    {
-        log.print(std::format("bind failed, port: {}", port_));
+    if(bind(listenfd_, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) != 0) {
+        log.print("Bind listen port failed, port: ", port_);
+        close(listenfd_);
+        close(epfd_);
         return false;
     }
 
-    if(0 != listen(listenfd_, port_)) 
-    {
-        log.print(std::format("listen failed, port: {}", port_));
+    if(listen(listenfd_, port_) != 0) {
+        log.print("Create listen port failed, port: ", port_);
         return false;
     }
 
     pthread_create(&epollThreadId_, nullptr, &Server::EventHandle, (void*)this);
-
-  
     pool.reset( new CThreadPool<CTask>());
+
+    log.print("Initial completed, the server starts running.");
 
     while (true)
     {
@@ -83,37 +96,18 @@ bool Server::start() {
     
 }
 
-bool Server::set_nonblocking(const int sock)
-{
-    int opts;
-    opts = fcntl(sock, F_GETFL);
-    if(opts < 0) {
-        return false;
-    }
-
-    opts = opts | O_NONBLOCK;
-    if(fcntl(sock, F_SETFL, opts) < 0) {
-        return false;
-    }
-
-    return true;
-}
-
-
 void* Server::EventHandle(void* arg)
 {
 	
 	Server &s = *(Server*)arg;
 	int nfds, connfd;
-	Logger& log = Logger::getInstance();
+	auto& log = Logger::getInstance();
 	
 	while(true) {
-		//log.print("epoll_wait start work");
-		nfds = epoll_wait(s.epfd_, s.events, EPOLL_MAX_SIZE, 1000);
+		nfds = epoll_wait(s.epfd_, s.events, EPOLL_MAX_SIZE, 500);
 		if(nfds > 0) {
 			for(int i = 0; i < nfds; ++i) {
 				connfd = s.events[i].data.fd;
-				//log.print(std::format("epoll_wait  connfd: {}", connfd));
 			
 				if( connfd == s.listenfd_ ) {
 					CTask* t = new CAcceptTask();
@@ -126,15 +120,11 @@ void* Server::EventHandle(void* arg)
 						continue;
 					}
 
-					log.print(std::format("Addread task, fd: {}", connfd));
-		
 					CTask* t = new CReadTask();
 					t->SetConnFd(connfd);
-
-					
 					s.pool->append(t);
+
 				} else if(s.events[i].events & EPOLLOUT) {
-					log.print(std::format("Add write task, fd: {}", connfd));
 					
 					CTask* t = new CWriteTask();
 					t->SetConnFd(connfd);
@@ -145,7 +135,7 @@ void* Server::EventHandle(void* arg)
                     Server::Instance().event->modify_event(connfd, EPOLLIN | EPOLLET);
 
 				} else {
-                    log.print("other event: ", static_cast<unsigned int>(s.events[i].events));
+                    log.print("Other events: ", static_cast<unsigned int>(s.events[i].events));
                 }
 			}
 		} else if (nfds == 0) {

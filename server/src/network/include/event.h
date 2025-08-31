@@ -12,31 +12,19 @@
 #include"./task.h"
 
 
-// enum EventType
-// {
-//     EIN = EPOLLIN,			
-// 	EOUT = EPOLLOUT,	  // 写事件
-// 	ECLOSE = EPOLLRDHUP,  // 对端关闭连接或者写半部
-// 	EPRI = EPOLLPRI,	  // 紧急数据到达
-// 	EERR = EPOLLERR,	  // 错误事件
-// 	EET = EPOLLET, 		  // 边缘触发
-// 	EDEFULT = EIN | ECLOSE | EERR | EET
-// };
  
 class CEvent
 {
 public:
 	CEvent(int fd):epfd_(fd){};
 	~CEvent();
-	int register_event(int fd, uint32_t );
-	int modify_event(int fd, uint32_t);
-	int unregister_event(int fd);
 
-	void set_nonblocking(int v_sockfd);
+	bool register_event(const int& fd, const uint32_t& type );
+	bool modify_event(const int& fd, const uint32_t& type);
+	bool unregister_event(const int& fd);
+	bool set_nonblocking(const int& fd);
 
 
 private:
 	int epfd_;
-	//struct epoll_event events[EPOLL_MAX_SIZE];
-	
 };

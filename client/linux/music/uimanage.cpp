@@ -4,7 +4,7 @@
 
 UiManage::UiManage() {
     login_.reset(new Login);
-    client_.reset( new TcpClient("0.0.0.0", 8000));
+    client_.reset( new TcpClient("47.112.188.195", 8000));
 
     connect(login_.get(), &Login::login_send_message, this, &UiManage::login_message_rev);
     connect(client_.get(), &TcpClient::login_success, this, &UiManage::login_success_rev);

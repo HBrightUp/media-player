@@ -8,49 +8,60 @@ CEvent::~CEvent() {
   
 }
  
-void CEvent::set_nonblocking(int v_sockfd) {
+bool CEvent::set_nonblocking(const int& fd) {
 
-	int opts = fcntl(v_sockfd,F_GETFL);
+	auto& log = Logger::getInstance();
+
+	int opts = fcntl(fd,F_GETFL);
+	if (opts == -1) {
+		log.print("Get fcntl of fd failed,");
+		return false;
+	}
+
 	opts = opts|O_NONBLOCK;
-	fcntl(v_sockfd, F_SETFL, opts);
+	if (fcntl(fd, F_SETFL, opts) == -1) {
+		return false;
+	}
 	
+	return true;
 }
- 
- 
 
-int CEvent::register_event(int fd, uint32_t type ) {
+bool CEvent::register_event(const int& fd, const uint32_t& type ) {
 
 	struct epoll_event ev;
 	ev.data.fd = fd;
 	ev.events = type;
 
+	auto& log = Logger::getInstance();
 	if(epoll_ctl(epfd_, EPOLL_CTL_ADD, fd, &ev) == -1) {
-		return -1;
+		log.print("Add epoll ctl failed, fd: ", fd);
+		return false;
 	}
-	return 0;
+	return true;
 }
 
-int CEvent::modify_event(int fd, uint32_t type) {
+bool CEvent::modify_event(const int& fd, const uint32_t& type) {
 
 	struct epoll_event ev;
 	ev.data.fd = fd;
 	ev.events = type;
 
 	if(epoll_ctl(epfd_, EPOLL_CTL_MOD, fd, &ev) == -1) {
-        return -1;
+		Logger::getInstance().print("Modify epoll ctl failed, fd: ", fd);
+        return false;
     }
 
-	return 0;
+	return true;
 }
  
-int CEvent::unregister_event(int fd)
+bool CEvent::unregister_event(const int& fd)
 {
     if(epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, NULL) == -1) {
-		std::cout << "unRegister_event failed, fd: " << fd << std::endl;
-        return -1;
+		Logger::getInstance().print("Unregister epoll ctl failed, fd: ", fd);
+        return false;
     }
 
-    return 0;
+    return true;
 }
  
  
