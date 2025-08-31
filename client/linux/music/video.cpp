@@ -23,5 +23,6 @@ Video::Video(QWidget *parent)
 Video::~Video()
 {
     delete ui;
+    qInfo() << "Video destructor.";
 }
 

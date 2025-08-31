@@ -13,6 +13,7 @@ TcpClient::TcpClient(const QString &host, quint16 port) {
     musicPackagePos_ = 0;
     MsgmutiPackage_ = media::MsgType::ENU_START;
     musicSavePath_ = std::string(std::getenv("HOME")) + "/Music/";
+    is_running = true;
 
     timer = new QTimer(this);
     socket_ = new QTcpSocket(this);
@@ -33,6 +34,8 @@ TcpClient::~TcpClient() {
     socket_->close();
 
     wait();
+
+    qInfo() << "Tcpclient destructor.";
 }
 
 void TcpClient::onConnected() {
@@ -68,7 +71,7 @@ void TcpClient::writeData(const std::string& data) {
 void TcpClient::run() {
     qInfo() << "start msg processor.";
 
-    while(true) {
+    while(is_running) {
         QMutexLocker lock(&mutMsgList_);
 
         if(msglist_.empty()) {
@@ -81,8 +84,14 @@ void TcpClient::run() {
         }
 
         msglist_.clear();
-
     }
+
+    qInfo() << "Exit msg processor.";
+}
+
+void TcpClient::player_exit() {
+    is_running = false;
+    msgCondition_.notify_all();
 }
 
 MsgHeader TcpClient::parseMsgHeader(const QByteArray& msgData) {

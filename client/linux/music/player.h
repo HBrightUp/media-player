@@ -33,6 +33,8 @@ public:
 
     void update_music_list_from_server(const QVector<std::string>& musicList);
     void on_download_single_music_finished();
+
+    void closeEvent(QCloseEvent *event) override;
 private slots:
     void on_btn_directory_clicked();
     void on_btn_play_clicked();
@@ -64,6 +66,8 @@ signals:
     void play_online_random();
     void download_single_music(const QString& musicName);
 
+    void player_close_event();
+
 private:
 
 
@@ -87,5 +91,6 @@ private:
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override ;
+
 };
 #endif // PLAYER_H

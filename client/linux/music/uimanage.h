@@ -6,26 +6,27 @@
 #include"player.h"
 #include"video.h"
 #include"./tcpclient.h"
-#include"./msg_assembly.h"
-#include"./signals_type.h"
+
 
 class UiManage:public QObject
 {
     public:
         UiManage();
+        ~UiManage();
 
         void start();
 
     private slots:
         void login_message_rev(const std::string& msgLogin);
         void login_success_rev();
-        //void player_message_rev(MessageType, std::string);
 
         void play_online_random_recv();
         void play_online_random_response_recv(const QVector<std::string>& musicList);
 
         void download_single_music_recv(const QString& musicName);
         void download_single_music_response_recv();
+
+        void player_exit();
     private:
 
         QScopedPointer<Login> login_;

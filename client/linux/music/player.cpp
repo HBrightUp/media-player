@@ -182,8 +182,9 @@ bool Player::is_playable() {
 Player::~Player()
 {
     player_->stop();
+    player_->setSource(QUrl());;
     playlist_.clear();
-    delete ui;
+    qInfo() << "Player destructor.";
 }
 
 void Player::on_btn_directory_clicked()
@@ -301,8 +302,6 @@ void Player::on_list_music_doubleClicked(const QModelIndex &index)
 void Player::on_btn_volume_clicked()
 {
     set_mute(!audio_->isMuted());
-
-    //emit send_message(1, "watch film");
 }
 
 void Player::set_mute(bool mute) {
@@ -319,43 +318,6 @@ void Player::set_mute(bool mute) {
 
 void Player::on_btn_theme_clicked()
 {
-    // switch(current_theme_) {
-    //     case 0: {
-    //         QPixmap pixmap(":/bk2.jpg");
-    //         QPixmap scaledPixmap = pixmap.scaled(360, 640, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-    //         ui->lab_bk->setPixmap(scaledPixmap);
-    //         current_theme_ = 1;
-    //         break;
-    //     }
-    //     case 1: {
-    //         QPixmap pixmap(":/bk3.jpg");
-    //         QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::FastTransformation);
-    //         ui->lab_bk->setPixmap(scaledPixmap);
-    //         current_theme_ = 2;
-    //         break;
-    //     }
-    //     case 2: {
-    //         QPixmap pixmap(":/bk4.jpg");
-    //         QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-    //         ui->lab_bk->setPixmap(scaledPixmap);
-    //         current_theme_ = 3;
-    //         break;
-    //     }
-    //     case 3: {
-    //         current_theme_ = 4;
-    //         break;
-    //     }
-    //     case 4: {
-    //         QPixmap pixmap(":/bk1.png");
-    //         QPixmap scaledPixmap = pixmap.scaled(ui->lab_bk->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-    //         ui->lab_bk->setPixmap(scaledPixmap);
-    //         current_theme_ = 0;
-    //         break;
-    //     }
-    // }
-
-    // ui->lab_bk->resize(360, 640);
-
     load_next_theme();
 }
 
@@ -513,4 +475,10 @@ void Player::on_list_music_itemDoubleClicked(QListWidgetItem *item)
 void Player::on_download_single_music_finished() {
     lockBtn_ = false;
     qInfo() << "btn unlocked.";
+}
+
+void Player::closeEvent(QCloseEvent *event) {
+    qInfo() << "close event";
+    emit player_close_event();
+    event->accept();
 }

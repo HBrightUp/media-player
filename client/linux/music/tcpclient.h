@@ -39,6 +39,8 @@ public slots:
     bool parseMsg(const  QByteArray& msgData);
     void parseLoginRsp(const QByteArray& msgData, const qint32 offest);
     void parsePlayOnlineRandomRsp(const QByteArray& msgData, const qint32 offest);
+
+    void player_exit();
 private:
     MsgHeader parseMsgHeader(const QByteArray& msgData);
     void parseDownloadSingleMusicRsp(const QByteArray& msgData, const MsgHeader& header, const qint32 offest);
@@ -67,6 +69,7 @@ private:
     qint32 packageTotalSize_;
 
     QTimer* timer;
+    volatile bool is_running;
 };
 
 #endif // TCPCLIENT_H
