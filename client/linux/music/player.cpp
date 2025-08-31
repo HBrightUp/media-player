@@ -25,6 +25,10 @@ Player::Player(QWidget *parent)
 
     setWindowIcon(QIcon(":/app-icon.ico"));
 
+    //setWindowFlags(Qt::FramelessWindowHint);
+    this->setWindowFlags(Qt::Window | Qt::CustomizeWindowHint);
+
+
     // load media and audio
     //audio_(new QAudioOutput(this));
     audio_.reset(new QAudioOutput(this));

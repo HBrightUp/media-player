@@ -9,10 +9,10 @@
 #include<QThread>
 #include<QWaitCondition>
 #include<QVector>
+#include<QTimer>
 #include"./msg_assembly.h"
 #include"./msgprocessor.h"
 #include"./signals_type.h"
-
 
 struct MsgHeader{
     media::MsgType type;
@@ -44,6 +44,8 @@ private:
     void parseDownloadSingleMusicRsp(const QByteArray& msgData, const MsgHeader& header, const qint32 offest);
     qint32 mergingPackage(const QByteArray& msgData);
     bool saveSingleMusicToFile();
+private slots:
+    void network_idle_status();
 
 signals:
     void login_success();
@@ -63,6 +65,8 @@ private:
     char* musicPackage_;
     qint32 musicPackagePos_;
     qint32 packageTotalSize_;
+
+    QTimer* timer;
 };
 
 #endif // TCPCLIENT_H

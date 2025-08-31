@@ -4,6 +4,8 @@
 #include "./tcpclient.h"
 #include"./music.pb.h"
 
+
+
 TcpClient::TcpClient(const QString &host, quint16 port) {
 
     isMutiPackage_ = false;
@@ -12,6 +14,7 @@ TcpClient::TcpClient(const QString &host, quint16 port) {
     MsgmutiPackage_ = media::MsgType::ENU_START;
     musicSavePath_ = std::string(std::getenv("HOME")) + "/Music/";
 
+    timer = new QTimer(this);
     socket_ = new QTcpSocket(this);
     socket_->connectToHost(host, port);
 
@@ -20,7 +23,7 @@ TcpClient::TcpClient(const QString &host, quint16 port) {
     connect(socket_, &QTcpSocket::readyRead, this, &TcpClient::onReadyRead);
     connect(socket_, &QTcpSocket::errorOccurred, this, &TcpClient::onErrorOccurred);
 
-
+    connect(timer, &QTimer::timeout, this, &TcpClient::network_idle_status);
     start();
 
     qInfo() << "start connect server.";
@@ -49,6 +52,9 @@ void TcpClient::onReadyRead() {
     msglist_.append(socket_->readAll());
     lock.unlock();
     msgCondition_.wakeOne();
+
+    timer->setSingleShot(true);
+    timer->start(4000);
 }
 
 void TcpClient::onErrorOccurred(QTcpSocket::SocketError socketError) {
@@ -257,4 +263,13 @@ void TcpClient::parseLoginRsp(const QByteArray& msgData, const qint32 offest) {
         qInfo()<< "Login success";
         emit login_success();
     }
+}
+
+void TcpClient::network_idle_status() {
+    qInfo() << "Network idle, unlock ui with network now.";
+
+    // if server not send rsp, we should monitor status of network and unlock ui button.
+    emit download_single_music_response();
+
+
 }
