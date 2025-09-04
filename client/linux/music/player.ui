@@ -6,12 +6,12 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>360</width>
+    <width>720</width>
     <height>640</height>
    </rect>
   </property>
   <property name="sizePolicy">
-   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+   <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
     <horstretch>0</horstretch>
     <verstretch>0</verstretch>
    </sizepolicy>
@@ -24,7 +24,7 @@
   </property>
   <property name="maximumSize">
    <size>
-    <width>360</width>
+    <width>720</width>
     <height>640</height>
    </size>
   </property>
@@ -248,6 +248,12 @@ image: url(:/front-64.png)</string>
    <property name="frameShadow">
     <enum>QFrame::Shadow::Plain</enum>
    </property>
+   <property name="verticalScrollBarPolicy">
+    <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+   </property>
+   <property name="horizontalScrollBarPolicy">
+    <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+   </property>
    <property name="currentRow">
     <number>-1</number>
    </property>
@@ -395,12 +401,71 @@ image: url(:/front-64.png)</string>
     <string/>
    </property>
   </widget>
+  <widget class="QListWidget" name="list_online">
+   <property name="geometry">
+    <rect>
+     <x>360</x>
+     <y>0</y>
+     <width>360</width>
+     <height>540</height>
+    </rect>
+   </property>
+   <property name="sizePolicy">
+    <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+     <horstretch>0</horstretch>
+     <verstretch>0</verstretch>
+    </sizepolicy>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>360</width>
+     <height>540</height>
+    </size>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>360</width>
+     <height>540</height>
+    </size>
+   </property>
+   <property name="baseSize">
+    <size>
+     <width>360</width>
+     <height>540</height>
+    </size>
+   </property>
+   <property name="layoutDirection">
+    <enum>Qt::LayoutDirection::LeftToRight</enum>
+   </property>
+   <property name="styleSheet">
+    <string notr="true"/>
+   </property>
+   <property name="frameShape">
+    <enum>QFrame::Shape::NoFrame</enum>
+   </property>
+   <property name="frameShadow">
+    <enum>QFrame::Shadow::Plain</enum>
+   </property>
+   <property name="verticalScrollBarPolicy">
+    <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+   </property>
+   <property name="horizontalScrollBarPolicy">
+    <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+   </property>
+   <property name="verticalScrollMode">
+    <enum>QAbstractItemView::ScrollMode::ScrollPerPixel</enum>
+   </property>
+   <property name="currentRow">
+    <number>-1</number>
+   </property>
+  </widget>
   <zorder>lab_bk</zorder>
   <zorder>widget</zorder>
   <zorder>list_music</zorder>
   <zorder>music_slider</zorder>
   <zorder>lab_pos</zorder>
   <zorder>lab_total</zorder>
+  <zorder>list_online</zorder>
  </widget>
  <resources/>
  <connections/>

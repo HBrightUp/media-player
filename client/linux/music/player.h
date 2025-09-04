@@ -61,12 +61,18 @@ private slots:
 
     void on_list_music_itemDoubleClicked(QListWidgetItem *item);
 
+    void on_list_online_itemDoubleClicked(QListWidgetItem *item);
+
+    void music_directory_change();
+
 signals:
     void send_message(int msg_id, QString data);
     void play_online_random();
     void download_single_music(const QString& musicName);
 
     void player_close_event();
+
+
 
 private:
 
@@ -75,7 +81,8 @@ private:
     Ui::Player *ui;
     QSharedPointer<QAudioOutput> audio_;
     QSharedPointer<QMediaPlayer> player_;
-    QSharedPointer<QTimer> timer;
+    QTimer* themeTimer;
+    QTimer*   dirTimer;
 
     QList<QUrl> playlist_;
 

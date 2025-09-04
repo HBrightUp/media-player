@@ -9,13 +9,18 @@
 #include<QRandomGenerator>
 #include<QImageReader>
 #include<QKeyEvent>
+#include <sys/inotify.h>
+#include <unistd.h>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 
 Player::Player(QWidget *parent)
     : QWidget(parent)
     , ui(new Ui::Player)
 {
     ui->setupUi(this);
-
+    resize(360, 640);
 
     current_play_index_ = 0;
     current_theme_ = 0;
@@ -40,7 +45,7 @@ Player::Player(QWidget *parent)
     //player_ = new QMediaPlayer(this);
     player_.get()->setAudioOutput(audio_.get());
 
-    timer.reset(new QTimer);
+
 
     init_ui();
 
@@ -101,8 +106,14 @@ Player::Player(QWidget *parent)
         player_->setPosition(pos);
     });
 
-    connect(timer.get(), &QTimer::timeout, this, &Player::change_theme_by_timer);
-    timer.get()->start(20000);
+    themeTimer = new QTimer(this);
+    connect(themeTimer, &QTimer::timeout, this, &Player::change_theme_by_timer);
+    themeTimer->start(20000);
+    dirTimer = new QTimer(this);
+    connect(dirTimer, &QTimer::timeout, this, &Player::music_directory_change);
+    dirTimer->setSingleShot(true);
+    dirTimer->start(5000);
+
 
     connect(ui->list_music, &QListWidget::itemClicked, this,[](QListWidgetItem *item) {
         qInfo() << "item click";
@@ -172,6 +183,10 @@ void Player::init_ui() {
                        "QListWidget::item::selected{ color: white; background: #b4446c;}";
 
     ui->list_music->setStyleSheet(strStyle);
+
+
+
+    ui->list_online->setStyleSheet(strStyle);
 
 }
 
@@ -385,7 +400,7 @@ void Player::change_theme_by_timer() {
     load_next_theme();
 
     qint64 rand_number = QRandomGenerator::global()->bounded(30, 60);
-    timer.get()->start(rand_number * 1000);
+    themeTimer->start(rand_number * 1000);
 }
 
 
@@ -432,26 +447,28 @@ void Player::keyReleaseEvent(QKeyEvent *event) {
 
 void Player::on_btn_online_clicked()
 {
-    if(lockBtn_) {
-        qInfo() << "btn locked";
-        return ;
-    }
+    // if(lockBtn_) {
+    //     qInfo() << "btn locked";
+    //     return ;
+    // }
 
-    if (!playlist_.empty()) {
-        playlist_.clear();
+    // if (!playlist_.empty()) {
+    //     playlist_.clear();
 
-    }
+    // }
 
-    ui->list_music->clear();
+    //ui->list_music->clear();
 
     qInfo() <<  "send play online random";
+    resize(720, 640);
+
     emit play_online_random();
 
 }
 
 void Player::update_music_list_from_server(const QVector<std::string>& musicList) {
     for(const auto& item : musicList) {
-        ui->list_music->addItem(QString::fromStdString(item));
+        ui->list_online->addItem(QString::fromStdString(item));
     }
 
     //playlist_.append(musicList.begin(),musicList.end());
@@ -461,18 +478,8 @@ void Player::update_music_list_from_server(const QVector<std::string>& musicList
 
 void Player::on_list_music_itemDoubleClicked(QListWidgetItem *item)
 {
-    qInfo() << "double clicked";
-    if (lockBtn_) {
-        qInfo() << "Btn locked.";
-        return ;
-    }
+    qInfo() << "list music double clicked";
 
-    lockBtn_ = true;
-
-    QString music_name = ui->list_music->currentItem()->text();
-    qInfo()<< music_name;
-
-    emit  download_single_music(music_name);
 }
 
 void Player::on_download_single_music_finished() {
@@ -484,4 +491,64 @@ void Player::closeEvent(QCloseEvent *event) {
     qInfo() << "close event";
     emit player_close_event();
     event->accept();
+}
+
+void Player::on_list_online_itemDoubleClicked(QListWidgetItem *item)
+{
+    QString music_name = ui->list_online->currentItem()->text();
+    qInfo()<< music_name;
+
+    emit  download_single_music(music_name);
+}
+
+void Player::music_directory_change() {
+    int fd = inotify_init();
+    if (fd == -1) {
+        qInfo() << "inotify_init failed";
+        return ;
+    }
+
+    const char* directory_to_watch = "/tmp";
+    int watch_descriptor = inotify_add_watch(fd, directory_to_watch,
+                                             IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM);
+    if (watch_descriptor == -1) {
+        qInfo() << "inotify_add_watch failed";
+        return ;
+    }
+
+    char buffer[4096];
+
+    while (true) {
+        ssize_t length = read(fd, buffer, sizeof(buffer));
+        if (length == -1) {
+            qInfo() << "read failed" ;
+            return ;
+        }
+
+
+        for (ssize_t i = 0; i < length;) {
+            struct inotify_event *event = (struct inotify_event *) &buffer[i];
+            if (event->len) {
+                if (event->mask & IN_CREATE) {
+                    qInfo() << "File created: " << event->name;
+                }
+                if (event->mask & IN_DELETE) {
+                    qInfo() << "File deleted: " << event->name;
+                }
+                if (event->mask & IN_MODIFY) {
+                    qInfo() << "File modified: " << event->name;
+                }
+                if (event->mask & IN_MOVED_TO) {
+                    qInfo() << "File moved to: " << event->name;
+                }
+                if (event->mask & IN_MOVED_FROM) {
+                    qInfo() << "File moved from: " << event->name ;
+                }
+            }
+            i += sizeof(struct inotify_event) + event->len;
+        }
+    }
+
+
+    ::close(fd);
 }
