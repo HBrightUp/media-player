@@ -1,17 +1,22 @@
 #include "uimanage.h"
 #include<QDebug>
+#include<QMessageBox>
 #include"./msg_assembly.h"
 
 
+
 UiManage::UiManage() {
+
+    lockDownload_  = false;
+
     login_.reset(new Login);
     client_.reset( new TcpClient("47.112.188.195", 8000));
-
 
     connect(login_.get(), &Login::login_send_message, this, &UiManage::login_message_rev);
     connect(client_.get(), &TcpClient::login_success, this, &UiManage::login_success_rev);
     connect(client_.get(), &TcpClient::play_online_random_response, this, &UiManage::play_online_random_response_recv);
     connect(client_.get(), &TcpClient::download_single_music_response, this, &UiManage::download_single_music_response_recv);
+
 
 }
 
@@ -37,11 +42,16 @@ void UiManage::login_success_rev(){
 
     qInfo()<<"init player singals.";
     connect(player_.get(), &Player::play_online_random, this, &UiManage::play_online_random_recv);
-    connect(player_.get(), &Player::download_single_music, this, &UiManage::download_single_music_recv);
+    connect(player_.get(), &Player::download_music, this, &UiManage::download_music_recv);
     connect(player_.get(), &Player::player_close_event, this, &UiManage::player_exit);
+   connect(player_.get(), &Player::start_download, this, &UiManage::start_download_recv);
 
      qInfo()<<"show player.";
     player_.get()->show();
+
+    downloadTimer = new QTimer(this);
+    downloadTimer->setSingleShot(true);
+    connect(downloadTimer, &QTimer::timeout, this, &UiManage::start_download_with_timer);
 }
 
 void  UiManage::play_online_random_recv() {
@@ -66,7 +76,64 @@ void UiManage::play_online_random_response_recv(const QVector<std::string>& musi
     player_.get()->update_music_list_from_server(musicList);
 }
 
-void UiManage::download_single_music_recv(const QString& musicName) {
+void UiManage::download_music_recv(const QString& musicName) {
+
+    QMutexLocker<QMutex> lock(&downloadListMux_);
+
+    if(downloadList_.contains(musicName)) {
+        return ;
+    }
+
+    downloadList_.append(musicName);
+}
+
+void UiManage::download_single_music_response_recv() {
+    //player_.get()->on_download_single_music_finished();
+
+    qInfo() << "Download single finished.";
+
+    QMutexLocker<QMutex> lock(&downloadListMux_);
+    downloadList_.pop_front();
+
+    if (downloadList_.size() == 0) {
+        qInfo() << "Download finished!";
+        lockDownload_ = false;
+        QMessageBox::warning(nullptr, "Information", "Download Complete.");
+    } else {
+        downloadTimer->setSingleShot(true);
+        downloadTimer->start(100);
+    }
+
+}
+
+void UiManage::player_exit() {
+    client_.get()->player_exit();
+}
+
+void UiManage::start_download_recv() {
+     QMutexLocker<QMutex> lock(&downloadListMux_);
+    if (downloadList_.empty()) {
+        QMessageBox::warning(nullptr, "Warning", "There is currently no file to download.");
+         return ;
+    }
+
+    if (lockDownload_) {
+        QMessageBox::warning(nullptr, "Warning", "The file is downloading, please do not download again");
+        return ;
+    }
+
+    downloadTimer->setSingleShot(true);
+    downloadTimer->start(100);
+    lockDownload_ = true;
+}
+
+void UiManage::start_download_with_timer() {
+    qInfo() << "start download by timer.";
+
+    QMutexLocker<QMutex> lock(&downloadListMux_);
+
+    QString musicName = downloadList_.first();
+
     media::DownloadSingleMusic singleMusic;
     singleMusic.set_username(userName_.toStdString());
     singleMusic.set_musicname(musicName.toStdString());
@@ -79,12 +146,4 @@ void UiManage::download_single_music_recv(const QString& musicName) {
 
     qInfo() << "send message of download single music to server, size: " << msgdata.size();
     client_->writeData(msgdata);
-}
-
-void UiManage::download_single_music_response_recv() {
-    player_.get()->on_download_single_music_finished();
-}
-
-void UiManage::player_exit() {
-    client_.get()->player_exit();
 }

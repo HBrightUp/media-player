@@ -227,7 +227,7 @@ qint32 TcpClient::mergingPackage(const QByteArray& msgData) {
     }
 
     if (musicPackagePos_ > packageTotalSize_) {
-        emit download_single_music_response();
+        qInfo() << "Download failed.";
         return -1;
     }
 
@@ -275,10 +275,10 @@ void TcpClient::parseLoginRsp(const QByteArray& msgData, const qint32 offest) {
 }
 
 void TcpClient::network_idle_status() {
-    qInfo() << "Network idle, unlock ui with network now.";
+    // qInfo() << "Network idle, unlock ui with network now.";
 
-    // if server not send rsp, we should monitor status of network and unlock ui button.
-    emit download_single_music_response();
+    // // if server not send rsp, we should monitor status of network and unlock ui button.
+    // emit download_single_music_response();
 
 
 }

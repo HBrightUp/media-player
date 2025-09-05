@@ -64,21 +64,23 @@ private slots:
     void on_btn_online_clicked();
 
     void on_list_music_itemDoubleClicked(QListWidgetItem *item);
-
     void on_list_online_itemDoubleClicked(QListWidgetItem *item);
 
+
+    void on_btn_download_clicked();
 
 signals:
     void send_message(int msg_id, QString data);
     void play_online_random();
-    void download_single_music(const QString& musicName);
+    void download_music(const QString& musicName);
+    void start_download();
 
     void player_close_event();
 
 
 
 private:
-
+    bool is_exist_music_file(const QString& musicName);
 
 private:
     Ui::Player *ui;

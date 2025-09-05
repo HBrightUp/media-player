@@ -15,6 +15,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include<string>
+#include<QMessageBox>
 
 Player::Player(QWidget *parent)
     : QWidget(parent)
@@ -29,6 +30,7 @@ Player::Player(QWidget *parent)
     play_mode_ = PlayMode::ENU_LOOP;
     exit_ = false;
     musicDir_ = QDir::homePath() + "/Music";
+
 
 
     setWindowIcon(QIcon(":/app-icon.ico"));
@@ -512,7 +514,32 @@ void Player::on_list_online_itemDoubleClicked(QListWidgetItem *item)
     QString music_name = ui->list_online->currentItem()->text();
     qInfo()<< music_name;
 
-    emit  download_single_music(music_name);
+    if(is_exist_music_file(music_name)) {
+        qInfo() << "local music file existed.";
+        QMessageBox::warning(nullptr, "Warning", "This file already exists locally.");
+        return ;
+    }
+
+    emit  download_music(music_name);
 }
 
+bool Player::is_exist_music_file(const QString& musicName) {
+    bool is_exist = false;
+
+    for(const auto& url : playlist_) {
+        QFileInfo fileInfo(url.path());
+        if(fileInfo.fileName() == musicName) {
+            is_exist = true;
+            break;
+        }
+    }
+
+    return is_exist;
+}
+
+void Player::on_btn_download_clicked()
+{
+
+    emit  start_download();
+}
 
