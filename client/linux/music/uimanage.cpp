@@ -98,7 +98,7 @@ void UiManage::download_single_music_response_recv() {
     if (downloadList_.size() == 0) {
         qInfo() << "Download finished!";
         lockDownload_ = false;
-        QMessageBox::warning(nullptr, "Information", "Download Complete.");
+        QMessageBox::information(nullptr, "Information", "Download Complete.");
     } else {
         downloadTimer->setSingleShot(true);
         downloadTimer->start(100);
