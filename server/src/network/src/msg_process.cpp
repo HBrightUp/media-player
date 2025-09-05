@@ -246,7 +246,7 @@ bool CMsgProcessor::login(const char* pdata) {
     auto& log = Logger::getInstance();
     log.print("Process login, username: ", login.username(), ", pwd: ", login.pwd());
 
-    if ( !(login.username() == "hml" && login.pwd() == "123")) {
+    if ( !(login.username() == "hml" && login.pwd() == "bright")) {
         return false;
     }
 

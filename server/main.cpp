@@ -6,9 +6,8 @@
 
 int main(int argc, char* argv[]) {
 
-    CFileManager::getInstance().init();
     auto& log = Logger::getInstance();
-    log.init("./logfile", LoggerMode::ENU_FILE); 
+    log.init("./logfile", LoggerMode::ENU_STDOUT); 
 
     if (argc < 2) {
         log.print("Listen port input required.");
@@ -24,6 +23,8 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     
+    CFileManager::getInstance().init();
+
     Server& s = Server::Instance();
     s.init(SERVER_IP, std::atoi(argv[1]));
     if(!s.start()) {
