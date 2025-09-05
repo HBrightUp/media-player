@@ -50,7 +50,7 @@ void TcpClient::onDisconnected() {
 
 void TcpClient::onReadyRead() {
     //QByteArray data = socket_->readAll();
-    qDebug() << "Received data from server:";
+
     QMutexLocker lock(&mutMsgList_);
     msglist_.append(socket_->readAll());
     lock.unlock();

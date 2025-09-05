@@ -34,10 +34,13 @@ void UiManage::login_success_rev(){
     qInfo() << "receive login success.";
     login_.reset();
     player_.reset(new Player);
+
+    qInfo()<<"init player singals.";
     connect(player_.get(), &Player::play_online_random, this, &UiManage::play_online_random_recv);
     connect(player_.get(), &Player::download_single_music, this, &UiManage::download_single_music_recv);
     connect(player_.get(), &Player::player_close_event, this, &UiManage::player_exit);
 
+     qInfo()<<"show player.";
     player_.get()->show();
 }
 

@@ -8,6 +8,8 @@
 #include<QSharedPointer>
 #include<QTimer>
 #include<QListWidgetItem>
+#include<QThread>
+#include"worker.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -48,6 +50,8 @@ private slots:
 
     void init_ui();
     void update_player_list(const QString& path);
+    void update_current_player_list();
+
     void play_next();
     void play_rand();
     bool is_playable();
@@ -64,6 +68,7 @@ private slots:
     void on_list_online_itemDoubleClicked(QListWidgetItem *item);
 
     void music_directory_change();
+
 
 signals:
     void send_message(int msg_id, QString data);
@@ -82,7 +87,7 @@ private:
     QSharedPointer<QAudioOutput> audio_;
     QSharedPointer<QMediaPlayer> player_;
     QTimer* themeTimer;
-    QTimer*   dirTimer;
+
 
     QList<QUrl> playlist_;
 
@@ -92,6 +97,11 @@ private:
     PlayMode play_mode_;
 
     bool lockBtn_;
+    Worker* dirMonitor_;
+
+    bool exit_;
+
+    QString musicDir_;
 
 
     // QWidget interface
@@ -100,4 +110,5 @@ protected:
     void keyReleaseEvent(QKeyEvent *event) override ;
 
 };
+
 #endif // PLAYER_H

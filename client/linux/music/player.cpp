@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include<string>
 
 Player::Player(QWidget *parent)
     : QWidget(parent)
@@ -27,6 +28,8 @@ Player::Player(QWidget *parent)
     is_silder_pressed_ = false;
     play_mode_ = PlayMode::ENU_LOOP;
     lockBtn_ = false;
+    exit_ = false;
+    musicDir_ = QDir::homePath() + "/Music";
 
     setWindowIcon(QIcon(":/app-icon.ico"));
 
@@ -109,15 +112,17 @@ Player::Player(QWidget *parent)
     themeTimer = new QTimer(this);
     connect(themeTimer, &QTimer::timeout, this, &Player::change_theme_by_timer);
     themeTimer->start(20000);
-    dirTimer = new QTimer(this);
-    connect(dirTimer, &QTimer::timeout, this, &Player::music_directory_change);
-    dirTimer->setSingleShot(true);
-    dirTimer->start(5000);
+
+    dirMonitor_ = new Worker();
+    connect(dirMonitor_, &Worker::update_current_player_list, this, &Player::update_current_player_list);
+    dirMonitor_->start();
 
 
     connect(ui->list_music, &QListWidget::itemClicked, this,[](QListWidgetItem *item) {
         qInfo() << "item click";
     });
+
+    qInfo() << "finished player contructor.";
 
 }
 void Player::media_durationChanged(qint64 duration) {
@@ -199,18 +204,19 @@ Player::~Player()
     player_->stop();
     player_->setSource(QUrl());;
     playlist_.clear();
+    dirMonitor_->wait();
     qInfo() << "Player destructor.";
 }
 
 void Player::on_btn_directory_clicked()
 {
-    ui->list_music->clear();
-    QString path = QFileDialog::getExistingDirectory(this, "Select directory of music:", "/home/hml/Music");
-    if (path.isEmpty()) {
+    //ui->list_music->clear();
+    musicDir_  = QFileDialog::getExistingDirectory(this, "Select directory of music:", "/home/hml/Music");
+    if (musicDir_.isEmpty()) {
         return ;
     }
 
-    update_player_list(path);
+    update_player_list(musicDir_);
 }
 void Player::update_player_list(const QString& path){
 
@@ -230,6 +236,10 @@ void Player::update_player_list(const QString& path){
     }
 
     ui->list_music->setCurrentRow(0);
+}
+
+void Player::update_current_player_list() {
+    update_player_list(musicDir_);
 }
 
 void Player::on_btn_play_clicked()
@@ -502,53 +512,6 @@ void Player::on_list_online_itemDoubleClicked(QListWidgetItem *item)
 }
 
 void Player::music_directory_change() {
-    int fd = inotify_init();
-    if (fd == -1) {
-        qInfo() << "inotify_init failed";
-        return ;
-    }
 
-    const char* directory_to_watch = "/tmp";
-    int watch_descriptor = inotify_add_watch(fd, directory_to_watch,
-                                             IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM);
-    if (watch_descriptor == -1) {
-        qInfo() << "inotify_add_watch failed";
-        return ;
-    }
-
-    char buffer[4096];
-
-    while (true) {
-        ssize_t length = read(fd, buffer, sizeof(buffer));
-        if (length == -1) {
-            qInfo() << "read failed" ;
-            return ;
-        }
-
-
-        for (ssize_t i = 0; i < length;) {
-            struct inotify_event *event = (struct inotify_event *) &buffer[i];
-            if (event->len) {
-                if (event->mask & IN_CREATE) {
-                    qInfo() << "File created: " << event->name;
-                }
-                if (event->mask & IN_DELETE) {
-                    qInfo() << "File deleted: " << event->name;
-                }
-                if (event->mask & IN_MODIFY) {
-                    qInfo() << "File modified: " << event->name;
-                }
-                if (event->mask & IN_MOVED_TO) {
-                    qInfo() << "File moved to: " << event->name;
-                }
-                if (event->mask & IN_MOVED_FROM) {
-                    qInfo() << "File moved from: " << event->name ;
-                }
-            }
-            i += sizeof(struct inotify_event) + event->len;
-        }
-    }
-
-
-    ::close(fd);
 }
+
