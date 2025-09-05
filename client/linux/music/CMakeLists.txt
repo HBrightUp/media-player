@@ -47,7 +47,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         msg_assembly.cpp
         tcpclient.h tcpclient.cpp
         signals_type.h
-        worker.h worker.cpp
+        MonitorDir.h MonitorDir.cpp
 
 
     )

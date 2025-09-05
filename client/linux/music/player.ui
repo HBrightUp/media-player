@@ -459,6 +459,46 @@ image: url(:/front-64.png)</string>
     <number>-1</number>
    </property>
   </widget>
+  <widget class="QLabel" name="lab_online">
+   <property name="geometry">
+    <rect>
+     <x>360</x>
+     <y>0</y>
+     <width>360</width>
+     <height>640</height>
+    </rect>
+   </property>
+   <property name="sizePolicy">
+    <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+     <horstretch>0</horstretch>
+     <verstretch>0</verstretch>
+    </sizepolicy>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>360</width>
+     <height>640</height>
+    </size>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>360</width>
+     <height>640</height>
+    </size>
+   </property>
+   <property name="sizeIncrement">
+    <size>
+     <width>360</width>
+     <height>640</height>
+    </size>
+   </property>
+   <property name="frameShadow">
+    <enum>QFrame::Shadow::Raised</enum>
+   </property>
+   <property name="text">
+    <string/>
+   </property>
+  </widget>
   <zorder>lab_bk</zorder>
   <zorder>widget</zorder>
   <zorder>list_music</zorder>
@@ -466,6 +506,7 @@ image: url(:/front-64.png)</string>
   <zorder>lab_pos</zorder>
   <zorder>lab_total</zorder>
   <zorder>list_online</zorder>
+  <zorder>lab_online</zorder>
  </widget>
  <resources/>
  <connections/>

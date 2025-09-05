@@ -1,4 +1,4 @@
-#include "worker.h"
+#include "MonitorDir.h"
 #include <sys/inotify.h>
 #include <unistd.h>
 #include <cstdlib>
@@ -7,7 +7,7 @@
 #include<QDir>
 
 Worker::Worker() {
-
+    exit_ = false;
 }
 void Worker:: run() {
     int fd = inotify_init();
@@ -29,7 +29,7 @@ void Worker:: run() {
     char buffer[4096];
 
     qInfo() << "start monitor music directory.";
-    while (true) {
+    while (!exit_) {
         ssize_t length = read(fd, buffer, sizeof(buffer));
         if (length == -1) {
             qInfo() << "read failed" ;
@@ -101,4 +101,8 @@ bool Worker::is_contain_music_suffix(const char* filename) {
     }
 
     return is_contain;
+}
+
+void Worker::notify_exit() {
+    exit_ = true;
 }

@@ -27,9 +27,9 @@ Player::Player(QWidget *parent)
     current_theme_ = 0;
     is_silder_pressed_ = false;
     play_mode_ = PlayMode::ENU_LOOP;
-    lockBtn_ = false;
     exit_ = false;
     musicDir_ = QDir::homePath() + "/Music";
+
 
     setWindowIcon(QIcon(":/app-icon.ico"));
 
@@ -188,10 +188,12 @@ void Player::init_ui() {
                        "QListWidget::item::selected{ color: white; background: #b4446c;}";
 
     ui->list_music->setStyleSheet(strStyle);
-
-
-
     ui->list_online->setStyleSheet(strStyle);
+
+    ui->lab_online->lower();
+    QPixmap pixmap(":/bk4.jpg");
+    QPixmap scaledPixmap = pixmap.scaled(ui->lab_online->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    ui->lab_online->setPixmap(scaledPixmap);
 
 }
 
@@ -204,7 +206,10 @@ Player::~Player()
     player_->stop();
     player_->setSource(QUrl());;
     playlist_.clear();
-    dirMonitor_->wait();
+
+    dirMonitor_->wait(500);
+    delete dirMonitor_;
+    dirMonitor_ = nullptr;
     qInfo() << "Player destructor.";
 }
 
@@ -457,22 +462,16 @@ void Player::keyReleaseEvent(QKeyEvent *event) {
 
 void Player::on_btn_online_clicked()
 {
-    // if(lockBtn_) {
-    //     qInfo() << "btn locked";
-    //     return ;
-    // }
 
-    // if (!playlist_.empty()) {
-    //     playlist_.clear();
-
-    // }
-
-    //ui->list_music->clear();
-
-    qInfo() <<  "send play online random";
-    resize(720, 640);
-
-    emit play_online_random();
+    static bool is_searching = true;
+    if (is_searching) {
+        resize(720, 640);
+        emit play_online_random();
+        is_searching = false;
+    } else {
+        resize(60, 640);
+        is_searching = true;
+    }
 
 }
 
@@ -493,13 +492,18 @@ void Player::on_list_music_itemDoubleClicked(QListWidgetItem *item)
 }
 
 void Player::on_download_single_music_finished() {
-    lockBtn_ = false;
-    qInfo() << "btn unlocked.";
+
 }
 
 void Player::closeEvent(QCloseEvent *event) {
     qInfo() << "close event";
     emit player_close_event();
+    exit_ = true;
+
+    dirMonitor_->notify_exit();
+
+
+
     event->accept();
 }
 
@@ -511,7 +515,4 @@ void Player::on_list_online_itemDoubleClicked(QListWidgetItem *item)
     emit  download_single_music(music_name);
 }
 
-void Player::music_directory_change() {
-
-}
 

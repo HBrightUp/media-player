@@ -9,7 +9,7 @@
 #include<QTimer>
 #include<QListWidgetItem>
 #include<QThread>
-#include"worker.h"
+#include"MonitorDir.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -67,8 +67,6 @@ private slots:
 
     void on_list_online_itemDoubleClicked(QListWidgetItem *item);
 
-    void music_directory_change();
-
 
 signals:
     void send_message(int msg_id, QString data);
@@ -96,12 +94,13 @@ private:
     bool is_silder_pressed_;
     PlayMode play_mode_;
 
-    bool lockBtn_;
     Worker* dirMonitor_;
 
     bool exit_;
 
     QString musicDir_;
+
+
 
 
     // QWidget interface
