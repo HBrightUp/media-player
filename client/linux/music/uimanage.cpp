@@ -58,6 +58,11 @@ void  UiManage::play_online_random_recv() {
 
     qInfo() << "received play online random.";
 
+    if (lockDownload_) {
+        qInfo() << "Downloading, try later...";
+        return ;
+    }
+
     media::PlayOnlineRandom online;
     online.set_username(userName_.toStdString());
 
