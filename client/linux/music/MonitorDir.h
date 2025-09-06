@@ -20,6 +20,7 @@ private:
 
  private:
     bool exit_;
+    std::vector<std::string> suffix_;
 };
 
 #endif // MONITORDIR_H

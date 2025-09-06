@@ -233,13 +233,13 @@ void Player::update_player_list(const QString& path){
     }
 
     QDir dir(path);
-    QStringList music_list = dir.entryList(QStringList() << "*.mp3" <<"*.wav");
+    QStringList music_list = dir.entryList(QStringList() << "*.mp3" <<"*.wav"<< "*.flac" << "*.aac" << "*.wma");
     for(auto& file : music_list) {
         playlist_.append(QUrl::fromLocalFile(path + "/"+ file));
     }
 
     for(auto& list : music_list) {
-        ui->list_music->addItem(list.left(list.size() - 4));
+        ui->list_music->addItem(list);
     }
 
     ui->list_music->setCurrentRow(0);

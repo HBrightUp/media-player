@@ -8,6 +8,9 @@
 
 Worker::Worker() {
     exit_ = false;
+
+    std::vector<std::string> support = {"mp3", "wav", "flac","wma", "aac"};
+    suffix_.insert(suffix_.end(), support.begin(), support.end());
 }
 void Worker:: run() {
     int fd = inotify_init();
@@ -94,10 +97,11 @@ bool Worker::is_contain_music_suffix(const char* filename) {
     size_t pos = name.rfind('.');
     if( pos != std::string::npos &&  pos + 1 < name.length()) {
         std::string suffix = name.substr(pos + 1);
-        if (suffix == "mp3") {
+
+        auto it = std::find(suffix_.begin(), suffix_.end(), suffix);
+        if (it != suffix_.end()) {
             is_contain = true;
         }
-
     }
 
     return is_contain;
