@@ -8,15 +8,13 @@ set(CMAKE_AUTORCC ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
+set(CMAKE_BUILD_TYPE Release)
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets)
 
 
 find_package(Qt6 COMPONENTS Network REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core)
-find_package(Qt6 REQUIRED COMPONENTS Core)
 find_package(Qt6 REQUIRED COMPONENTS Core)
 find_package(Protobuf REQUIRED)
 
@@ -75,10 +73,7 @@ endif()
 target_link_libraries(music PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Multimedia  Qt${QT_VERSION_MAJOR}::MultimediaWidgets Qt6::Network )
 target_link_libraries(music PRIVATE Qt6::Core)
 target_link_libraries(music PRIVATE protobuf::libprotobuf)
-target_link_libraries(music PRIVATE Qt6::Core)
-target_link_libraries(music PRIVATE Qt6::Core)
-target_link_libraries(music PRIVATE Qt6::Core)
-target_link_libraries(music PRIVATE Qt6::Core)
+
 
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.

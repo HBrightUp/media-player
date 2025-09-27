@@ -26,7 +26,10 @@ UiManage::~UiManage() {
 
 void UiManage::start(){
 
-    login_.get()->show();
+    //login_.get()->show();
+
+    //ignore login
+    login_success_rev();
 }
 
 void UiManage::login_message_rev(const std::string& msg){
