@@ -1,0 +1,11 @@
+# 后端启动时会读取这个目录，并递归扫描其中的 .mp3 文件写入数据库。
+# 可以写绝对路径，例如：/Users/hml/Music
+library:
+  music_directory: "/Users/hml/Downloads"
+
+server:
+  addr: ":8080"
+  cors_origin: "http://localhost:5173"
+
+database:
+  url: "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"

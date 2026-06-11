@@ -1,0 +1,216 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/hml/media-player/backend/internal/models"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+//go:embed schema.sql
+var initSQL string
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func New(ctx context.Context, databaseURL string) (*Store, error) {
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("create postgres pool: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	return &Store{pool: pool}, nil
+}
+
+func (s *Store) Close() {
+	s.pool.Close()
+}
+
+func (s *Store) Migrate(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, initSQL)
+	return err
+}
+
+func (s *Store) GetSetting(ctx context.Context, key string) (models.LibrarySetting, error) {
+	var setting models.LibrarySetting
+	err := s.pool.QueryRow(ctx, `
+		SELECT value, updated_at
+		FROM settings
+		WHERE key = $1
+	`, key).Scan(&setting.Path, &setting.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.LibrarySetting{}, sql.ErrNoRows
+	}
+	return setting, err
+}
+
+func (s *Store) SetSetting(ctx context.Context, key, value string) (models.LibrarySetting, error) {
+	var setting models.LibrarySetting
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO settings (key, value, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (key)
+		DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+		RETURNING value, updated_at
+	`, key, value).Scan(&setting.Path, &setting.UpdatedAt)
+	return setting, err
+}
+
+func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, error) {
+	var id int64
+	lyrics, err := json.Marshal(track.Lyrics)
+	if err != nil {
+		return 0, fmt.Errorf("marshal lyrics: %w", err)
+	}
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO tracks (
+			path,
+			relative_path,
+			filename,
+			title,
+			artist,
+			album,
+			format,
+			size_bytes,
+			duration_seconds,
+			modified_at,
+			lyrics,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+		ON CONFLICT (path)
+		DO UPDATE SET
+			relative_path = EXCLUDED.relative_path,
+			filename = EXCLUDED.filename,
+			title = EXCLUDED.title,
+			artist = EXCLUDED.artist,
+			album = EXCLUDED.album,
+			format = EXCLUDED.format,
+			size_bytes = EXCLUDED.size_bytes,
+			duration_seconds = EXCLUDED.duration_seconds,
+			modified_at = EXCLUDED.modified_at,
+			lyrics = EXCLUDED.lyrics,
+			updated_at = now()
+		RETURNING id
+	`,
+		track.Path,
+		track.RelativePath,
+		track.Filename,
+		track.Title,
+		track.Artist,
+		track.Album,
+		track.Format,
+		track.SizeBytes,
+		track.DurationSeconds,
+		track.ModifiedAt,
+		lyrics,
+	).Scan(&id)
+	return id, err
+}
+
+func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id,
+			path,
+			relative_path,
+			filename,
+			title,
+			artist,
+			album,
+			format,
+			size_bytes,
+			duration_seconds,
+			modified_at,
+			lyrics
+		FROM tracks
+		WHERE format = 'mp3'
+		ORDER BY lower(title), lower(artist), id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tracks := make([]models.Track, 0)
+	for rows.Next() {
+		track, err := scanTrack(rows)
+		if err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, track)
+	}
+	return tracks, rows.Err()
+}
+
+func (s *Store) GetTrack(ctx context.Context, id int64) (models.Track, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			id,
+			path,
+			relative_path,
+			filename,
+			title,
+			artist,
+			album,
+			format,
+			size_bytes,
+			duration_seconds,
+			modified_at,
+			lyrics
+		FROM tracks
+		WHERE id = $1
+	`, id)
+	return scanTrack(row)
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTrack(row rowScanner) (models.Track, error) {
+	var track models.Track
+	var duration sql.NullInt64
+	var lyrics []byte
+	err := row.Scan(
+		&track.ID,
+		&track.Path,
+		&track.RelativePath,
+		&track.Filename,
+		&track.Title,
+		&track.Artist,
+		&track.Album,
+		&track.Format,
+		&track.SizeBytes,
+		&duration,
+		&track.ModifiedAt,
+		&lyrics,
+	)
+	if err != nil {
+		return models.Track{}, err
+	}
+	if duration.Valid {
+		value := int(duration.Int64)
+		track.DurationSeconds = &value
+	}
+	if len(lyrics) > 0 {
+		if err := json.Unmarshal(lyrics, &track.Lyrics); err != nil {
+			return models.Track{}, fmt.Errorf("decode lyrics: %w", err)
+		}
+	}
+	if track.Lyrics == nil {
+		track.Lyrics = []models.LyricLine{}
+	}
+	track.StreamURL = fmt.Sprintf("/api/tracks/%d/stream", track.ID)
+	return track, nil
+}

@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: media-player-postgres
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: media_player
+      POSTGRES_USER: media_player
+      POSTGRES_PASSWORD: media_player
+    volumes:
+      - media_player_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U media_player -d media_player"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  media_player_pgdata:

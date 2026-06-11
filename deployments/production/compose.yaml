@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: media-player-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-media_player}
+      POSTGRES_USER: ${POSTGRES_USER:-media_player}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - media_player_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-media_player} -d ${POSTGRES_DB:-media_player}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../../backend
+    container_name: media-player-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_ADDR: ":8080"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-media_player}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_player}?sslmode=disable"
+      CORS_ORIGIN: "https://${MEDIA_PLAYER_DOMAIN}"
+      MUSIC_DIRECTORY: "/music"
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ${MUSIC_DIRECTORY:-/opt/media-player/music}:/music:ro
+
+volumes:
+  media_player_pgdata:
