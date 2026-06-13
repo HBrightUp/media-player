@@ -47,7 +47,7 @@ npm install
 npm run dev
 ```
 
-然后打开 `http://localhost:5173`。
+前端开发服务会监听 `0.0.0.0:5173`。本机可打开 `http://localhost:5173`，同一局域网设备请打开 `http://<本机局域网 IP>:5173`。
 
 ## API
 

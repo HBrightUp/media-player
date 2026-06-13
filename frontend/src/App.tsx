@@ -1,29 +1,34 @@
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { getTracks, streamURL } from "./api";
-import type { LyricLine, Track } from "./types";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { getTracks, scanLibrary, streamURL } from "./api";
+import type { Track } from "./types";
 
 type RepeatMode = "off" | "one" | "all";
-type TimedLyric = {
-  time: number;
-  text: string;
-};
 
-const tabs = ["正在播放", "播放列表", "歌曲搜索"];
+const tabs = ["音乐列表", "歌曲搜索"];
+const repeatModes: RepeatMode[] = ["off", "one", "all"];
+const repeatModeLabels: Record<RepeatMode, string> = {
+  off: "顺序播放",
+  one: "单曲循环",
+  all: "列表循环"
+};
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const lyricViewportRef = useRef<HTMLDivElement | null>(null);
-  const lyricLineRefs = useRef<(HTMLParagraphElement | null)[]>([]);
+  const toastTimerRef = useRef<number | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [currentTrackId, setCurrentTrackId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState("正在播放");
+  const [activeTab, setActiveTab] = useState(tabs[0]);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>("all");
   const [isLoading, setIsLoading] = useState(true);
+  const [isScanning, setIsScanning] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
   const [loadMessage, setLoadMessage] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(12);
   const [duration, setDuration] = useState(185);
-  const [volume, setVolume] = useState(0.72);
 
   const currentTrack = useMemo(() => {
     if (!tracks.length) {
@@ -37,11 +42,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!audioRef.current) {
-      return;
-    }
-    audioRef.current.volume = volume;
-  }, [volume]);
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -66,31 +72,22 @@ function App() {
   }, [currentTrack, isPlaying]);
 
   const activeDuration = duration || currentTrack?.duration_seconds || 185;
-  const syncedLyrics = useMemo(() => buildTimedLyrics(currentTrack?.lyrics ?? [], activeDuration), [activeDuration, currentTrack?.id, currentTrack?.lyrics]);
-  const activeLyricIndex = useMemo(() => findActiveLyricIndex(syncedLyrics, currentTime), [currentTime, syncedLyrics]);
 
-  useEffect(() => {
-    const viewport = lyricViewportRef.current;
-    const activeLine = lyricLineRefs.current[activeLyricIndex];
-    if (!viewport || !activeLine) {
-      return;
-    }
-
-    const nextTop = activeLine.offsetTop - viewport.clientHeight / 2 + activeLine.clientHeight / 2;
-    viewport.scrollTo({
-      top: Math.max(0, nextTop),
-      behavior: "smooth"
-    });
-  }, [activeLyricIndex, currentTrack?.id]);
-
-  async function refreshLibrary() {
+  async function refreshLibrary({ scan = false }: { scan?: boolean } = {}) {
     setIsLoading(true);
+    setIsScanning(scan);
     setLoadMessage("");
+    if (scan) {
+      clearCurrentLibrary();
+    }
     try {
+      if (scan) {
+        await scanLibrary();
+      }
       const payload = await getTracks();
       setTracks(payload.tracks);
       setCurrentTrackId((previous) => {
-        if (previous && payload.tracks.some((track) => track.id === previous)) {
+        if (!scan && previous && payload.tracks.some((track) => track.id === previous)) {
           return previous;
         }
         return payload.tracks[0]?.id ?? null;
@@ -101,6 +98,74 @@ function App() {
       setLoadMessage(error instanceof Error ? error.message : "本地音乐列表加载失败");
     } finally {
       setIsLoading(false);
+      setIsScanning(false);
+    }
+  }
+
+  function clearCurrentLibrary() {
+    audioRef.current?.pause();
+    setTracks([]);
+    setCurrentTrackId(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+  }
+
+  function handleTabClick(tab: string) {
+    setActiveTab(tab);
+    if (tab === "音乐列表") {
+      setIsSearchOpen(false);
+      void refreshLibrary({ scan: true });
+      return;
+    }
+    setSearchQuery("");
+    setIsSearchOpen(true);
+  }
+
+  function closeSearchDialog() {
+    setIsSearchOpen(false);
+    setActiveTab("音乐列表");
+  }
+
+  function showToast(message: string) {
+    setToastMessage(message);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage("");
+      toastTimerRef.current = null;
+    }, 3000);
+  }
+
+  async function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const keyword = searchQuery.trim();
+    if (!keyword) {
+      showToast("音乐不存在");
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const payload = await getTracks();
+      const matchedTracks = payload.tracks.filter((track) => trackMatchesQuery(track, keyword));
+      if (!matchedTracks.length) {
+        showToast("音乐不存在");
+        return;
+      }
+
+      audioRef.current?.pause();
+      setIsPlaying(false);
+      setTracks(matchedTracks);
+      setCurrentTrackId(matchedTracks[0].id);
+      setLoadMessage("");
+      setIsSearchOpen(false);
+      setActiveTab("音乐列表");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "音乐不存在");
+    } finally {
+      setIsSearching(false);
     }
   }
 
@@ -175,7 +240,8 @@ function App() {
             key={tab}
             className={tab === activeTab ? "active" : ""}
             type="button"
-            onClick={() => setActiveTab(tab)}
+            disabled={tab === "音乐列表" && isLoading}
+            onClick={() => handleTabClick(tab)}
           >
             {tab}
           </button>
@@ -203,27 +269,47 @@ function App() {
               <span>{track.album}</span>
             </button>
           ))}
-          {!tracks.length ? <div className="empty-table">{isLoading ? "正在加载本地音乐列表" : emptyMessage}</div> : null}
+          {!tracks.length ? <div className="empty-table">{isLoading ? (isScanning ? "正在重新检查音乐文件夹" : "正在加载本地音乐列表") : emptyMessage}</div> : null}
         </div>
       </section>
 
-      <aside className="now-panel" aria-label="同步歌词区域">
-        <div className="synced-lyrics" ref={lyricViewportRef} aria-label="同步歌词" aria-live="polite">
-          <div className="synced-lyrics-inner">
-            {syncedLyrics.map((line, index) => (
-              <p
-                className={index === activeLyricIndex ? "active" : ""}
-                key={`${line.time}-${line.text}`}
-                ref={(element) => {
-                  lyricLineRefs.current[index] = element;
-                }}
-              >
-                {line.text}
-              </p>
-            ))}
-          </div>
+      {isSearchOpen ? (
+        <div className="search-dialog-backdrop" role="presentation" onClick={closeSearchDialog}>
+          <form
+            className="search-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="歌曲搜索"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={handleSearchSubmit}
+          >
+            <h2>歌曲搜索</h2>
+            <input
+              className="search-input"
+              type="search"
+              value={searchQuery}
+              placeholder="输入音乐名称"
+              aria-label="音乐名称"
+              autoFocus
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            <div className="search-actions">
+              <button type="button" onClick={closeSearchDialog}>
+                取消
+              </button>
+              <button className="primary" type="submit" disabled={isSearching}>
+                {isSearching ? "检查中" : "确认"}
+              </button>
+            </div>
+          </form>
         </div>
-      </aside>
+      ) : null}
+
+      {toastMessage ? (
+        <div className="toast-message" role="status">
+          {toastMessage}
+        </div>
+      ) : null}
 
       <footer className="control-bar">
         <div className="transport">
@@ -237,12 +323,13 @@ function App() {
             <NextIcon />
           </button>
           <button
-            className={repeatMode !== "off" ? "active" : ""}
+            className={`repeat-mode-button mode-${repeatMode}`}
             type="button"
-            aria-label="循环模式"
+            aria-label={`播放模式：${repeatModeLabels[repeatMode]}`}
+            title={repeatModeLabels[repeatMode]}
             onClick={() => setRepeatMode(nextRepeatMode(repeatMode))}
           >
-            <RepeatIcon />
+            <RepeatModeIcon mode={repeatMode} />
           </button>
         </div>
 
@@ -258,19 +345,6 @@ function App() {
           />
           <span>{formatDuration(activeDuration)}</span>
         </div>
-
-        <label className="volume-group">
-          <VolumeIcon />
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={volume}
-            onChange={(event) => setVolume(Number(event.target.value))}
-            aria-label="音量"
-          />
-        </label>
       </footer>
 
       <audio
@@ -291,46 +365,15 @@ function App() {
 }
 
 function nextRepeatMode(mode: RepeatMode): RepeatMode {
-  if (mode === "all") {
-    return "one";
-  }
-  if (mode === "one") {
-    return "off";
-  }
-  return "all";
+  const currentIndex = repeatModes.indexOf(mode);
+  return repeatModes[(currentIndex + 1) % repeatModes.length];
 }
 
-function buildTimedLyrics(lines: LyricLine[], duration: number): TimedLyric[] {
-  const cleanLines = lines.map((line) => ({
-    timeSeconds: line.time_seconds,
-    text: line.text.trim()
-  })).filter((line) => line.text);
-
-  if (!cleanLines.length) {
-    return [{ time: 0, text: "暂无歌词" }];
-  }
-
-  const safeDuration = Math.max(duration, cleanLines.length);
-  const step = safeDuration / cleanLines.length;
-  const hasTimestamps = cleanLines.some((line) => typeof line.timeSeconds === "number");
-  const timedLines = cleanLines.map((line, index) => ({
-    time: hasTimestamps && typeof line.timeSeconds === "number" ? line.timeSeconds : index * step,
-    text: line.text
-  }));
-
-  return timedLines.sort((first, second) => first.time - second.time);
-}
-
-function findActiveLyricIndex(lines: TimedLyric[], currentTime: number) {
-  let activeIndex = 0;
-  for (let index = 0; index < lines.length; index += 1) {
-    if (currentTime >= lines[index].time) {
-      activeIndex = index;
-    } else {
-      break;
-    }
-  }
-  return activeIndex;
+function trackMatchesQuery(track: Track, keyword: string) {
+  const normalizedKeyword = keyword.toLocaleLowerCase();
+  return [track.title, track.filename, track.relative_path].some((value) =>
+    value.toLocaleLowerCase().includes(normalizedKeyword)
+  );
 }
 
 function formatDuration(seconds?: number | null) {
@@ -391,12 +434,33 @@ function RepeatIcon() {
   );
 }
 
-function VolumeIcon() {
+function RepeatOneIcon() {
   return (
     <IconBase>
-      <path d="M4 10v4h4l5 4V6l-5 4zM17 9a5 5 0 0 1 0 6" />
+      <path d="M17 2.5 21 6l-4 3.5M3 11V9a3 3 0 0 1 3-3h15M7 21.5 3 18l4-3.5M21 13v2a3 3 0 0 1-3 3H3" />
+      <text x="12" y="13" textAnchor="middle" dominantBaseline="middle" fontSize="7" fontWeight="800">
+        1
+      </text>
     </IconBase>
   );
+}
+
+function SequenceIcon() {
+  return (
+    <IconBase>
+      <path d="M4 7h9M4 12h9M4 17h6M16 9l4 3-4 3M20 12h-6" />
+    </IconBase>
+  );
+}
+
+function RepeatModeIcon({ mode }: { mode: RepeatMode }) {
+  if (mode === "one") {
+    return <RepeatOneIcon />;
+  }
+  if (mode === "all") {
+    return <RepeatIcon />;
+  }
+  return <SequenceIcon />;
 }
 
 export default App;

@@ -118,6 +118,11 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 	return id, err
 }
 
+func (s *Store) ClearTracks(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM tracks`)
+	return err
+}
+
 func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT

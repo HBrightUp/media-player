@@ -68,6 +68,10 @@ func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[stri
 	}
 
 	result := models.ScanResult{RootPath: absRoot}
+	if err := s.store.ClearTracks(ctx); err != nil {
+		return result, fmt.Errorf("clear old tracks: %w", err)
+	}
+
 	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			recordScanError(&result, path, walkErr)
