@@ -1,4 +1,14 @@
-import type { LibrarySetting, LibrarySettingResponse, ScanResult, Track } from "./types";
+import type {
+  AuthResponse,
+  LibrarySetting,
+  LibrarySettingResponse,
+  LoginRequest,
+  PresenceRequest,
+  PresenceResponse,
+  RegisterRequest,
+  ScanResult,
+  Track
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -55,5 +65,33 @@ export function setLibraryPath(path: string): Promise<LibrarySettingResponse> {
 export function scanLibrary(): Promise<ScanResult> {
   return request<ScanResult>("/api/library/scan", {
     method: "POST"
+  });
+}
+
+export function registerUser(payload: RegisterRequest): Promise<AuthResponse> {
+  return request<AuthResponse>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function loginUser(payload: LoginRequest): Promise<AuthResponse> {
+  return request<AuthResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function sendPresenceHeartbeat(payload: PresenceRequest): Promise<PresenceResponse> {
+  return request<PresenceResponse>("/api/presence/heartbeat", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function sendPresenceOffline(payload: PresenceRequest): Promise<PresenceResponse> {
+  return request<PresenceResponse>("/api/presence/offline", {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }

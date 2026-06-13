@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var ErrUserAlreadyExists = errors.New("user already exists")
+
 //go:embed schema.sql
 var initSQL string
 
@@ -64,6 +66,63 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) (models.Libra
 		RETURNING value, updated_at
 	`, key, value).Scan(&setting.Path, &setting.UpdatedAt)
 	return setting, err
+}
+
+func (s *Store) CreateUser(ctx context.Context, user models.User) (models.User, error) {
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO users (
+			phone,
+			country_code,
+			nickname,
+			password_hash,
+			password_salt,
+			terms_accepted_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, now(), now())
+		ON CONFLICT (phone) DO NOTHING
+		RETURNING id, phone, country_code, nickname, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+	`,
+		user.Phone,
+		user.CountryCode,
+		user.Nickname,
+		user.PasswordHash,
+		user.PasswordSalt,
+	).Scan(
+		&user.ID,
+		&user.Phone,
+		&user.CountryCode,
+		&user.Nickname,
+		&user.PasswordHash,
+		&user.PasswordSalt,
+		&user.TermsAcceptedAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.User{}, ErrUserAlreadyExists
+	}
+	return user, err
+}
+
+func (s *Store) GetUserByPhone(ctx context.Context, phone string) (models.User, error) {
+	var user models.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, phone, country_code, nickname, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+		FROM users
+		WHERE phone = $1
+	`, phone).Scan(
+		&user.ID,
+		&user.Phone,
+		&user.CountryCode,
+		&user.Nickname,
+		&user.PasswordHash,
+		&user.PasswordSalt,
+		&user.TermsAcceptedAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	return user, err
 }
 
 func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, error) {

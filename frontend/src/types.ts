@@ -34,3 +34,38 @@ export type LibrarySettingResponse = {
   setting: LibrarySetting;
   scan: ScanResult;
 };
+
+export type AuthUser = {
+  id: number;
+  phone: string;
+  country_code: string;
+  nickname: string;
+  created_at: string;
+};
+
+export type AuthResponse = {
+  user: AuthUser;
+};
+
+export type RegisterRequest = {
+  nickname: string;
+  phone: string;
+  password: string;
+  accepted: boolean;
+};
+
+export type LoginRequest = {
+  phone: string;
+  password: string;
+  accepted: boolean;
+};
+
+export type PresenceRequest = {
+  session_id: string;
+  user_id?: number;
+  phone?: string;
+};
+
+export type PresenceResponse = {
+  online_count: number;
+};

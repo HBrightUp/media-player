@@ -21,8 +21,21 @@ CREATE TABLE IF NOT EXISTS tracks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id BIGSERIAL PRIMARY KEY,
+  phone TEXT NOT NULL UNIQUE,
+  country_code TEXT NOT NULL DEFAULT '+86',
+  nickname TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  terms_accepted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS tracks_title_idx ON tracks (lower(title));
 CREATE INDEX IF NOT EXISTS tracks_artist_idx ON tracks (lower(artist));
 CREATE INDEX IF NOT EXISTS tracks_album_idx ON tracks (lower(album));
+CREATE INDEX IF NOT EXISTS users_phone_idx ON users (phone);

@@ -1,9 +1,27 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { getTracks, scanLibrary, streamURL } from "./api";
-import type { Track } from "./types";
+import { getTracks, loginUser, registerUser, scanLibrary, sendPresenceHeartbeat, sendPresenceOffline, streamURL } from "./api";
+import type { AuthUser, Track } from "./types";
 
 type RepeatMode = "off" | "one" | "all";
 type AppPage = "music" | "chat" | "discover" | "profile";
+type AuthMode = "register" | "login";
+type AuthSession = {
+  userId?: number;
+  phone: string;
+  nickname: string;
+  expiresAt: number;
+  createdAt: string;
+};
+type AuthReadResult = {
+  session: AuthSession | null;
+  expired: boolean;
+};
+type AuthFormState = {
+  nickname: string;
+  phone: string;
+  password: string;
+  accepted: boolean;
+};
 
 const tabs = ["音乐列表", "歌曲搜索"];
 const appPages: Array<{ id: AppPage; label: string }> = [
@@ -18,12 +36,41 @@ const repeatModeLabels: Record<RepeatMode, string> = {
   one: "单曲循环",
   all: "列表循环"
 };
+const authSessionStorageKey = "media-player-auth-session";
+const authProfileStorageKey = "media-player-auth-profile";
+const presenceSessionStorageKey = "media-player-presence-session";
+const authSessionDurationMs = 7 * 24 * 60 * 60 * 1000;
+const presenceHeartbeatIntervalMs = 25_000;
+const nicknameMaxLength = 20;
+const passwordMinLength = 6;
+const passwordMaxLength = 64;
+const mainlandPhonePattern = /^1[3-9]\d{9}$/;
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const initialAuthRef = useRef<AuthReadResult | null>(null);
+  const initialAuthProfileRef = useRef<AuthFormState | null>(null);
+  const presenceSessionIdRef = useRef<string | null>(null);
+  if (!initialAuthRef.current) {
+    initialAuthRef.current = readAuthSession();
+  }
+  if (!initialAuthProfileRef.current) {
+    initialAuthProfileRef.current = readAuthProfile();
+  }
+  if (!presenceSessionIdRef.current) {
+    presenceSessionIdRef.current = readPresenceSessionID();
+  }
   const [tracks, setTracks] = useState<Track[]>([]);
   const [currentTrackId, setCurrentTrackId] = useState<number | null>(null);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(initialAuthRef.current.session);
+  const [authMode, setAuthMode] = useState<AuthMode>(() => (initialAuthRef.current?.expired || initialAuthProfileRef.current?.phone ? "login" : "register"));
+  const [authForm, setAuthForm] = useState<AuthFormState>(() => initialAuthProfileRef.current ?? createEmptyAuthForm());
+  const [authMessage, setAuthMessage] = useState(initialAuthRef.current.expired ? "登录已过期，请重新登录" : "");
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
+  const [onlineCount, setOnlineCount] = useState<number | null>(null);
+  const [isOnlineCountUnavailable, setIsOnlineCountUnavailable] = useState(false);
   const [activePage, setActivePage] = useState<AppPage>("music");
   const [activeTab, setActiveTab] = useState(tabs[0]);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>("all");
@@ -56,6 +103,68 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const result = readAuthSession();
+      setAuthSession((previous) => {
+        if (previous && !result.session) {
+          setAuthMessage("登录已过期，请重新登录");
+        }
+        return result.session;
+      });
+    }, 30_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    const sessionID = presenceSessionIdRef.current;
+    if (!authSession || !sessionID) {
+      setOnlineCount(null);
+      setIsOnlineCountUnavailable(false);
+      return;
+    }
+
+    let isCancelled = false;
+    const reportPresence = async () => {
+      try {
+        const payload = await sendPresenceHeartbeat({
+          session_id: sessionID,
+          user_id: authSession.userId,
+          phone: authSession.phone
+        });
+        if (!isCancelled) {
+          setOnlineCount(payload.online_count);
+          setIsOnlineCountUnavailable(false);
+        }
+      } catch {
+        if (!isCancelled) {
+          setIsOnlineCountUnavailable(true);
+        }
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void reportPresence();
+      }
+    };
+
+    void reportPresence();
+    const intervalId = window.setInterval(() => {
+      void reportPresence();
+    }, presenceHeartbeatIntervalMs);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      void sendPresenceOffline({ session_id: sessionID }).catch(() => undefined);
+    };
+  }, [authSession?.userId, authSession?.phone]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -137,6 +246,78 @@ function App() {
       setIsSearchOpen(false);
       setActiveTab(tabs[0]);
     }
+  }
+
+  function updateAuthForm(field: keyof AuthFormState, value: string | boolean) {
+    setAuthForm((previous) => ({ ...previous, [field]: normalizeAuthField(field, value) }));
+    setAuthMessage("");
+  }
+
+  function handleAuthModeChange(mode: AuthMode) {
+    setAuthMode(mode);
+    setAuthMessage("");
+    setShowAuthPassword(false);
+  }
+
+  function handleAuthCloseAttempt() {
+    setAuthMessage("请先登录或注册后继续");
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const validationMessage = getAuthValidationMessage(authMode, authForm);
+    if (validationMessage) {
+      setAuthMessage(validationMessage);
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    try {
+      const phone = normalizePhone(authForm.phone);
+      const response =
+        authMode === "register"
+          ? await registerUser({
+              nickname: authForm.nickname.trim(),
+              phone,
+              password: authForm.password,
+              accepted: authForm.accepted
+            })
+          : await loginUser({
+              phone,
+              password: authForm.password,
+              accepted: authForm.accepted
+            });
+      const nextSession = createAuthSession(response.user);
+      persistAuthSession(nextSession);
+      persistAuthProfile(response.user);
+      setAuthSession(nextSession);
+      setAuthForm((previous) => ({
+        ...previous,
+        nickname: response.user.nickname,
+        phone: response.user.phone,
+        password: "",
+        accepted: false
+      }));
+      setAuthMessage("");
+      setShowAuthPassword(false);
+      setActivePage("music");
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "提交失败，请稍后再试");
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  function handleLogout() {
+    removeLocalStorage(authSessionStorageKey);
+    setAuthSession(null);
+    setAuthMode("login");
+    setAuthForm((previous) => ({ ...previous, password: "", accepted: false }));
+    setAuthMessage("");
+    setShowAuthPassword(false);
+    setActivePage("music");
+    setIsSearchOpen(false);
+    setActiveTab(tabs[0]);
   }
 
   function closeSearchDialog() {
@@ -243,6 +424,8 @@ function App() {
   }
 
   const emptyMessage = loadMessage || "暂无本地 MP3 音乐";
+  const isAuthVisible = !authSession;
+  const canSubmitAuth = !isAuthSubmitting && isAuthFormReady(authMode, authForm);
 
   return (
     <main className="player-screen" aria-label="MediaPlayer">
@@ -368,7 +551,13 @@ function App() {
             </footer>
           </section>
         ) : (
-          <EmptyPage page={activePage} />
+          <EmptyPage
+            page={activePage}
+            authSession={authSession}
+            onlineCount={onlineCount}
+            isOnlineCountUnavailable={isOnlineCountUnavailable}
+            onLogout={handleLogout}
+          />
         )}
       </section>
 
@@ -400,6 +589,22 @@ function App() {
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
       />
+
+      {isAuthVisible ? (
+        <AuthPage
+          mode={authMode}
+          form={authForm}
+          message={authMessage}
+          canSubmit={canSubmitAuth}
+          isSubmitting={isAuthSubmitting}
+          showPassword={showAuthPassword}
+          onChange={updateAuthForm}
+          onCloseAttempt={handleAuthCloseAttempt}
+          onModeChange={handleAuthModeChange}
+          onSubmit={handleAuthSubmit}
+          onTogglePassword={() => setShowAuthPassword((value) => !value)}
+        />
+      ) : null}
     </main>
   );
 }
@@ -416,6 +621,170 @@ function trackMatchesQuery(track: Track, keyword: string) {
   );
 }
 
+function readAuthSession(): AuthReadResult {
+  const rawSession = readLocalStorage(authSessionStorageKey);
+  if (!rawSession) {
+    return { session: null, expired: false };
+  }
+
+  try {
+    const parsed = JSON.parse(rawSession) as Partial<AuthSession>;
+    const expiresAt = typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0;
+    const userId = typeof parsed.userId === "number" ? parsed.userId : undefined;
+    const phone = typeof parsed.phone === "string" ? parsed.phone : "";
+    const nickname = typeof parsed.nickname === "string" ? parsed.nickname : "";
+    const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
+
+    if (!phone || !nickname || !createdAt || expiresAt <= Date.now()) {
+      removeLocalStorage(authSessionStorageKey);
+      return { session: null, expired: Boolean(expiresAt) };
+    }
+
+    return { session: { userId, phone, nickname, expiresAt, createdAt }, expired: false };
+  } catch {
+    removeLocalStorage(authSessionStorageKey);
+    return { session: null, expired: false };
+  }
+}
+
+function readAuthProfile(): AuthFormState {
+  const rawProfile = readLocalStorage(authProfileStorageKey);
+  if (!rawProfile) {
+    return createEmptyAuthForm();
+  }
+
+  try {
+    const parsed = JSON.parse(rawProfile) as Partial<AuthFormState>;
+    return {
+      ...createEmptyAuthForm(),
+      nickname: typeof parsed.nickname === "string" ? parsed.nickname : "",
+      phone: typeof parsed.phone === "string" ? parsed.phone : ""
+    };
+  } catch {
+    return createEmptyAuthForm();
+  }
+}
+
+function createEmptyAuthForm(): AuthFormState {
+  return {
+    nickname: "",
+    phone: "",
+    password: "",
+    accepted: false
+  };
+}
+
+function readPresenceSessionID() {
+  const existing = readLocalStorage(presenceSessionStorageKey);
+  if (existing && existing.length <= 128) {
+    return existing;
+  }
+  const sessionID = createPresenceSessionID();
+  writeLocalStorage(presenceSessionStorageKey, sessionID);
+  return sessionID;
+}
+
+function createPresenceSessionID() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `presence-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isAuthFormReady(mode: AuthMode, form: AuthFormState) {
+  return getAuthValidationMessage(mode, form) === "";
+}
+
+function getAuthValidationMessage(mode: AuthMode, form: AuthFormState) {
+  const nickname = form.nickname.trim();
+  const phone = normalizePhone(form.phone);
+
+  if (mode === "register" && !nickname) {
+    return "请填写昵称";
+  }
+  if (mode === "register" && Array.from(nickname).length > nicknameMaxLength) {
+    return `昵称不能超过${nicknameMaxLength}个字符`;
+  }
+  if (!mainlandPhonePattern.test(phone)) {
+    return "请输入有效的中国大陆手机号码";
+  }
+  if (form.password.length < passwordMinLength || form.password.length > passwordMaxLength) {
+    return `密码长度需为${passwordMinLength}-${passwordMaxLength}位`;
+  }
+  if (!form.accepted) {
+    return "请先同意软件许可及服务协议";
+  }
+  return "";
+}
+
+function createAuthSession(user: AuthUser): AuthSession {
+  return {
+    userId: user.id,
+    phone: user.phone,
+    nickname: user.nickname,
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + authSessionDurationMs
+  };
+}
+
+function persistAuthSession(session: AuthSession) {
+  writeLocalStorage(authSessionStorageKey, JSON.stringify(session));
+}
+
+function persistAuthProfile(user: Pick<AuthUser, "nickname" | "phone">) {
+  writeLocalStorage(
+    authProfileStorageKey,
+    JSON.stringify({
+      nickname: user.nickname.trim(),
+      phone: normalizePhone(user.phone)
+    })
+  );
+}
+
+function normalizePhone(phone: string) {
+  return phone.replace(/\D/g, "");
+}
+
+function normalizeAuthField(field: keyof AuthFormState, value: string | boolean) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  if (field === "nickname") {
+    return Array.from(value).slice(0, nicknameMaxLength).join("");
+  }
+  if (field === "phone") {
+    return normalizePhone(value).slice(0, 11);
+  }
+  if (field === "password") {
+    return value.slice(0, passwordMaxLength);
+  }
+  return value;
+}
+
+function readLocalStorage(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorage(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Local storage can be unavailable in private browsing modes.
+  }
+}
+
+function removeLocalStorage(key: string) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Local storage can be unavailable in private browsing modes.
+  }
+}
+
 function formatDuration(seconds?: number | null) {
   if (!seconds || seconds < 0 || !Number.isFinite(seconds)) {
     return "00:00";
@@ -426,11 +795,23 @@ function formatDuration(seconds?: number | null) {
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
-function EmptyPage({ page }: { page: Exclude<AppPage, "music"> }) {
+function EmptyPage({
+  page,
+  authSession,
+  onlineCount,
+  isOnlineCountUnavailable,
+  onLogout
+}: {
+  page: Exclude<AppPage, "music">;
+  authSession: AuthSession | null;
+  onlineCount: number | null;
+  isOnlineCountUnavailable: boolean;
+  onLogout: () => void;
+}) {
   const pageContent: Record<Exclude<AppPage, "music">, { title: string; message: string }> = {
     chat: { title: "聊天室", message: "暂无消息" },
     discover: { title: "发现", message: "暂无推荐" },
-    profile: { title: "我", message: "未登录" }
+    profile: { title: "我", message: authSession ? authSession.nickname || authSession.phone : "未登录" }
   };
   const content = pageContent[page];
 
@@ -439,8 +820,188 @@ function EmptyPage({ page }: { page: Exclude<AppPage, "music"> }) {
       <header className="simple-page-header">
         <h1>{content.title}</h1>
       </header>
-      <div className="simple-page-empty">{content.message}</div>
+      {page === "profile" && authSession ? (
+        <div className="profile-page-content">
+          <div className="profile-name">{content.message}</div>
+          <div className="online-stat" aria-label="当前APP在线总人数">
+            <span>当前APP在线总人数</span>
+            <strong>{isOnlineCountUnavailable || onlineCount === null ? "--" : onlineCount}</strong>
+            <span>{isOnlineCountUnavailable ? "暂不可用" : onlineCount === null ? "同步中" : "人"}</span>
+          </div>
+          <button className="logout-button" type="button" onClick={onLogout}>
+            退出登录
+          </button>
+        </div>
+      ) : (
+        <div className="simple-page-empty">{content.message}</div>
+      )}
     </section>
+  );
+}
+
+function AuthPage({
+  mode,
+  form,
+  message,
+  canSubmit,
+  isSubmitting,
+  showPassword,
+  onChange,
+  onCloseAttempt,
+  onModeChange,
+  onSubmit,
+  onTogglePassword
+}: {
+  mode: AuthMode;
+  form: AuthFormState;
+  message: string;
+  canSubmit: boolean;
+  isSubmitting: boolean;
+  showPassword: boolean;
+  onChange: (field: keyof AuthFormState, value: string | boolean) => void;
+  onCloseAttempt: () => void;
+  onModeChange: (mode: AuthMode) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onTogglePassword: () => void;
+}) {
+  const isRegister = mode === "register";
+
+  return (
+    <section className="auth-gate" role="dialog" aria-modal="true" aria-label={isRegister ? "手机号注册" : "手机号登录"}>
+      <div className="auth-panel">
+        <button className="auth-close-button" type="button" aria-label="关闭登录页" onClick={onCloseAttempt}>
+          <CloseIcon />
+        </button>
+
+        <div className="auth-content">
+          <h1>{isRegister ? "用手机号注册" : "手机号登录"}</h1>
+
+          {isRegister ? (
+            <button className="auth-avatar" type="button" aria-label="上传头像">
+              <CameraIcon />
+            </button>
+          ) : null}
+
+          <form className="auth-form" onSubmit={onSubmit}>
+            <div className="auth-fields">
+              {isRegister ? (
+                <AuthField
+                  label="昵称"
+                  name="nickname"
+                  placeholder="请填写昵称"
+                  value={form.nickname}
+                  maxLength={nicknameMaxLength}
+                  onChange={(value) => onChange("nickname", value)}
+                />
+              ) : null}
+              <div className="auth-row">
+                <span className="auth-label">国家/地区</span>
+                <span className="auth-region">中国大陆（+86）</span>
+              </div>
+              <AuthField
+                label="手机号"
+                name="phone"
+                placeholder="请填写手机号码"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={form.phone}
+                maxLength={11}
+                onChange={(value) => onChange("phone", value)}
+              />
+              <AuthField
+                label="密码"
+                name="password"
+                placeholder={isRegister ? "请设置密码" : "请输入密码"}
+                type={showPassword ? "text" : "password"}
+                autoComplete={isRegister ? "new-password" : "current-password"}
+                value={form.password}
+                maxLength={passwordMaxLength}
+                onChange={(value) => onChange("password", value)}
+                trailing={
+                  <button
+                    className="password-visibility-button"
+                    type="button"
+                    aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={onTogglePassword}
+                  >
+                    {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+                  </button>
+                }
+              />
+            </div>
+
+            <div className="auth-footer">
+              {message ? <p className="auth-message">{message}</p> : null}
+              <label className="auth-agreement">
+                <input
+                  type="checkbox"
+                  checked={form.accepted}
+                  onChange={(event) => onChange("accepted", event.target.checked)}
+                  aria-label="同意软件许可及服务协议"
+                />
+                <span className="auth-checkmark" aria-hidden="true" />
+                <span>
+                  我已阅读并同意 <span className="auth-agreement-link">《软件许可及服务协议》</span>
+                </span>
+              </label>
+              <p className="auth-note">本页面收集的信息仅用于注册账号</p>
+              <button className="auth-submit" type="submit" disabled={!canSubmit}>
+                {isSubmitting ? "提交中" : isRegister ? "同意并继续" : "同意并登录"}
+              </button>
+              <button className="auth-mode-toggle" type="button" onClick={() => onModeChange(isRegister ? "login" : "register")}>
+                {isRegister ? "已有账号？手机号登录" : "没有账号？手机号注册"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AuthField({
+  label,
+  name,
+  placeholder,
+  value,
+  type = "text",
+  inputMode,
+  autoComplete,
+  maxLength,
+  trailing,
+  onChange
+}: {
+  label: string;
+  name: string;
+  placeholder: string;
+  value: string;
+  type?: string;
+  inputMode?: "text" | "tel";
+  autoComplete?: string;
+  maxLength?: number;
+  trailing?: ReactNode;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="auth-row">
+      <span className="auth-label">{label}</span>
+      <span className={trailing ? "auth-input-wrap has-action" : "auth-input-wrap"}>
+        <input
+          className="auth-input"
+          type={type}
+          name={name}
+          inputMode={inputMode}
+          autoComplete={autoComplete}
+          placeholder={placeholder}
+          value={value}
+          maxLength={maxLength}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {trailing}
+      </span>
+    </label>
   );
 }
 
@@ -449,6 +1010,43 @@ function IconBase({ children }: { children: ReactNode }) {
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       {children}
     </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <IconBase>
+      <path d="M5 5l14 14M19 5 5 19" />
+    </IconBase>
+  );
+}
+
+function CameraIcon() {
+  return (
+    <IconBase>
+      <path d="M7 8h1.8L10 6h4l1.2 2H17a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3z" />
+      <circle cx="12" cy="13.5" r="3" />
+    </IconBase>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <IconBase>
+      <path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </IconBase>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <IconBase>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 5.2A10.5 10.5 0 0 1 12 5c6.2 0 9.5 7 9.5 7a16.2 16.2 0 0 1-2.6 3.4" />
+      <path d="M6.2 6.9C3.8 8.6 2.5 12 2.5 12s3.3 7 9.5 7a9.8 9.8 0 0 0 4.3-1" />
+      <path d="M9.8 9.8a3 3 0 0 0 4.4 4.4" />
+    </IconBase>
   );
 }
 
