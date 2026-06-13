@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -12,10 +14,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,12 +34,23 @@ import (
 
 const musicDirectoryKey = "music_directory"
 const (
-	nicknameMaxRunes   = 20
-	passwordMinLength  = 6
-	passwordMaxLength  = 64
-	passwordHashRounds = 100_000
-	passwordHashLength = 32
-	presenceTTL        = 75 * time.Second
+	nicknameMaxRunes        = 20
+	passwordMinLength       = 6
+	passwordMaxLength       = 64
+	passwordHashRounds      = 100_000
+	passwordHashLength      = 32
+	presenceTTL             = 75 * time.Second
+	chatMessageMaxRunes     = 500
+	chatHistoryDefaultLimit = 50
+	chatHistoryMaxLimit     = 100
+	chatAttachmentMaxBytes  = 2_000_000
+	chatMessageTypeText     = "text"
+	chatMessageTypeImage    = "image"
+	chatMessageTypeAudio    = "audio"
+	webSocketOpcodeClose    = 0x8
+	webSocketOpcodePing     = 0x9
+	webSocketOpcodePong     = 0xA
+	webSocketOpcodeText     = 0x1
 )
 
 var mainlandPhonePattern = regexp.MustCompile(`^1[3-9]\d{9}$`)
@@ -44,6 +60,7 @@ type Server struct {
 	scanner    *library.Scanner
 	corsOrigin string
 	presence   *presenceTracker
+	chat       *chatHub
 }
 
 type setLibraryRequest struct {
@@ -75,9 +92,41 @@ type presenceSession struct {
 	LastSeen time.Time
 }
 
+type chatMessageRequest struct {
+	RoomID         int64    `json:"room_id"`
+	UserID         int64    `json:"user_id"`
+	Phone          string   `json:"phone"`
+	Nickname       string   `json:"nickname"`
+	Content        string   `json:"content"`
+	MessageType    string   `json:"message_type"`
+	AttachmentName string   `json:"attachment_name"`
+	AttachmentMime string   `json:"attachment_mime"`
+	AttachmentData string   `json:"attachment_data"`
+	Mentions       []string `json:"mentions"`
+}
+
+type chatReadRequest struct {
+	RoomID int64 `json:"room_id"`
+	UserID int64 `json:"user_id"`
+}
+
 type presenceTracker struct {
 	mu       sync.Mutex
 	sessions map[string]presenceSession
+}
+
+type chatHub struct {
+	mu      sync.Mutex
+	clients map[*chatClient]struct{}
+}
+
+type chatClient struct {
+	conn     net.Conn
+	roomID   int64
+	userID   int64
+	nickname string
+	phone    string
+	mu       sync.Mutex
 }
 
 func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Server {
@@ -86,6 +135,7 @@ func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Se
 		scanner:    scanner,
 		corsOrigin: corsOrigin,
 		presence:   newPresenceTracker(),
+		chat:       newChatHub(),
 	}
 }
 
@@ -96,6 +146,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/presence/heartbeat", s.handlePresenceHeartbeat)
 	mux.HandleFunc("/api/presence/offline", s.handlePresenceOffline)
+	mux.HandleFunc("/api/chat/rooms", s.handleChatRooms)
+	mux.HandleFunc("/api/chat/messages", s.handleChatMessages)
+	mux.HandleFunc("/api/chat/messages/", s.handleChatMessageRoute)
+	mux.HandleFunc("/api/chat/read", s.handleChatRead)
+	mux.HandleFunc("/api/chat/ws", s.handleChatWebSocket)
 	mux.HandleFunc("/api/settings/library", s.handleLibrarySetting)
 	mux.HandleFunc("/api/library/scan", s.handleScan)
 	mux.HandleFunc("/api/tracks", s.handleTracks)
@@ -234,6 +289,201 @@ func (s *Server) handlePresenceOffline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"online_count": onlineCount,
 	})
+}
+
+func (s *Server) handleChatRooms(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+
+	rooms, err := s.store.ListChatRooms(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取聊天室失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rooms": rooms,
+	})
+}
+
+func (s *Server) handleChatMessages(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		limit := parsePositiveInt(r.URL.Query().Get("limit"), chatHistoryDefaultLimit, chatHistoryMaxLimit)
+		beforeID := parsePositiveInt64(r.URL.Query().Get("before_id"))
+		roomID, err := validateChatRoomID(r.URL.Query().Get("room_id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		query := normalizeChatSearchQuery(r.URL.Query().Get("q"))
+		messages, err := s.store.ListChatMessages(r.Context(), roomID, limit+1, beforeID, query)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取聊天记录失败")
+			return
+		}
+		hasMore := len(messages) > limit
+		if hasMore {
+			messages = messages[len(messages)-limit:]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"messages": messages,
+			"has_more": hasMore,
+		})
+
+	case http.MethodPost:
+		var request chatMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "请求格式不正确")
+			return
+		}
+		message, phone, err := validateChatMessageRequest(request)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		message, err = s.store.CreateChatMessage(r.Context(), message, phone)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "发送消息失败")
+			return
+		}
+		s.chat.BroadcastRoom(message.RoomID, map[string]any{
+			"type":    "message",
+			"message": message,
+		})
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"message": message,
+		})
+
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleChatMessageRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w)
+		return
+	}
+	id, ok := parseIDFromPrefix(r.URL.Path, "/api/chat/messages/")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	userID := parsePositiveInt64(r.URL.Query().Get("user_id"))
+	if userID <= 0 {
+		writeError(w, http.StatusBadRequest, "请先登录后撤回消息")
+		return
+	}
+
+	message, err := s.store.RecallChatMessage(r.Context(), id, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "消息不存在或不能撤回")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "撤回消息失败")
+		return
+	}
+	s.chat.BroadcastRoom(message.RoomID, map[string]any{
+		"type":    "recall",
+		"message": message,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message": message,
+	})
+}
+
+func (s *Server) handleChatRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+
+	var request chatReadRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	if request.RoomID <= 0 || request.UserID <= 0 {
+		writeError(w, http.StatusBadRequest, "缺少已读所需的房间或用户信息")
+		return
+	}
+	if err := s.store.MarkChatRoomRead(r.Context(), request.RoomID, request.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "更新已读状态失败")
+		return
+	}
+	s.chat.BroadcastRoom(request.RoomID, map[string]any{
+		"type":    "read",
+		"room_id": request.RoomID,
+		"user_id": request.UserID,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+	})
+}
+
+func (s *Server) handleChatWebSocket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	roomID, err := validateChatRoomID(r.URL.Query().Get("room_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	nickname := strings.TrimSpace(r.URL.Query().Get("nickname"))
+	if nickname == "" {
+		nickname = "匿名用户"
+	}
+	if utf8.RuneCountInString(nickname) > nicknameMaxRunes {
+		nickname = string([]rune(nickname)[:nicknameMaxRunes])
+	}
+	if !isWebSocketUpgrade(r) {
+		writeError(w, http.StatusBadRequest, "需要 WebSocket 连接")
+		return
+	}
+	key := strings.TrimSpace(r.Header.Get("Sec-WebSocket-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "WebSocket 握手失败")
+		return
+	}
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "当前服务不支持 WebSocket")
+		return
+	}
+	conn, rw, err := hijacker.Hijack()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "WebSocket 连接失败")
+		return
+	}
+
+	accept := webSocketAcceptKey(key)
+	_, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + accept + "\r\n\r\n")
+	if err != nil {
+		conn.Close()
+		return
+	}
+	if err := rw.Flush(); err != nil {
+		conn.Close()
+		return
+	}
+
+	client := &chatClient{
+		conn:     conn,
+		roomID:   roomID,
+		userID:   parsePositiveInt64(r.URL.Query().Get("user_id")),
+		nickname: nickname,
+		phone:    normalizePresencePhone(r.URL.Query().Get("phone")),
+	}
+	s.chat.Add(client)
+	go s.chat.ReadUntilClose(client, rw.Reader)
 }
 
 func (s *Server) handleLibrarySetting(w http.ResponseWriter, r *http.Request) {
@@ -438,6 +688,120 @@ func validatePassword(password string) (string, error) {
 	return password, nil
 }
 
+func validateChatRoomID(value string) (int64, error) {
+	roomID := parsePositiveInt64(value)
+	if roomID <= 0 {
+		return 0, errors.New("请选择聊天室")
+	}
+	return roomID, nil
+}
+
+func validateChatMessageRequest(request chatMessageRequest) (models.ChatMessage, string, error) {
+	if request.RoomID <= 0 {
+		return models.ChatMessage{}, "", errors.New("请选择聊天室")
+	}
+	nickname := strings.TrimSpace(request.Nickname)
+	if nickname == "" {
+		return models.ChatMessage{}, "", errors.New("昵称不能为空")
+	}
+	if utf8.RuneCountInString(nickname) > nicknameMaxRunes {
+		return models.ChatMessage{}, "", fmt.Errorf("昵称不能超过%d个字符", nicknameMaxRunes)
+	}
+
+	messageType := strings.TrimSpace(request.MessageType)
+	if messageType == "" {
+		messageType = chatMessageTypeText
+	}
+	if messageType != chatMessageTypeText && messageType != chatMessageTypeImage && messageType != chatMessageTypeAudio {
+		return models.ChatMessage{}, "", errors.New("消息类型不支持")
+	}
+
+	content := strings.TrimSpace(request.Content)
+	if content == "" && messageType == chatMessageTypeText {
+		return models.ChatMessage{}, "", errors.New("消息不能为空")
+	}
+	if utf8.RuneCountInString(content) > chatMessageMaxRunes {
+		return models.ChatMessage{}, "", fmt.Errorf("消息不能超过%d个字符", chatMessageMaxRunes)
+	}
+	attachmentName := strings.TrimSpace(request.AttachmentName)
+	attachmentMime := strings.TrimSpace(request.AttachmentMime)
+	attachmentData := strings.TrimSpace(request.AttachmentData)
+	if messageType == chatMessageTypeImage || messageType == chatMessageTypeAudio {
+		if attachmentData == "" || attachmentMime == "" {
+			return models.ChatMessage{}, "", errors.New("请先选择要发送的文件")
+		}
+		if len(attachmentData) > chatAttachmentMaxBytes {
+			return models.ChatMessage{}, "", errors.New("文件过大，请选择较小的图片或音频")
+		}
+		if messageType == chatMessageTypeImage && !strings.HasPrefix(attachmentMime, "image/") {
+			return models.ChatMessage{}, "", errors.New("请选择图片文件")
+		}
+		if messageType == chatMessageTypeAudio && !strings.HasPrefix(attachmentMime, "audio/") {
+			return models.ChatMessage{}, "", errors.New("请选择音频文件")
+		}
+		if content == "" {
+			if messageType == chatMessageTypeImage {
+				content = "[图片]"
+			} else {
+				content = "[语音]"
+			}
+		}
+	} else {
+		attachmentName = ""
+		attachmentMime = ""
+		attachmentData = ""
+	}
+
+	phone := ""
+	if strings.TrimSpace(request.Phone) != "" {
+		normalized, err := validatePhone(request.Phone)
+		if err != nil {
+			return models.ChatMessage{}, "", err
+		}
+		phone = normalized
+	}
+	if request.UserID <= 0 && phone == "" {
+		return models.ChatMessage{}, "", errors.New("请先登录后发送消息")
+	}
+
+	return models.ChatMessage{
+		RoomID:         request.RoomID,
+		UserID:         request.UserID,
+		Nickname:       nickname,
+		Content:        content,
+		MessageType:    messageType,
+		AttachmentName: attachmentName,
+		AttachmentMime: attachmentMime,
+		AttachmentData: attachmentData,
+		Mentions:       normalizeMentions(request.Mentions),
+	}, phone, nil
+}
+
+func normalizeMentions(mentions []string) []string {
+	seen := make(map[string]struct{})
+	normalized := make([]string, 0, len(mentions))
+	for _, mention := range mentions {
+		mention = strings.TrimSpace(strings.TrimPrefix(mention, "@"))
+		if mention == "" || utf8.RuneCountInString(mention) > nicknameMaxRunes {
+			continue
+		}
+		if _, ok := seen[mention]; ok {
+			continue
+		}
+		seen[mention] = struct{}{}
+		normalized = append(normalized, mention)
+	}
+	return normalized
+}
+
+func normalizeChatSearchQuery(query string) string {
+	query = strings.TrimSpace(query)
+	if utf8.RuneCountInString(query) > 40 {
+		query = string([]rune(query)[:40])
+	}
+	return query
+}
+
 func validatePresenceSessionID(sessionID string) (string, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -563,6 +927,242 @@ func presenceOnlineKey(sessionID string, session presenceSession) string {
 	return "session:" + sessionID
 }
 
+func newChatHub() *chatHub {
+	return &chatHub{
+		clients: make(map[*chatClient]struct{}),
+	}
+}
+
+func (h *chatHub) Add(client *chatClient) {
+	h.mu.Lock()
+	h.clients[client] = struct{}{}
+	h.mu.Unlock()
+
+	h.BroadcastMembers(client.roomID)
+}
+
+func (h *chatHub) Remove(client *chatClient) {
+	removed := false
+	h.mu.Lock()
+	if _, ok := h.clients[client]; ok {
+		delete(h.clients, client)
+		_ = client.conn.Close()
+		removed = true
+	}
+	h.mu.Unlock()
+
+	if removed {
+		h.BroadcastMembers(client.roomID)
+	}
+}
+
+func (h *chatHub) BroadcastRoom(roomID int64, event map[string]any) {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+
+	h.mu.Lock()
+	clients := make([]*chatClient, 0, len(h.clients))
+	for client := range h.clients {
+		if client.roomID == roomID {
+			clients = append(clients, client)
+		}
+	}
+	h.mu.Unlock()
+
+	for _, client := range clients {
+		if err := writeWebSocketText(client, payload); err != nil {
+			h.Remove(client)
+		}
+	}
+}
+
+func (h *chatHub) BroadcastMembers(roomID int64) {
+	h.BroadcastRoom(roomID, map[string]any{
+		"type":    "members",
+		"room_id": roomID,
+		"members": h.Members(roomID),
+	})
+}
+
+func (h *chatHub) Members(roomID int64) []models.ChatMember {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	seen := make(map[string]struct{})
+	members := make([]models.ChatMember, 0)
+	for client := range h.clients {
+		if client.roomID != roomID {
+			continue
+		}
+		key := fmt.Sprintf("conn:%p", client)
+		if client.userID > 0 {
+			key = fmt.Sprintf("user:%d", client.userID)
+		} else if client.phone != "" {
+			key = "phone:" + client.phone
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		members = append(members, models.ChatMember{
+			UserID:   client.userID,
+			Nickname: client.nickname,
+			Phone:    client.phone,
+		})
+	}
+	return members
+}
+
+func (h *chatHub) ReadUntilClose(client *chatClient, reader *bufio.Reader) {
+	defer h.Remove(client)
+
+	for {
+		opcode, payload, err := readWebSocketFrame(reader)
+		if err != nil {
+			return
+		}
+		switch opcode {
+		case webSocketOpcodeClose:
+			return
+		case webSocketOpcodePing:
+			if err := writeWebSocketFrame(client, webSocketOpcodePong, payload); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func parsePositiveInt(value string, fallback int, max int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	if max > 0 && parsed > max {
+		return max
+	}
+	return parsed
+}
+
+func parsePositiveInt64(value string) int64 {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
+func parseIDFromPrefix(path string, prefix string) (int64, bool) {
+	if !strings.HasPrefix(path, prefix) {
+		return 0, false
+	}
+	id := parsePositiveInt64(strings.TrimPrefix(path, prefix))
+	return id, id > 0
+}
+
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		headerContainsToken(r.Header.Get("Connection"), "upgrade") &&
+		r.Header.Get("Sec-WebSocket-Version") == "13"
+}
+
+func headerContainsToken(header string, token string) bool {
+	for _, part := range strings.Split(header, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
+}
+
+func webSocketAcceptKey(key string) string {
+	hash := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(hash[:])
+}
+
+func readWebSocketFrame(reader *bufio.Reader) (byte, []byte, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return 0, nil, err
+	}
+
+	opcode := header[0] & 0x0F
+	masked := header[1]&0x80 != 0
+	length := uint64(header[1] & 0x7F)
+	switch length {
+	case 126:
+		var extended [2]byte
+		if _, err := io.ReadFull(reader, extended[:]); err != nil {
+			return 0, nil, err
+		}
+		length = uint64(binary.BigEndian.Uint16(extended[:]))
+	case 127:
+		var extended [8]byte
+		if _, err := io.ReadFull(reader, extended[:]); err != nil {
+			return 0, nil, err
+		}
+		length = binary.BigEndian.Uint64(extended[:])
+	}
+
+	if length > 64*1024 {
+		return 0, nil, errors.New("websocket frame too large")
+	}
+
+	var maskKey [4]byte
+	if masked {
+		if _, err := io.ReadFull(reader, maskKey[:]); err != nil {
+			return 0, nil, err
+		}
+	}
+
+	payload := make([]byte, length)
+	if length > 0 {
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			return 0, nil, err
+		}
+	}
+	if masked {
+		for index := range payload {
+			payload[index] ^= maskKey[index%len(maskKey)]
+		}
+	}
+	return opcode, payload, nil
+}
+
+func writeWebSocketText(client *chatClient, payload []byte) error {
+	return writeWebSocketFrame(client, webSocketOpcodeText, payload)
+}
+
+func writeWebSocketFrame(client *chatClient, opcode byte, payload []byte) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	header := make([]byte, 0, 10)
+	header = append(header, 0x80|opcode)
+	length := len(payload)
+	switch {
+	case length < 126:
+		header = append(header, byte(length))
+	case length <= 65535:
+		header = append(header, 126, byte(length>>8), byte(length))
+	default:
+		header = append(header, 127)
+		var extended [8]byte
+		binary.BigEndian.PutUint64(extended[:], uint64(length))
+		header = append(header, extended[:]...)
+	}
+
+	if _, err := client.conn.Write(header); err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	_, err := client.conn.Write(payload)
+	return err
+}
+
 func publicUser(user models.User) map[string]any {
 	return map[string]any{
 		"id":           user.ID,
@@ -581,7 +1181,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

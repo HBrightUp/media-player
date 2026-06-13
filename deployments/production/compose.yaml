@@ -1,4 +1,20 @@
 services:
+  frontend:
+    build:
+      context: ../../frontend
+    container_name: media-player-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      MEDIA_PLAYER_SITE_ADDRESS: ${MEDIA_PLAYER_SITE_ADDRESS:?MEDIA_PLAYER_SITE_ADDRESS is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - media_player_caddy_data:/data
+      - media_player_caddy_config:/config
+
   postgres:
     image: postgres:16-alpine
     container_name: media-player-postgres
@@ -26,7 +42,7 @@ services:
     environment:
       SERVER_ADDR: ":8080"
       DATABASE_URL: "postgres://${POSTGRES_USER:-media_player}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_player}?sslmode=disable"
-      CORS_ORIGIN: "https://${MEDIA_PLAYER_DOMAIN}"
+      CORS_ORIGIN: "${MEDIA_PLAYER_PUBLIC_ORIGIN:?MEDIA_PLAYER_PUBLIC_ORIGIN is required}"
       MUSIC_DIRECTORY: "/music"
     ports:
       - "127.0.0.1:18080:8080"
@@ -34,4 +50,6 @@ services:
       - ${MUSIC_DIRECTORY:-/opt/media-player/music}:/music:ro
 
 volumes:
+  media_player_caddy_data:
+  media_player_caddy_config:
   media_player_pgdata:

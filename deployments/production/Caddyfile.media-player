@@ -1,4 +1,4 @@
-media.hbrightup.fun, http://47.112.188.195 {
+{$MEDIA_PLAYER_SITE_ADDRESS} {
 	encode zstd gzip
 
 	handle /api/* {
