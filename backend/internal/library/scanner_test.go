@@ -17,7 +17,7 @@ func TestBuildTrackReadsID3v22Album(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, err := buildTrack(root, path, ".mp3")
+	track, _, err := buildTrack(root, path, ".mp3", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestBuildTrackFallsBackToID3v1Album(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, err := buildTrack(root, path, ".mp3")
+	track, _, err := buildTrack(root, path, ".mp3", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestBuildTrackDoesNotUseFilenameAsAlbum(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, err := buildTrack(root, path, ".mp3")
+	track, _, err := buildTrack(root, path, ".mp3", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +80,48 @@ func TestBuildTrackDoesNotUseFilenameAsAlbum(t *testing.T) {
 	}
 	if track.Album != "未知专辑" {
 		t.Fatalf("album = %q, want %q", track.Album, "未知专辑")
+	}
+}
+
+func TestBuildTrackReadsLyricsFromConfiguredDirectory(t *testing.T) {
+	root := t.TempDir()
+	lyricsRoot := t.TempDir()
+	audioDir := filepath.Join(root, "artist")
+	lyricsDir := filepath.Join(lyricsRoot, "artist")
+	if err := os.MkdirAll(audioDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(lyricsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(audioDir, "song.flac")
+	if err := os.WriteFile(path, []byte("not a real flac"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lyricsPath := filepath.Join(lyricsDir, "song.lrc")
+	if err := os.WriteFile(lyricsPath, []byte("[00:01.20]第一句\n[00:03.40]第二句"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, lyrics, err := buildTrack(root, path, ".flac", lyricsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lyrics == nil {
+		t.Fatal("lyrics = nil, want LRC lyrics")
+	}
+	if lyrics.Source != "lyrics_directory" {
+		t.Fatalf("source = %q, want %q", lyrics.Source, "lyrics_directory")
+	}
+	if lyrics.Format != "lrc" {
+		t.Fatalf("format = %q, want %q", lyrics.Format, "lrc")
+	}
+	if len(lyrics.Lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lyrics.Lines))
+	}
+	if lyrics.Lines[0].Text != "第一句" {
+		t.Fatalf("first line = %q, want %q", lyrics.Lines[0].Text, "第一句")
 	}
 }
 

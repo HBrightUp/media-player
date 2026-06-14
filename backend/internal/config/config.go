@@ -9,11 +9,12 @@ import (
 )
 
 type Config struct {
-	Addr           string
-	DatabaseURL    string
-	CORSOrigin     string
-	MusicDirectory string
-	ConfigPath     string
+	Addr            string
+	DatabaseURL     string
+	CORSOrigin      string
+	MusicDirectory  string
+	LyricsDirectory string
+	ConfigPath      string
 }
 
 func Load() (Config, error) {
@@ -34,6 +35,7 @@ func Load() (Config, error) {
 	cfg.DatabaseURL = getenv("DATABASE_URL", cfg.DatabaseURL)
 	cfg.CORSOrigin = getenv("CORS_ORIGIN", cfg.CORSOrigin)
 	cfg.MusicDirectory = getenv("MUSIC_DIRECTORY", cfg.MusicDirectory)
+	cfg.LyricsDirectory = getenv("LYRICS_DIRECTORY", cfg.LyricsDirectory)
 	return cfg, nil
 }
 
@@ -152,6 +154,8 @@ func applyYAML(cfg *Config, values map[string]string) {
 			cfg.CORSOrigin = value
 		case "music_directory", "default_music_directory", "songs_directory", "library.music_directory", "library.default_directory":
 			cfg.MusicDirectory = value
+		case "lyrics_directory", "library.lyrics_directory":
+			cfg.LyricsDirectory = value
 		}
 	}
 }

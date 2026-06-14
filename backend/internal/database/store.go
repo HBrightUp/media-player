@@ -2,8 +2,10 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,261 +127,9 @@ func (s *Store) GetUserByPhone(ctx context.Context, phone string) (models.User, 
 	return user, err
 }
 
-func (s *Store) ListChatRooms(ctx context.Context) ([]models.ChatRoom, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, description, created_at
-		FROM chat_rooms
-		WHERE name NOT IN ('音乐闲聊', '发现')
-		ORDER BY id
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	rooms := make([]models.ChatRoom, 0)
-	for rows.Next() {
-		var room models.ChatRoom
-		if err := rows.Scan(&room.ID, &room.Name, &room.Description, &room.CreatedAt); err != nil {
-			return nil, err
-		}
-		rooms = append(rooms, room)
-	}
-	return rooms, rows.Err()
-}
-
-func (s *Store) CreateChatMessage(ctx context.Context, message models.ChatMessage, phone string) (models.ChatMessage, error) {
-	userID := sql.NullInt64{Int64: message.UserID, Valid: message.UserID > 0}
-	mentions, err := json.Marshal(message.Mentions)
-	if err != nil {
-		return models.ChatMessage{}, fmt.Errorf("marshal mentions: %w", err)
-	}
-	var readBy []byte
-	err = s.pool.QueryRow(ctx, `
-		INSERT INTO chat_messages (
-			room_id,
-			user_id,
-			phone,
-			nickname,
-			content,
-			message_type,
-			attachment_name,
-			attachment_mime,
-			attachment_data,
-			mentions
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-		RETURNING
-			id,
-			room_id,
-			COALESCE(user_id, 0),
-			nickname,
-			content,
-			message_type,
-			attachment_name,
-			attachment_mime,
-			attachment_data,
-			mentions,
-			read_by,
-			recalled_at,
-			created_at
-	`,
-		message.RoomID,
-		userID,
-		phone,
-		message.Nickname,
-		message.Content,
-		message.MessageType,
-		message.AttachmentName,
-		message.AttachmentMime,
-		message.AttachmentData,
-		mentions,
-	).Scan(
-		&message.ID,
-		&message.RoomID,
-		&message.UserID,
-		&message.Nickname,
-		&message.Content,
-		&message.MessageType,
-		&message.AttachmentName,
-		&message.AttachmentMime,
-		&message.AttachmentData,
-		&mentions,
-		&readBy,
-		&message.RecalledAt,
-		&message.CreatedAt,
-	)
-	if err != nil {
-		return message, err
-	}
-	if err := json.Unmarshal(mentions, &message.Mentions); err != nil {
-		return models.ChatMessage{}, fmt.Errorf("unmarshal mentions: %w", err)
-	}
-	if err := json.Unmarshal(readBy, &message.ReadBy); err != nil {
-		return models.ChatMessage{}, fmt.Errorf("unmarshal read_by: %w", err)
-	}
-	return message, err
-}
-
-func (s *Store) ListChatMessages(ctx context.Context, roomID int64, limit int, beforeID int64, query string) ([]models.ChatMessage, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-
-	var (
-		rows pgx.Rows
-		err  error
-	)
-	if beforeID > 0 {
-		rows, err = s.pool.Query(ctx, `
-			WITH selected AS (
-				SELECT
-					id,
-					room_id,
-					COALESCE(user_id, 0) AS user_id,
-					nickname,
-					content,
-					message_type,
-					attachment_name,
-					attachment_mime,
-					attachment_data,
-					mentions,
-					read_by,
-					recalled_at,
-					created_at
-				FROM chat_messages
-				WHERE room_id = $1
-					AND id < $2
-					AND (
-						$4 = ''
-						OR position(lower($4) in lower(content)) > 0
-						OR position(lower($4) in lower(nickname)) > 0
-					)
-				ORDER BY id DESC
-				LIMIT $3
-			)
-			SELECT
-				id,
-				room_id,
-				user_id,
-				nickname,
-				content,
-				message_type,
-				attachment_name,
-				attachment_mime,
-				attachment_data,
-				mentions,
-				read_by,
-				recalled_at,
-				created_at
-			FROM selected
-			ORDER BY id ASC
-		`, roomID, beforeID, limit, query)
-	} else {
-		rows, err = s.pool.Query(ctx, `
-			WITH selected AS (
-				SELECT
-					id,
-					room_id,
-					COALESCE(user_id, 0) AS user_id,
-					nickname,
-					content,
-					message_type,
-					attachment_name,
-					attachment_mime,
-					attachment_data,
-					mentions,
-					read_by,
-					recalled_at,
-					created_at
-				FROM chat_messages
-				WHERE room_id = $1
-					AND (
-						$3 = ''
-						OR position(lower($3) in lower(content)) > 0
-						OR position(lower($3) in lower(nickname)) > 0
-					)
-				ORDER BY id DESC
-				LIMIT $2
-			)
-			SELECT
-				id,
-				room_id,
-				user_id,
-				nickname,
-				content,
-				message_type,
-				attachment_name,
-				attachment_mime,
-				attachment_data,
-				mentions,
-				read_by,
-				recalled_at,
-				created_at
-			FROM selected
-			ORDER BY id ASC
-		`, roomID, limit, query)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	messages := make([]models.ChatMessage, 0)
-	for rows.Next() {
-		message, err := scanChatMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-	}
-	return messages, rows.Err()
-}
-
-func (s *Store) RecallChatMessage(ctx context.Context, messageID, userID int64) (models.ChatMessage, error) {
-	row := s.pool.QueryRow(ctx, `
-		UPDATE chat_messages
-		SET recalled_at = now()
-		WHERE id = $1
-			AND user_id = $2
-			AND recalled_at IS NULL
-		RETURNING
-			id,
-			room_id,
-			COALESCE(user_id, 0),
-			nickname,
-			content,
-			message_type,
-			attachment_name,
-			attachment_mime,
-			attachment_data,
-			mentions,
-			read_by,
-			recalled_at,
-			created_at
-	`, messageID, userID)
-	return scanChatMessage(row)
-}
-
-func (s *Store) MarkChatRoomRead(ctx context.Context, roomID, userID int64) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE chat_messages
-		SET read_by = read_by || to_jsonb(ARRAY[$2]::bigint[])
-		WHERE room_id = $1
-			AND recalled_at IS NULL
-			AND user_id IS DISTINCT FROM $2
-			AND NOT read_by @> to_jsonb(ARRAY[$2]::bigint[])
-	`, roomID, userID)
-	return err
-}
-
 func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, error) {
 	var id int64
-	lyrics, err := json.Marshal(track.Lyrics)
-	if err != nil {
-		return 0, fmt.Errorf("marshal lyrics: %w", err)
-	}
-	err = s.pool.QueryRow(ctx, `
+	err := s.pool.QueryRow(ctx, `
 		INSERT INTO tracks (
 			path,
 			relative_path,
@@ -391,10 +141,9 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			size_bytes,
 			duration_seconds,
 			modified_at,
-			lyrics,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 		ON CONFLICT (path)
 		DO UPDATE SET
 			relative_path = EXCLUDED.relative_path,
@@ -406,7 +155,6 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			size_bytes = EXCLUDED.size_bytes,
 			duration_seconds = EXCLUDED.duration_seconds,
 			modified_at = EXCLUDED.modified_at,
-			lyrics = EXCLUDED.lyrics,
 			updated_at = now()
 		RETURNING id
 	`,
@@ -420,13 +168,20 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 		track.SizeBytes,
 		track.DurationSeconds,
 		track.ModifiedAt,
-		lyrics,
 	).Scan(&id)
 	return id, err
 }
 
 func (s *Store) ClearTracks(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM tracks`)
+	return err
+}
+
+func (s *Store) DeleteTracksExceptPaths(ctx context.Context, paths []string) error {
+	if len(paths) == 0 {
+		return s.ClearTracks(ctx)
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM tracks WHERE NOT (path = ANY($1))`, paths)
 	return err
 }
 
@@ -443,10 +198,8 @@ func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
 			format,
 			size_bytes,
 			duration_seconds,
-			modified_at,
-			lyrics
+			modified_at
 		FROM tracks
-		WHERE format = 'mp3'
 		ORDER BY lower(title), lower(artist), id
 	`)
 	if err != nil {
@@ -465,6 +218,180 @@ func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
 	return tracks, rows.Err()
 }
 
+func (s *Store) ListFavoriteTracks(ctx context.Context, userID int64) ([]models.Track, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			t.id,
+			t.path,
+			t.relative_path,
+			t.filename,
+			t.title,
+			t.artist,
+			t.album,
+			t.format,
+			t.size_bytes,
+			t.duration_seconds,
+			t.modified_at
+		FROM favorite_tracks ft
+		JOIN tracks t ON t.id = ft.track_id
+		WHERE ft.user_id = $1
+		ORDER BY ft.created_at DESC, t.id DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tracks := make([]models.Track, 0)
+	for rows.Next() {
+		track, err := scanTrack(rows)
+		if err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, track)
+	}
+	return tracks, rows.Err()
+}
+
+func (s *Store) AddFavoriteTrack(ctx context.Context, userID, trackID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO favorite_tracks (user_id, track_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, track_id) DO NOTHING
+	`, userID, trackID)
+	return err
+}
+
+func (s *Store) DeleteFavoriteTrack(ctx context.Context, userID, trackID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM favorite_tracks
+		WHERE user_id = $1
+			AND track_id = $2
+	`, userID, trackID)
+	return err
+}
+
+func (s *Store) ReplaceTrackLyrics(ctx context.Context, trackID int64, lyrics *models.TrackLyrics) error {
+	if lyrics == nil || len(lyrics.Lines) == 0 {
+		_, err := s.pool.Exec(ctx, `DELETE FROM track_lyrics WHERE track_id = $1`, trackID)
+		return err
+	}
+
+	lines, err := json.Marshal(lyrics.Lines)
+	if err != nil {
+		return fmt.Errorf("marshal lyrics: %w", err)
+	}
+	source := lyrics.Source
+	if source == "" {
+		source = "unknown"
+	}
+	format := lyrics.Format
+	if format == "" {
+		format = "plain"
+	}
+	content := lyrics.Content
+	if content == "" {
+		content = lyricsContent(lyrics.Lines)
+	}
+	var sourcePath sql.NullString
+	if lyrics.SourcePath != nil && *lyrics.SourcePath != "" {
+		sourcePath = sql.NullString{String: *lyrics.SourcePath, Valid: true}
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO track_lyrics (
+			track_id,
+			format,
+			content,
+			lines,
+			source,
+			source_path,
+			content_hash,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		ON CONFLICT (track_id)
+		DO UPDATE SET
+			format = EXCLUDED.format,
+			content = EXCLUDED.content,
+			lines = EXCLUDED.lines,
+			source = EXCLUDED.source,
+			source_path = EXCLUDED.source_path,
+			content_hash = EXCLUDED.content_hash,
+			updated_at = now()
+	`,
+		trackID,
+		format,
+		content,
+		lines,
+		source,
+		sourcePath,
+		lyricsHash(content, lines),
+	)
+	return err
+}
+
+func (s *Store) GetTrackLyrics(ctx context.Context, trackID int64) (models.TrackLyrics, error) {
+	var lyrics models.TrackLyrics
+	var format sql.NullString
+	var content sql.NullString
+	var source sql.NullString
+	var sourcePath sql.NullString
+	var updatedAt sql.NullTime
+	var lines []byte
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			t.id,
+			tl.format,
+			tl.content,
+			tl.lines,
+			tl.source,
+			tl.source_path,
+			tl.updated_at
+		FROM tracks t
+		LEFT JOIN track_lyrics tl ON tl.track_id = t.id
+		WHERE t.id = $1
+	`, trackID).Scan(
+		&lyrics.TrackID,
+		&format,
+		&content,
+		&lines,
+		&source,
+		&sourcePath,
+		&updatedAt,
+	)
+	if err != nil {
+		return models.TrackLyrics{}, err
+	}
+	if format.Valid {
+		lyrics.Format = format.String
+	} else {
+		lyrics.Format = "plain"
+	}
+	if content.Valid {
+		lyrics.Content = content.String
+	}
+	if source.Valid {
+		lyrics.Source = source.String
+	}
+	if sourcePath.Valid {
+		lyrics.SourcePath = &sourcePath.String
+	}
+	if updatedAt.Valid {
+		lyrics.UpdatedAt = &updatedAt.Time
+	}
+	if len(lines) > 0 {
+		if err := json.Unmarshal(lines, &lyrics.Lines); err != nil {
+			return models.TrackLyrics{}, fmt.Errorf("decode lyrics: %w", err)
+		}
+	}
+	if lyrics.Lines == nil {
+		lyrics.Lines = []models.LyricLine{}
+	}
+	return lyrics, nil
+}
+
 func (s *Store) GetTrack(ctx context.Context, id int64) (models.Track, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT
@@ -478,57 +405,38 @@ func (s *Store) GetTrack(ctx context.Context, id int64) (models.Track, error) {
 			format,
 			size_bytes,
 			duration_seconds,
-			modified_at,
-			lyrics
+			modified_at
 		FROM tracks
 		WHERE id = $1
 	`, id)
 	return scanTrack(row)
 }
 
-type rowScanner interface {
-	Scan(dest ...any) error
+func lyricsHash(content string, lines []byte) string {
+	hash := sha256.New()
+	hash.Write([]byte(content))
+	hash.Write(lines)
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func scanChatMessage(row rowScanner) (models.ChatMessage, error) {
-	var message models.ChatMessage
-	var mentions []byte
-	var readBy []byte
-	err := row.Scan(
-		&message.ID,
-		&message.RoomID,
-		&message.UserID,
-		&message.Nickname,
-		&message.Content,
-		&message.MessageType,
-		&message.AttachmentName,
-		&message.AttachmentMime,
-		&message.AttachmentData,
-		&mentions,
-		&readBy,
-		&message.RecalledAt,
-		&message.CreatedAt,
-	)
-	if err != nil {
-		return models.ChatMessage{}, err
+func lyricsContent(lines []models.LyricLine) string {
+	text := ""
+	for index, line := range lines {
+		if index > 0 {
+			text += "\n"
+		}
+		text += line.Text
 	}
-	if len(mentions) == 0 {
-		message.Mentions = []string{}
-	} else if err := json.Unmarshal(mentions, &message.Mentions); err != nil {
-		return models.ChatMessage{}, fmt.Errorf("unmarshal mentions: %w", err)
-	}
-	if len(readBy) == 0 {
-		message.ReadBy = []int64{}
-	} else if err := json.Unmarshal(readBy, &message.ReadBy); err != nil {
-		return models.ChatMessage{}, fmt.Errorf("unmarshal read_by: %w", err)
-	}
-	return message, nil
+	return text
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
 func scanTrack(row rowScanner) (models.Track, error) {
 	var track models.Track
 	var duration sql.NullInt64
-	var lyrics []byte
 	err := row.Scan(
 		&track.ID,
 		&track.Path,
@@ -541,7 +449,6 @@ func scanTrack(row rowScanner) (models.Track, error) {
 		&track.SizeBytes,
 		&duration,
 		&track.ModifiedAt,
-		&lyrics,
 	)
 	if err != nil {
 		return models.Track{}, err
@@ -549,14 +456,6 @@ func scanTrack(row rowScanner) (models.Track, error) {
 	if duration.Valid {
 		value := int(duration.Int64)
 		track.DurationSeconds = &value
-	}
-	if len(lyrics) > 0 {
-		if err := json.Unmarshal(lyrics, &track.Lyrics); err != nil {
-			return models.Track{}, fmt.Errorf("decode lyrics: %w", err)
-		}
-	}
-	if track.Lyrics == nil {
-		track.Lyrics = []models.LyricLine{}
 	}
 	track.StreamURL = fmt.Sprintf("/api/tracks/%d/stream", track.ID)
 	return track, nil

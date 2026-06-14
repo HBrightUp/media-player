@@ -15,7 +15,16 @@ export type Track = {
   duration_seconds: number | null;
   modified_at: string;
   stream_url: string;
-  lyrics: LyricLine[];
+  lyrics?: LyricLine[];
+};
+
+export type TrackLyrics = {
+  track_id: number;
+  format: "lrc" | "plain";
+  content: string;
+  lines: LyricLine[];
+  source: string;
+  updated_at: string | null;
 };
 
 export type LibrarySetting = {
@@ -51,13 +60,16 @@ export type RegisterRequest = {
   nickname: string;
   phone: string;
   password: string;
-  accepted: boolean;
 };
 
 export type LoginRequest = {
   phone: string;
   password: string;
-  accepted: boolean;
+};
+
+export type FavoriteRequest = {
+  user_id: number;
+  track_id: number;
 };
 
 export type PresenceRequest = {
@@ -68,70 +80,4 @@ export type PresenceRequest = {
 
 export type PresenceResponse = {
   online_count: number;
-};
-
-export type ChatRoom = {
-  id: number;
-  name: string;
-  description: string;
-  created_at: string;
-};
-
-export type ChatMember = {
-  user_id?: number;
-  nickname: string;
-  phone?: string;
-};
-
-export type ChatRoomsResponse = {
-  rooms: ChatRoom[];
-};
-
-export type ChatMessageType = "text" | "image" | "audio";
-
-export type ChatMessage = {
-  id: number;
-  room_id: number;
-  user_id?: number;
-  nickname: string;
-  content: string;
-  message_type: ChatMessageType;
-  attachment_name?: string;
-  attachment_mime?: string;
-  attachment_data?: string;
-  mentions: string[];
-  read_by: number[];
-  recalled_at?: string;
-  created_at: string;
-};
-
-export type ChatMessagesResponse = {
-  messages: ChatMessage[];
-  has_more: boolean;
-};
-
-export type SendChatMessageRequest = {
-  room_id: number;
-  user_id?: number;
-  phone?: string;
-  nickname: string;
-  content: string;
-  message_type: ChatMessageType;
-  attachment_name?: string;
-  attachment_mime?: string;
-  attachment_data?: string;
-  mentions: string[];
-};
-
-export type SendChatMessageResponse = {
-  message: ChatMessage;
-};
-
-export type RecallChatMessageResponse = {
-  message: ChatMessage;
-};
-
-export type MarkChatReadRequest = {
-  room_id: number;
-  user_id?: number;
 };

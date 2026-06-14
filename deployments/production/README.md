@@ -54,6 +54,7 @@ POSTGRES_DB=media_player
 POSTGRES_USER=media_player
 POSTGRES_PASSWORD=<use-a-strong-password>
 MUSIC_DIRECTORY=/opt/media-player/music
+LYRICS_DIRECTORY=/opt/media-player/lyrics
 ```
 
 For IP-only HTTP deployment:
@@ -67,10 +68,17 @@ MEDIA_PLAYER_PUBLIC_ORIGIN=http://<ECS_PUBLIC_IP>
 
 ```bash
 mkdir -p /opt/media-player/music
+mkdir -p /opt/media-player/lyrics
 ```
 
-Upload `.mp3` files, plus optional same-name `.lrc` lyric files, into
-`/opt/media-player/music`.
+Upload audio files into `/opt/media-player/music`. Put optional same-name `.lrc`
+lyric files into `/opt/media-player/lyrics` using the same relative path, for
+example:
+
+```text
+/opt/media-player/music/artist/song.flac
+/opt/media-player/lyrics/artist/song.lrc
+```
 
 ## 5. Deploy
 

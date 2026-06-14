@@ -1,7 +1,9 @@
-# 后端启动时会读取这个目录，并递归扫描其中的 .mp3 文件写入数据库。
+# 后端启动时会读取这个目录，并递归扫描其中的音频文件写入数据库。
 # 可以写绝对路径，例如：/Users/hml/Music
 library:
-  music_directory: "/Users/hml/Downloads"
+  music_directory: "/Users/hml/Music"
+  # 可选：歌词目录。支持按音乐目录的相对路径放置同名 .lrc 文件。
+  lyrics_directory: "/Users/hml/MusicLyrics"
 
 server:
   addr: ":8080"

@@ -21,6 +21,7 @@ if [ "${POSTGRES_PASSWORD:-}" = "change-this-password" ]; then
 fi
 
 mkdir -p "${MUSIC_DIRECTORY:-/opt/media-player/music}"
+mkdir -p "${LYRICS_DIRECTORY:-/opt/media-player/lyrics}"
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps

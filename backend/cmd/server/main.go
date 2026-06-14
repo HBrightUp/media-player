@@ -16,12 +16,15 @@ import (
 	"github.com/hml/media-player/backend/internal/library"
 )
 
+const libraryAutoScanInterval = 15 * time.Second
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	ctx := context.Background()
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	store, err := database.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -33,23 +36,13 @@ func main() {
 		log.Fatalf("migrate database: %v", err)
 	}
 
-	scanner := library.NewScanner(store)
+	scanner := library.NewScanner(store, cfg.LyricsDirectory)
 	if cfg.ConfigPath != "" {
 		log.Printf("loaded config from %s", cfg.ConfigPath)
 	}
 	if cfg.MusicDirectory != "" {
-		if _, err := store.SetSetting(ctx, "music_directory", cfg.MusicDirectory); err != nil {
-			log.Printf("save configured music directory: %v", err)
-		}
-		result, err := scanner.ScanMP3(ctx, cfg.MusicDirectory)
-		if err != nil {
-			log.Printf("startup mp3 scan failed for %s: %v", cfg.MusicDirectory, err)
-		} else {
-			log.Printf("startup mp3 scan complete: root=%s found=%d imported=%d skipped=%d", result.RootPath, result.Found, result.Imported, result.Skipped)
-			for _, scanErr := range result.Errors {
-				log.Printf("startup mp3 scan skipped: %s", scanErr)
-			}
-		}
+		saveAndScanLibrary(ctx, store, scanner, cfg.MusicDirectory, "startup")
+		startLibraryAutoScan(ctx, store, scanner, cfg.MusicDirectory, libraryAutoScanInterval)
 	}
 
 	api := httpapi.New(store, scanner, cfg.CORSOrigin)
@@ -66,13 +59,53 @@ func main() {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
+	<-ctx.Done()
 
 	shutdownCtx, cancel := httpapi.ShutdownContext()
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
+	}
+}
+
+func startLibraryAutoScan(ctx context.Context, store *database.Store, scanner *library.Scanner, musicDirectory string, interval time.Duration) {
+	log.Printf("auto audio scan enabled: root=%s interval=%s", musicDirectory, interval)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				saveAndScanLibrary(ctx, store, scanner, musicDirectory, "auto")
+			}
+		}
+	}()
+}
+
+func saveAndScanLibrary(ctx context.Context, store *database.Store, scanner *library.Scanner, musicDirectory string, label string) {
+	if _, err := store.SetSetting(ctx, "music_directory", musicDirectory); err != nil {
+		log.Printf("%s audio scan skipped: save configured music directory: %v", label, err)
+		return
+	}
+	result, err := scanner.Scan(ctx, musicDirectory)
+	if err != nil {
+		log.Printf("%s audio scan failed for %s: %v", label, musicDirectory, err)
+		return
+	}
+	if label == "startup" {
+		log.Printf("%s audio scan complete: root=%s found=%d imported=%d skipped=%d", label, result.RootPath, result.Found, result.Imported, result.Skipped)
+		for _, scanErr := range result.Errors {
+			log.Printf("%s audio scan skipped: %s", label, scanErr)
+		}
+		return
+	}
+	if result.Skipped > 0 {
+		log.Printf("%s audio scan complete with skipped files: root=%s found=%d skipped=%d", label, result.RootPath, result.Found, result.Skipped)
+		for _, scanErr := range result.Errors {
+			log.Printf("%s audio scan skipped: %s", label, scanErr)
+		}
 	}
 }

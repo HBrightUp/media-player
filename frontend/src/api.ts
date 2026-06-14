@@ -1,19 +1,15 @@
 import type {
   AuthResponse,
-  ChatMessagesResponse,
-  ChatRoomsResponse,
+  FavoriteRequest,
   LibrarySetting,
   LibrarySettingResponse,
   LoginRequest,
-  MarkChatReadRequest,
   PresenceRequest,
   PresenceResponse,
-  RecallChatMessageResponse,
   RegisterRequest,
   ScanResult,
-  SendChatMessageRequest,
-  SendChatMessageResponse,
-  Track
+  Track,
+  TrackLyrics
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -84,6 +80,27 @@ export function getTracks(): Promise<TracksResponse> {
   return request<TracksResponse>("/api/tracks");
 }
 
+export function getTrackLyrics(trackID: number): Promise<TrackLyrics> {
+  return request<TrackLyrics>(`/api/tracks/${encodeURIComponent(String(trackID))}/lyrics`);
+}
+
+export function getFavoriteTracks(userID: number): Promise<TracksResponse> {
+  return request<TracksResponse>(`/api/favorites?user_id=${encodeURIComponent(String(userID))}`);
+}
+
+export function addFavoriteTrack(payload: FavoriteRequest): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/favorites", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function removeFavoriteTrack(userID: number, trackID: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/favorites/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(userID))}`, {
+    method: "DELETE"
+  });
+}
+
 export function getLibrarySetting(): Promise<LibrarySetting> {
   return request<LibrarySetting>("/api/settings/library");
 }
@@ -133,60 +150,4 @@ export function sendPresenceOffline(payload: PresenceRequest): Promise<PresenceR
     method: "POST",
     body: JSON.stringify(payload)
   });
-}
-
-export function getChatRooms(): Promise<ChatRoomsResponse> {
-  return request<ChatRoomsResponse>("/api/chat/rooms");
-}
-
-export function getChatMessages(roomID: number, limit = 50, beforeID?: number, query?: string): Promise<ChatMessagesResponse> {
-  const params = new URLSearchParams({ room_id: String(roomID), limit: String(limit) });
-  if (beforeID && beforeID > 0) {
-    params.set("before_id", String(beforeID));
-  }
-  if (query?.trim()) {
-    params.set("q", query.trim());
-  }
-  return request<ChatMessagesResponse>(`/api/chat/messages?${params.toString()}`);
-}
-
-export function sendChatMessage(payload: SendChatMessageRequest): Promise<SendChatMessageResponse> {
-  return request<SendChatMessageResponse>("/api/chat/messages", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
-
-export function recallChatMessage(messageID: number, userID?: number): Promise<RecallChatMessageResponse> {
-  const params = new URLSearchParams();
-  if (userID && userID > 0) {
-    params.set("user_id", String(userID));
-  }
-  return request<RecallChatMessageResponse>(`/api/chat/messages/${messageID}?${params.toString()}`, {
-    method: "DELETE"
-  });
-}
-
-export function markChatRead(payload: MarkChatReadRequest): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>("/api/chat/read", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
-
-export function chatWebSocketURL(options: { roomID: number; userID?: number; nickname?: string; phone?: string }): string {
-  const base = API_BASE || window.location.origin;
-  const url = new URL("/api/chat/ws", base);
-  url.searchParams.set("room_id", String(options.roomID));
-  if (options.userID && options.userID > 0) {
-    url.searchParams.set("user_id", String(options.userID));
-  }
-  if (options.nickname) {
-    url.searchParams.set("nickname", options.nickname);
-  }
-  if (options.phone) {
-    url.searchParams.set("phone", options.phone);
-  }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
 }

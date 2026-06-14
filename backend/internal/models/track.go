@@ -15,7 +15,17 @@ type Track struct {
 	DurationSeconds *int        `json:"duration_seconds"`
 	ModifiedAt      time.Time   `json:"modified_at"`
 	StreamURL       string      `json:"stream_url"`
-	Lyrics          []LyricLine `json:"lyrics"`
+	Lyrics          []LyricLine `json:"lyrics,omitempty"`
+}
+
+type TrackLyrics struct {
+	TrackID    int64       `json:"track_id"`
+	Format     string      `json:"format"`
+	Content    string      `json:"content"`
+	Lines      []LyricLine `json:"lines"`
+	Source     string      `json:"source"`
+	SourcePath *string     `json:"-"`
+	UpdatedAt  *time.Time  `json:"updated_at"`
 }
 
 type LyricLine struct {

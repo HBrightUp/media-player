@@ -44,10 +44,12 @@ services:
       DATABASE_URL: "postgres://${POSTGRES_USER:-media_player}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_player}?sslmode=disable"
       CORS_ORIGIN: "${MEDIA_PLAYER_PUBLIC_ORIGIN:?MEDIA_PLAYER_PUBLIC_ORIGIN is required}"
       MUSIC_DIRECTORY: "/music"
+      LYRICS_DIRECTORY: "/lyrics"
     ports:
       - "127.0.0.1:18080:8080"
     volumes:
       - ${MUSIC_DIRECTORY:-/opt/media-player/music}:/music:ro
+      - ${LYRICS_DIRECTORY:-/opt/media-player/lyrics}:/lyrics:ro
 
 volumes:
   media_player_caddy_data:

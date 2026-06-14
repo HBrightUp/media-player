@@ -23,6 +23,8 @@ import (
 
 var supportedAudioFormats = map[string]bool{
 	".aac":  true,
+	".aif":  true,
+	".aiff": true,
 	".flac": true,
 	".m4a":  true,
 	".mp3":  true,
@@ -31,7 +33,8 @@ var supportedAudioFormats = map[string]bool{
 }
 
 type Scanner struct {
-	store *database.Store
+	store      *database.Store
+	lyricsRoot string
 }
 
 type tags struct {
@@ -41,8 +44,17 @@ type tags struct {
 	Lyrics []models.LyricLine
 }
 
-func NewScanner(store *database.Store) *Scanner {
-	return &Scanner{store: store}
+func NewScanner(store *database.Store, lyricsRoot ...string) *Scanner {
+	root := ""
+	if len(lyricsRoot) > 0 {
+		root = strings.TrimSpace(lyricsRoot[0])
+		if root != "" {
+			if absolute, err := filepath.Abs(root); err == nil {
+				root = absolute
+			}
+		}
+	}
+	return &Scanner{store: store, lyricsRoot: root}
 }
 
 func (s *Scanner) Scan(ctx context.Context, root string) (models.ScanResult, error) {
@@ -68,9 +80,7 @@ func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[stri
 	}
 
 	result := models.ScanResult{RootPath: absRoot}
-	if err := s.store.ClearTracks(ctx); err != nil {
-		return result, fmt.Errorf("clear old tracks: %w", err)
-	}
+	seenPaths := make([]string, 0)
 
 	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -89,13 +99,19 @@ func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[stri
 			return nil
 		}
 		result.Found++
+		seenPaths = append(seenPaths, path)
 
-		track, err := buildTrack(absRoot, path, ext)
+		track, lyrics, err := buildTrack(absRoot, path, ext, s.lyricsRoot)
 		if err != nil {
 			recordScanError(&result, path, err)
 			return nil
 		}
-		if _, err := s.store.UpsertTrack(ctx, track); err != nil {
+		trackID, err := s.store.UpsertTrack(ctx, track)
+		if err != nil {
+			recordScanError(&result, path, err)
+			return nil
+		}
+		if err := s.store.ReplaceTrackLyrics(ctx, trackID, lyrics); err != nil {
 			recordScanError(&result, path, err)
 			return nil
 		}
@@ -104,6 +120,9 @@ func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[stri
 	})
 	if err != nil {
 		return result, err
+	}
+	if err := s.store.DeleteTracksExceptPaths(ctx, seenPaths); err != nil {
+		return result, fmt.Errorf("remove missing tracks: %w", err)
 	}
 	return result, nil
 }
@@ -116,10 +135,10 @@ func recordScanError(result *models.ScanResult, path string, err error) {
 	result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", path, err))
 }
 
-func buildTrack(root, path, ext string) (models.Track, error) {
+func buildTrack(root, path, ext, lyricsRoot string) (models.Track, *models.TrackLyrics, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return models.Track{}, err
+		return models.Track{}, nil, err
 	}
 
 	filename := filepath.Base(path)
@@ -129,7 +148,11 @@ func buildTrack(root, path, ext string) (models.Track, error) {
 	title := firstText(metadata.Title, nameMetadata.Title, strings.TrimSuffix(filename, filepath.Ext(filename)))
 	artist := firstText(metadata.Artist, nameMetadata.Artist, "未知歌手")
 	album := firstText(metadata.Album, "未知专辑")
-	lyrics := firstLyrics(metadata.Lyrics, readSidecarLyrics(path))
+	lyrics := firstTrackLyrics(
+		readLyricsDirectory(root, path, lyricsRoot),
+		readSidecarLyrics(path),
+		trackLyricsFromLines(metadata.Lyrics, "embedded", ""),
+	)
 
 	relativePath, err := filepath.Rel(root, path)
 	if err != nil {
@@ -146,8 +169,7 @@ func buildTrack(root, path, ext string) (models.Track, error) {
 		Format:       strings.TrimPrefix(ext, "."),
 		SizeBytes:    info.Size(),
 		ModifiedAt:   info.ModTime(),
-		Lyrics:       lyrics,
-	}, nil
+	}, lyrics, nil
 }
 
 func readTags(path, ext string) tags {
@@ -213,6 +235,26 @@ func firstLyrics(values ...[]models.LyricLine) []models.LyricLine {
 	return []models.LyricLine{}
 }
 
+func firstTrackLyrics(values ...*models.TrackLyrics) *models.TrackLyrics {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		value.Lines = compactLyrics(value.Lines)
+		if len(value.Lines) == 0 {
+			continue
+		}
+		if value.Format == "" {
+			value.Format = lyricFormat(value.Lines)
+		}
+		if value.Content == "" {
+			value.Content = lyricContent(value.Lines)
+		}
+		return value
+	}
+	return nil
+}
+
 func compactLyrics(lines []models.LyricLine) []models.LyricLine {
 	if len(lines) == 0 {
 		return nil
@@ -237,15 +279,61 @@ func compactLyrics(lines []models.LyricLine) []models.LyricLine {
 	return result
 }
 
-func readSidecarLyrics(path string) []models.LyricLine {
-	base := strings.TrimSuffix(path, filepath.Ext(path))
-	for _, candidate := range []string{base + ".lrc", base + ".LRC"} {
-		content, err := os.ReadFile(candidate)
-		if err == nil {
-			return parseLRC(string(content))
+func readLyricsDirectory(root, audioPath, lyricsRoot string) *models.TrackLyrics {
+	if lyricsRoot == "" {
+		return nil
+	}
+	relativePath, err := filepath.Rel(root, audioPath)
+	if err != nil {
+		relativePath = filepath.Base(audioPath)
+	}
+	baseRelativePath := strings.TrimSuffix(relativePath, filepath.Ext(relativePath))
+	baseFilename := strings.TrimSuffix(filepath.Base(audioPath), filepath.Ext(audioPath))
+	candidates := []string{
+		filepath.Join(lyricsRoot, baseRelativePath+".lrc"),
+		filepath.Join(lyricsRoot, baseRelativePath+".LRC"),
+		filepath.Join(lyricsRoot, baseFilename+".lrc"),
+		filepath.Join(lyricsRoot, baseFilename+".LRC"),
+	}
+	for _, candidate := range candidates {
+		if lyrics := readLRCFile(candidate, "lyrics_directory"); lyrics != nil {
+			return lyrics
 		}
 	}
 	return nil
+}
+
+func readSidecarLyrics(path string) *models.TrackLyrics {
+	base := strings.TrimSuffix(path, filepath.Ext(path))
+	for _, candidate := range []string{base + ".lrc", base + ".LRC"} {
+		if lyrics := readLRCFile(candidate, "sidecar"); lyrics != nil {
+			return lyrics
+		}
+	}
+	return nil
+}
+
+func readLRCFile(path, source string) *models.TrackLyrics {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	text := decodeTextFile(content)
+	lines := parseLRC(text)
+	if len(lines) == 0 {
+		lines = lyricsFromPlainText(stripLRCMetadata(text))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	sourcePath := path
+	return &models.TrackLyrics{
+		Format:     lyricFormat(lines),
+		Content:    text,
+		Lines:      lines,
+		Source:     source,
+		SourcePath: &sourcePath,
+	}
 }
 
 func parseLRC(content string) []models.LyricLine {
@@ -280,6 +368,96 @@ func parseLRC(content string) []models.LyricLine {
 		}
 	}
 	return compactLyrics(lines)
+}
+
+func trackLyricsFromLines(lines []models.LyricLine, source, sourcePath string) *models.TrackLyrics {
+	lines = compactLyrics(lines)
+	if len(lines) == 0 {
+		return nil
+	}
+	var path *string
+	if sourcePath != "" {
+		path = &sourcePath
+	}
+	return &models.TrackLyrics{
+		Format:     lyricFormat(lines),
+		Content:    lyricContent(lines),
+		Lines:      lines,
+		Source:     source,
+		SourcePath: path,
+	}
+}
+
+func lyricFormat(lines []models.LyricLine) string {
+	for _, line := range lines {
+		if line.TimeSeconds != nil {
+			return "lrc"
+		}
+	}
+	return "plain"
+}
+
+func lyricContent(lines []models.LyricLine) string {
+	if lyricFormat(lines) == "lrc" {
+		var builder strings.Builder
+		for index, line := range lines {
+			if line.TimeSeconds == nil {
+				continue
+			}
+			if builder.Len() > 0 || index > 0 {
+				builder.WriteByte('\n')
+			}
+			builder.WriteString(formatLRCTimestamp(*line.TimeSeconds))
+			builder.WriteString(line.Text)
+		}
+		return builder.String()
+	}
+
+	var builder strings.Builder
+	for index, line := range lines {
+		if index > 0 {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString(line.Text)
+	}
+	return builder.String()
+}
+
+func formatLRCTimestamp(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	minutes := int(seconds) / 60
+	remaining := seconds - float64(minutes*60)
+	return fmt.Sprintf("[%02d:%05.2f]", minutes, remaining)
+}
+
+func stripLRCMetadata(content string) string {
+	var builder strings.Builder
+	for _, rawLine := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.Contains(line, ":") && strings.HasSuffix(line, "]") {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString(line)
+	}
+	return builder.String()
+}
+
+func decodeTextFile(content []byte) string {
+	if utf8.Valid(content) {
+		return strings.TrimPrefix(string(content), "\ufeff")
+	}
+	if decoded, err := simplifiedchinese.GB18030.NewDecoder().String(string(content)); err == nil {
+		return strings.TrimPrefix(decoded, "\ufeff")
+	}
+	return string(content)
 }
 
 func parseLRCTimestamp(value string) (float64, bool) {
@@ -769,6 +947,8 @@ func ContentType(format string) string {
 	switch strings.ToLower(format) {
 	case "aac":
 		return "audio/aac"
+	case "aif", "aiff":
+		return "audio/aiff"
 	case "flac":
 		return "audio/flac"
 	case "m4a":

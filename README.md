@@ -7,9 +7,10 @@
 ## 功能
 
 - 通过 `config.yaml` 设置服务端可访问的默认音乐文件夹目录
-- 后端启动时递归扫描目录下的 `mp3` 文件
+- 后端启动时递归扫描目录下的常见音频文件，包括 `mp3`、`flac`、`m4a`、`wav` 等
 - 保存歌曲文件信息到 Postgres
-- 读取 MP3 的基础 ID3v2 信息：标题、歌手、专辑
+- 读取音频文件的基础标签信息：标题、歌手、专辑
+- 支持独立 `.lrc` 歌词目录，播放时按歌曲 ID 加载并同步显示歌词
 - 歌曲列表搜索、排序、选中播放
 - 后端按歌曲 ID 提供音频流
 
@@ -28,6 +29,7 @@ docker compose -f deployments/local/compose.yaml up -d
 ```yaml
 library:
   music_directory: "/Users/you/Music"
+  lyrics_directory: "/Users/you/MusicLyrics"
 ```
 
 3. 启动后端：
@@ -37,7 +39,14 @@ cd backend
 DATABASE_URL='postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable' go run ./cmd/server
 ```
 
-后端会在启动时扫描这个目录下的 `.mp3` 文件，并写入数据库。
+歌词目录是可选项。推荐按音乐目录的相对路径放置同名 `.lrc` 文件，例如：
+
+```text
+/Users/you/Music/陈奕迅/爱情转移.flac
+/Users/you/MusicLyrics/陈奕迅/爱情转移.lrc
+```
+
+后端会在启动时扫描音乐目录下的音频文件，并把找到的歌词写入独立的 `track_lyrics` 表。
 
 4. 启动前端：
 
@@ -56,6 +65,7 @@ npm run dev
 - `PUT /api/settings/library` body: `{ "path": "/path/to/music" }`
 - `POST /api/library/scan`
 - `GET /api/tracks`
+- `GET /api/tracks/{id}/lyrics`
 - `GET /api/tracks/{id}/stream`
 
 ## 目录说明
