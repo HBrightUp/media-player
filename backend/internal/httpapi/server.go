@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,10 +75,26 @@ type presenceRequest struct {
 	Phone     string `json:"phone"`
 }
 
+type presenceResponse struct {
+	OnlineCount int                  `json:"online_count"`
+	OnlineUsers []presenceOnlineUser `json:"online_users,omitempty"`
+}
+
 type presenceSession struct {
 	UserID   int64
 	Phone    string
+	Nickname string
 	LastSeen time.Time
+}
+
+type presenceSnapshot struct {
+	OnlineCount int
+	OnlineUsers []presenceOnlineUser
+}
+
+type presenceOnlineUser struct {
+	UserID   int64  `json:"user_id,omitempty"`
+	Nickname string `json:"nickname"`
 }
 
 type presenceTracker struct {
@@ -214,10 +231,14 @@ func (s *Server) handlePresenceHeartbeat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	onlineCount := s.presence.Touch(sessionID, request.UserID, normalizePresencePhone(request.Phone), time.Now())
-	writeJSON(w, http.StatusOK, map[string]any{
-		"online_count": onlineCount,
-	})
+	phone := normalizePresencePhone(request.Phone)
+	user, hasUser := s.resolvePresenceUser(r.Context(), request.UserID, phone)
+	if hasUser {
+		request.UserID = user.ID
+		phone = user.Phone
+	}
+	snapshot := s.presence.Touch(sessionID, request.UserID, phone, user.Nickname, time.Now())
+	writePresenceResponse(w, snapshot, hasUser && user.Nickname == "Bright")
 }
 
 func (s *Server) handlePresenceOffline(w http.ResponseWriter, r *http.Request) {
@@ -237,10 +258,34 @@ func (s *Server) handlePresenceOffline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	onlineCount := s.presence.Remove(sessionID, time.Now())
-	writeJSON(w, http.StatusOK, map[string]any{
-		"online_count": onlineCount,
-	})
+	snapshot := s.presence.Remove(sessionID, time.Now())
+	writePresenceResponse(w, snapshot, false)
+}
+
+func (s *Server) resolvePresenceUser(ctx context.Context, userID int64, phone string) (models.User, bool) {
+	if userID > 0 {
+		user, err := s.store.GetUserByID(ctx, userID)
+		if err == nil && (phone == "" || user.Phone == phone) {
+			return user, true
+		}
+	}
+	if phone != "" {
+		user, err := s.store.GetUserByPhone(ctx, phone)
+		if err == nil {
+			return user, true
+		}
+	}
+	return models.User{}, false
+}
+
+func writePresenceResponse(w http.ResponseWriter, snapshot presenceSnapshot, includeUsers bool) {
+	response := presenceResponse{
+		OnlineCount: snapshot.OnlineCount,
+	}
+	if includeUsers {
+		response.OnlineUsers = snapshot.OnlineUsers
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleLibrarySetting(w http.ResponseWriter, r *http.Request) {
@@ -619,39 +664,59 @@ func newPresenceTracker() *presenceTracker {
 	}
 }
 
-func (p *presenceTracker) Touch(sessionID string, userID int64, phone string, now time.Time) int {
+func (p *presenceTracker) Touch(sessionID string, userID int64, phone string, nickname string, now time.Time) presenceSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.sessions[sessionID] = presenceSession{
 		UserID:   userID,
 		Phone:    phone,
+		Nickname: strings.TrimSpace(nickname),
 		LastSeen: now,
 	}
-	return p.onlineCountLocked(now)
+	return p.snapshotLocked(now)
 }
 
-func (p *presenceTracker) Remove(sessionID string, now time.Time) int {
+func (p *presenceTracker) Remove(sessionID string, now time.Time) presenceSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	delete(p.sessions, sessionID)
-	return p.onlineCountLocked(now)
+	return p.snapshotLocked(now)
 }
 
-func (p *presenceTracker) onlineCountLocked(now time.Time) int {
+func (p *presenceTracker) snapshotLocked(now time.Time) presenceSnapshot {
 	cutoff := now.Add(-presenceTTL)
-	onlineKeys := make(map[string]struct{})
+	onlineUsersByKey := make(map[string]presenceOnlineUser)
 
 	for sessionID, session := range p.sessions {
 		if session.LastSeen.Before(cutoff) {
 			delete(p.sessions, sessionID)
 			continue
 		}
-		onlineKeys[presenceOnlineKey(sessionID, session)] = struct{}{}
+		onlineUsersByKey[presenceOnlineKey(sessionID, session)] = presenceOnlineUser{
+			UserID:   session.UserID,
+			Nickname: presenceDisplayName(session),
+		}
 	}
 
-	return len(onlineKeys)
+	onlineUsers := make([]presenceOnlineUser, 0, len(onlineUsersByKey))
+	for _, user := range onlineUsersByKey {
+		onlineUsers = append(onlineUsers, user)
+	}
+	sort.Slice(onlineUsers, func(i, j int) bool {
+		left := strings.ToLower(onlineUsers[i].Nickname)
+		right := strings.ToLower(onlineUsers[j].Nickname)
+		if left == right {
+			return onlineUsers[i].UserID < onlineUsers[j].UserID
+		}
+		return left < right
+	})
+
+	return presenceSnapshot{
+		OnlineCount: len(onlineUsers),
+		OnlineUsers: onlineUsers,
+	}
 }
 
 func presenceOnlineKey(sessionID string, session presenceSession) string {
@@ -662,6 +727,16 @@ func presenceOnlineKey(sessionID string, session presenceSession) string {
 		return "phone:" + session.Phone
 	}
 	return "session:" + sessionID
+}
+
+func presenceDisplayName(session presenceSession) string {
+	if session.Nickname != "" {
+		return session.Nickname
+	}
+	if session.UserID > 0 {
+		return fmt.Sprintf("用户%d", session.UserID)
+	}
+	return "访客"
 }
 
 func parseFavoriteTrackID(path string) (int64, bool) {

@@ -78,6 +78,12 @@ export type PresenceRequest = {
   phone?: string;
 };
 
+export type OnlineUser = {
+  user_id?: number;
+  nickname: string;
+};
+
 export type PresenceResponse = {
   online_count: number;
+  online_users?: OnlineUser[];
 };

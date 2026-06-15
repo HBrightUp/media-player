@@ -127,6 +127,26 @@ func (s *Store) GetUserByPhone(ctx context.Context, phone string) (models.User, 
 	return user, err
 }
 
+func (s *Store) GetUserByID(ctx context.Context, id int64) (models.User, error) {
+	var user models.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, phone, country_code, nickname, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+		FROM users
+		WHERE id = $1
+	`, id).Scan(
+		&user.ID,
+		&user.Phone,
+		&user.CountryCode,
+		&user.Nickname,
+		&user.PasswordHash,
+		&user.PasswordSalt,
+		&user.TermsAcceptedAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	return user, err
+}
+
 func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `

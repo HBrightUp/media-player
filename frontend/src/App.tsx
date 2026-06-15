@@ -1,4 +1,4 @@
-import { type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   addFavoriteTrack,
   getFavoriteTracks,
@@ -12,7 +12,7 @@ import {
   sendPresenceOffline,
   streamURL
 } from "./api";
-import type { AuthUser, LyricLine, Track, TrackLyrics } from "./types";
+import type { AuthUser, LyricLine, OnlineUser, Track, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -48,6 +48,7 @@ type LyricsScrollState = {
   trackID: number | null;
   top: number;
 };
+type TrackSortKey = "title" | "artist";
 
 const musicTabs = ["音乐列表", "收藏", "歌曲搜索"] as const;
 type MusicTab = (typeof musicTabs)[number];
@@ -66,9 +67,10 @@ const playbackModeLabels: Record<PlaybackMode, string> = {
 const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
+const manualLibraryRefreshStorageKey = "media-player-manual-library-refresh-at";
 const authSessionDurationMs = 7 * 24 * 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
-const libraryAutoRefreshIntervalMs = 12_000;
+const manualLibraryRefreshCooldownMs = 60_000;
 const nicknameMaxLength = 20;
 const passwordMinLength = 6;
 const passwordMaxLength = 64;
@@ -89,6 +91,9 @@ function App() {
   const initialAuthProfileRef = useRef<AuthFormState | null>(null);
   const presenceSessionIdRef = useRef<string | null>(null);
   const lyricsScrollStateRef = useRef<LyricsScrollState>({ trackID: null, top: 0 });
+  const musicListRef = useRef<HTMLDivElement | null>(null);
+  const shouldRevealCurrentTrackRef = useRef(false);
+  const loadedLibrarySessionKeyRef = useRef<string | null>(null);
   if (!initialAuthRef.current) {
     initialAuthRef.current = readAuthSession();
   }
@@ -98,6 +103,7 @@ function App() {
   if (!presenceSessionIdRef.current) {
     presenceSessionIdRef.current = readPresenceSessionID();
   }
+  const [libraryTracks, setLibraryTracks] = useState<Track[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [currentTrackId, setCurrentTrackId] = useState<number | null>(null);
@@ -110,9 +116,14 @@ function App() {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [onlineCount, setOnlineCount] = useState<number | null>(null);
+  const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [isOnlineCountUnavailable, setIsOnlineCountUnavailable] = useState(false);
+  const [lastManualLibraryRefreshAt, setLastManualLibraryRefreshAt] = useState(() => readManualLibraryRefreshAt());
+  const [libraryRefreshClock, setLibraryRefreshClock] = useState(() => Date.now());
+  const [isManualLibraryRefreshing, setIsManualLibraryRefreshing] = useState(false);
   const [activePage, setActivePage] = useState<AppPage>("music");
   const [activeTab, setActiveTab] = useState<MusicTab>("音乐列表");
+  const [musicSortKey, setMusicSortKey] = useState<TrackSortKey | null>(null);
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(() => new Set());
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("all");
@@ -137,50 +148,19 @@ function App() {
   }, [currentTrackId, playbackQueue]);
 
   useEffect(() => {
-    void refreshLibrary();
-  }, []);
-
-  useEffect(() => {
-    if (activeTab !== "音乐列表" || isSearchOpen || isLoading || isScanning || isLibraryFiltered) {
+    if (!authSession) {
+      loadedLibrarySessionKeyRef.current = null;
+      setIsLoading(false);
       return;
     }
 
-    let isCancelled = false;
-    let isRefreshing = false;
-    const refreshTracksSilently = async () => {
-      if (isRefreshing || document.visibilityState === "hidden") {
-        return;
-      }
-      isRefreshing = true;
-      try {
-        const payload = await getTracks();
-        if (!isCancelled) {
-          syncLibraryTracks(payload.tracks);
-          setLoadMessage("");
-        }
-      } catch {
-        // Keep the current list visible during transient network or backend restarts.
-      } finally {
-        isRefreshing = false;
-      }
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void refreshTracksSilently();
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void refreshTracksSilently();
-    }, libraryAutoRefreshIntervalMs);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      isCancelled = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [activeTab, isSearchOpen, isLoading, isScanning, isLibraryFiltered]);
+    const sessionKey = getAuthSessionKey(authSession);
+    if (loadedLibrarySessionKeyRef.current === sessionKey) {
+      return;
+    }
+    loadedLibrarySessionKeyRef.current = sessionKey;
+    void refreshLibrary();
+  }, [authSession?.userId, authSession?.phone]);
 
   useEffect(() => {
     if (!authSession?.userId) {
@@ -229,6 +209,38 @@ function App() {
     };
   }, [isPlaybackModeMenuOpen]);
 
+  const manualLibraryRefreshRemainingMs = Math.max(0, lastManualLibraryRefreshAt + manualLibraryRefreshCooldownMs - libraryRefreshClock);
+  const manualLibraryRefreshCooldownSeconds = Math.ceil(manualLibraryRefreshRemainingMs / 1000);
+
+  useEffect(() => {
+    if (manualLibraryRefreshRemainingMs <= 0) {
+      return;
+    }
+
+    const timeoutID = window.setTimeout(() => {
+      setLibraryRefreshClock(Date.now());
+    }, Math.min(1000, manualLibraryRefreshRemainingMs));
+
+    return () => {
+      window.clearTimeout(timeoutID);
+    };
+  }, [manualLibraryRefreshRemainingMs]);
+
+  useLayoutEffect(() => {
+    if (activePage !== "music" || activeTab !== "音乐列表" || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
+      return;
+    }
+
+    const musicList = musicListRef.current;
+    const row = musicList?.querySelector<HTMLButtonElement>(`[data-track-id="${currentTrack.id}"]`);
+    if (!musicList || !row) {
+      return;
+    }
+
+    scrollElementToListCenter(musicList, row);
+    shouldRevealCurrentTrackRef.current = false;
+  }, [activePage, activeTab, currentTrack?.id, tracks]);
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       const result = readAuthSession();
@@ -249,6 +261,7 @@ function App() {
     const sessionID = presenceSessionIdRef.current;
     if (!authSession || !sessionID) {
       setOnlineCount(null);
+      setOnlineUsers([]);
       setIsOnlineCountUnavailable(false);
       return;
     }
@@ -263,10 +276,12 @@ function App() {
         });
         if (!isCancelled) {
           setOnlineCount(payload.online_count);
+          setOnlineUsers(payload.online_users ?? []);
           setIsOnlineCountUnavailable(false);
         }
       } catch {
         if (!isCancelled) {
+          setOnlineUsers([]);
           setIsOnlineCountUnavailable(true);
         }
       }
@@ -352,29 +367,41 @@ function App() {
 
   const activeDuration = duration || currentTrack?.duration_seconds || 185;
 
-	function syncLibraryTracks(nextTracks: Track[], { resetQueue = false }: { resetQueue?: boolean } = {}) {
-		setTracks((previous) => (areTrackListsEqual(previous, nextTracks) ? previous : nextTracks));
-		setPlaybackQueue((previous) => {
-			if (resetQueue || !previous.length) {
-				return nextTracks;
-			}
-			const mergedQueue = mergePlaybackQueue(previous, nextTracks);
-			return areTrackListsEqual(previous, mergedQueue) ? previous : mergedQueue;
-		});
-		setCurrentTrackId((previous) => {
-			if (previous && nextTracks.some((track) => track.id === previous)) {
+  function syncLibraryTracks(nextTracks: Track[], { resetQueue = false }: { resetQueue?: boolean } = {}) {
+    const visibleTracks = sortMusicTracks(nextTracks, musicSortKey);
+    setLibraryTracks((previous) => (areTrackListsEqual(previous, nextTracks) ? previous : nextTracks));
+    if (activeTab === "音乐列表") {
+      setTracks((previous) => (areTrackListsEqual(previous, visibleTracks) ? previous : visibleTracks));
+    }
+    setPlaybackQueue((previous) => {
+      if (resetQueue || !previous.length) {
+        return visibleTracks;
+      }
+      const mergedQueue = mergePlaybackQueue(previous, visibleTracks);
+      return areTrackListsEqual(previous, mergedQueue) ? previous : mergedQueue;
+    });
+    setCurrentTrackId((previous) => {
+      if (previous && nextTracks.some((track) => track.id === previous)) {
         return previous;
       }
       return nextTracks[0]?.id ?? null;
     });
   }
 
-  async function refreshLibrary({ scan = false }: { scan?: boolean } = {}) {
+  async function refreshLibrary({
+    scan = false,
+    keepExistingOnError = false,
+    preservePlayback = false
+  }: {
+    scan?: boolean;
+    keepExistingOnError?: boolean;
+    preservePlayback?: boolean;
+  } = {}) {
     setIsLoading(true);
     setIsScanning(scan);
     setLoadMessage("");
     setIsLibraryFiltered(false);
-    if (scan) {
+    if (scan && !preservePlayback) {
       clearCurrentLibrary();
     }
     try {
@@ -383,12 +410,20 @@ function App() {
       }
       const payload = await getTracks();
       syncLibraryTracks(payload.tracks, { resetQueue: scan });
+      return { ok: true };
     } catch (error) {
-      setTracks([]);
-      if (scan) {
-        setCurrentTrackId(null);
+      const message = error instanceof Error ? error.message : "本地音乐列表加载失败";
+      if (!keepExistingOnError) {
+        setLibraryTracks([]);
+        if (activeTab === "音乐列表") {
+          setTracks([]);
+        }
+        if (scan) {
+          setCurrentTrackId(null);
+        }
       }
-      setLoadMessage(error instanceof Error ? error.message : "本地音乐列表加载失败");
+      setLoadMessage(message);
+      return { ok: false, message };
     } finally {
       setIsLoading(false);
       setIsScanning(false);
@@ -429,6 +464,7 @@ function App() {
 
   function clearCurrentLibrary() {
     audioRef.current?.pause();
+    setLibraryTracks([]);
     setTracks([]);
     setPlaybackQueue([]);
     setCurrentTrackId(null);
@@ -440,6 +476,7 @@ function App() {
   }
 
   function handleTabClick(tab: MusicTab) {
+    shouldRevealCurrentTrackRef.current = false;
     setActiveTab(tab);
     setActivePage("music");
     setIsPlaybackModeMenuOpen(false);
@@ -447,7 +484,8 @@ function App() {
       setIsLibraryFiltered(false);
       setIsSearchOpen(false);
       setTrackContextMenu(null);
-      void refreshLibrary();
+      setLoadMessage("");
+      setTracks(sortMusicTracks(libraryTracks, musicSortKey));
       return;
     }
     if (tab === "收藏") {
@@ -462,7 +500,26 @@ function App() {
     setTrackContextMenu(null);
   }
 
+  function handleMusicSortClick(sortKey: TrackSortKey) {
+    if (activeTab !== "音乐列表") {
+      return;
+    }
+
+    const sortedTracks = sortMusicTracks(libraryTracks, sortKey);
+    setMusicSortKey(sortKey);
+    setIsLibraryFiltered(false);
+    setSearchQuery("");
+    setTracks(sortedTracks);
+    setPlaybackQueue(sortedTracks);
+    if (currentTrack?.id) {
+      shouldRevealCurrentTrackRef.current = true;
+    }
+  }
+
   function handlePageClick(page: AppPage) {
+    if (page === "music" && activePage !== "music") {
+      shouldRevealCurrentTrackRef.current = true;
+    }
     setActivePage(page);
     setIsPlaybackModeMenuOpen(false);
     setTrackContextMenu(null);
@@ -473,6 +530,8 @@ function App() {
     if (page !== "music") {
       setIsSearchOpen(false);
       setActiveTab("音乐列表");
+      setIsLibraryFiltered(false);
+      setTracks(sortMusicTracks(libraryTracks, musicSortKey));
     }
   }
 
@@ -536,6 +595,7 @@ function App() {
 
   function handleLogout() {
     removeLocalStorage(authSessionStorageKey);
+    loadedLibrarySessionKeyRef.current = null;
     setAuthSession(null);
     setAuthMode("login");
     setAuthForm((previous) => ({ ...previous, password: "" }));
@@ -544,9 +604,44 @@ function App() {
     setActivePage("music");
     setIsSearchOpen(false);
     setActiveTab("音乐列表");
+    setLibraryTracks([]);
+    setTracks([]);
     setFavoriteTrackIds(new Set());
     setTrackContextMenu(null);
+    setOnlineCount(null);
+    setOnlineUsers([]);
+    setIsOnlineCountUnavailable(false);
     setIsPlaybackModeMenuOpen(false);
+  }
+
+  async function handleManualLibraryRefresh() {
+    const now = Date.now();
+    const remainingMs = Math.max(0, lastManualLibraryRefreshAt + manualLibraryRefreshCooldownMs - now);
+    if (remainingMs > 0) {
+      setLibraryRefreshClock(now);
+      showToast(`${Math.ceil(remainingMs / 1000)}秒后可再次刷新`);
+      return;
+    }
+
+    persistManualLibraryRefreshAt(now);
+    setLastManualLibraryRefreshAt(now);
+    setLibraryRefreshClock(now);
+    setIsManualLibraryRefreshing(true);
+    try {
+      const result = await refreshLibrary({
+        scan: true,
+        keepExistingOnError: true,
+        preservePlayback: true
+      });
+      if (result.ok) {
+        void refreshFavoriteTracks({ showList: activePage === "music" && activeTab === "收藏" });
+        showToast("音乐列表已刷新");
+      } else {
+        showToast(result.message ?? "音乐列表刷新失败");
+      }
+    } finally {
+      setIsManualLibraryRefreshing(false);
+    }
   }
 
   function closeSearchDialog() {
@@ -575,18 +670,13 @@ function App() {
 
     setIsSearching(true);
     try {
-      const payload = await getTracks();
-      const matchedTracks = payload.tracks.filter((track) => trackMatchesQuery(track, keyword));
+      const matchedTracks = libraryTracks.filter((track) => trackMatchesQuery(track, keyword));
       if (!matchedTracks.length) {
         showToast("音乐不存在");
         return;
       }
 
-      audioRef.current?.pause();
-      setIsPlaying(false);
       setTracks(matchedTracks);
-      setPlaybackQueue(matchedTracks);
-      setCurrentTrackId(matchedTracks[0].id);
       setLoadMessage("");
       setIsLibraryFiltered(true);
       setIsSearchOpen(false);
@@ -813,10 +903,20 @@ function App() {
   const isActiveMenuTrackFavorite = activeMenuTrack ? favoriteTrackIds.has(activeMenuTrack.id) : false;
   const lyricLines = trackLyrics?.lines ?? [];
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
+  const canSortMusicColumns = activeTab === "音乐列表";
+  const currentTrackLabel = currentTrack ? `${currentTrack.artist} - ${currentTrack.title}` : "";
 
   return (
     <main className="player-screen" aria-label="MediaPlayer">
       <div className="top-line" />
+      {currentTrackLabel ? (
+        <div className="now-playing-ticker" aria-label={`当前正在播放：${currentTrackLabel}`} aria-live="polite">
+          <div className="now-playing-ticker-track">
+            <span>{currentTrackLabel}</span>
+            <span aria-hidden="true">{currentTrackLabel}</span>
+          </div>
+        </div>
+      ) : null}
       <section className="app-page-area" aria-label="当前页面">
         {activePage === "music" ? (
           <section className="music-page" aria-label="音乐">
@@ -831,15 +931,37 @@ function App() {
             <section className="song-table" aria-label="本地音乐列表" aria-busy={isLoading}>
               <div className="table-head">
                 <span />
-                <span>歌曲</span>
-                <span>歌手</span>
-                <span>专辑</span>
+                {canSortMusicColumns ? (
+                  <button
+                    className={musicSortKey === "title" ? "active" : ""}
+                    type="button"
+                    aria-pressed={musicSortKey === "title"}
+                    onClick={() => handleMusicSortClick("title")}
+                  >
+                    歌曲
+                  </button>
+                ) : (
+                  <span>歌曲</span>
+                )}
+                {canSortMusicColumns ? (
+                  <button
+                    className={musicSortKey === "artist" ? "active" : ""}
+                    type="button"
+                    aria-pressed={musicSortKey === "artist"}
+                    onClick={() => handleMusicSortClick("artist")}
+                  >
+                    歌手
+                  </button>
+                ) : (
+                  <span>歌手</span>
+                )}
               </div>
-              <div className="table-body">
+              <div className="table-body" ref={musicListRef}>
                 {tracks.map((track, index) => (
                   <button
                     key={track.id}
                     type="button"
+                    data-track-id={track.id}
                     className={`table-row ${track.id === playingTrackId ? "active" : ""}`}
                     aria-current={track.id === playingTrackId ? "true" : undefined}
                     onClick={() => handleTrackClick(track)}
@@ -854,7 +976,6 @@ function App() {
                     <span className="row-index">{index + 1}</span>
                     <span className="row-title">{track.title}</span>
                     <span>{track.artist}</span>
-                    <span>{track.album}</span>
                   </button>
                 ))}
                 {!tracks.length ? <div className="empty-table">{isLoading ? (isScanning ? "正在重新检查音乐文件夹" : activeTab === "收藏" ? "正在加载收藏歌曲" : "正在加载本地音乐列表") : emptyMessage}</div> : null}
@@ -991,7 +1112,11 @@ function App() {
             page={activePage}
             authSession={authSession}
             onlineCount={onlineCount}
+            onlineUsers={onlineUsers}
             isOnlineCountUnavailable={isOnlineCountUnavailable}
+            isRefreshingLibrary={isManualLibraryRefreshing || isScanning}
+            libraryRefreshCooldownSeconds={manualLibraryRefreshCooldownSeconds}
+            onRefreshLibrary={handleManualLibraryRefresh}
             onLogout={handleLogout}
           />
         )}
@@ -1003,11 +1128,15 @@ function App() {
             key={page.id}
             className={page.id === activePage ? "active" : ""}
             type="button"
+            aria-label={page.label}
             aria-current={page.id === activePage ? "page" : undefined}
+            title={page.label}
             onClick={() => handlePageClick(page.id)}
           >
-            <PageIcon page={page.id} />
-            <span>{page.label}</span>
+            <span className="bottom-tab-icon" aria-hidden="true">
+              <PageIcon page={page.id} />
+            </span>
+            <span className="sr-only">{page.label}</span>
           </button>
         ))}
       </nav>
@@ -1052,6 +1181,60 @@ function trackMatchesQuery(track: Track, keyword: string) {
   );
 }
 
+function sortMusicTracks(tracks: Track[], sortKey: TrackSortKey | null) {
+  if (!sortKey) {
+    return tracks;
+  }
+
+  const artistCounts = sortKey === "artist" ? countTracksByArtist(tracks) : null;
+
+  return [...tracks].sort((left, right) => {
+    if (sortKey === "artist" && artistCounts) {
+      const leftCount = artistCounts.get(left.artist) ?? 0;
+      const rightCount = artistCounts.get(right.artist) ?? 0;
+      if (leftCount !== rightCount) {
+        return rightCount - leftCount;
+      }
+    }
+
+    const primary = compareTrackText(getTrackSortValue(left, sortKey), getTrackSortValue(right, sortKey));
+    if (primary !== 0) {
+      return primary;
+    }
+
+    const title = compareTrackText(left.title, right.title);
+    if (title !== 0) {
+      return title;
+    }
+
+    const filename = compareTrackText(left.filename, right.filename);
+    if (filename !== 0) {
+      return filename;
+    }
+
+    return left.id - right.id;
+  });
+}
+
+function countTracksByArtist(tracks: Track[]) {
+  const counts = new Map<string, number>();
+  for (const track of tracks) {
+    counts.set(track.artist, (counts.get(track.artist) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function getTrackSortValue(track: Track, sortKey: TrackSortKey) {
+  return sortKey === "artist" ? track.artist : track.title;
+}
+
+function compareTrackText(left: string, right: string) {
+  return left.localeCompare(right, "zh-Hans-CN", {
+    numeric: true,
+    sensitivity: "base"
+  });
+}
+
 function areTrackListsEqual(previous: Track[], next: Track[]) {
   if (previous.length !== next.length) {
     return false;
@@ -1088,6 +1271,14 @@ function mergePlaybackQueue(previousQueue: Track[], nextTracks: Track[]) {
   const newTracks = nextTracks.filter((track) => !queuedIDs.has(track.id));
 
   return syncedQueue.length ? [...syncedQueue, ...newTracks] : nextTracks;
+}
+
+function scrollElementToListCenter(container: HTMLElement, element: HTMLElement) {
+  const rowHeight = Math.max(1, element.offsetHeight);
+  const centeredTop = element.offsetTop - (container.clientHeight - element.offsetHeight) / 2;
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  const snappedTop = Math.round(centeredTop / rowHeight) * rowHeight;
+  container.scrollTop = Math.min(Math.max(0, snappedTop), maxScrollTop);
 }
 
 function FullLyricsPage({
@@ -1356,6 +1547,10 @@ function createAuthSession(user: AuthUser): AuthSession {
   };
 }
 
+function getAuthSessionKey(session: AuthSession) {
+  return `${session.userId ?? "phone"}:${session.phone}`;
+}
+
 function persistAuthSession(session: AuthSession) {
   writeLocalStorage(authSessionStorageKey, JSON.stringify(session));
 }
@@ -1368,6 +1563,16 @@ function persistAuthProfile(user: Pick<AuthUser, "nickname" | "phone">) {
       phone: normalizePhone(user.phone)
     })
   );
+}
+
+function readManualLibraryRefreshAt() {
+  const rawValue = readLocalStorage(manualLibraryRefreshStorageKey);
+  const timestamp = rawValue ? Number(rawValue) : 0;
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+function persistManualLibraryRefreshAt(timestamp: number) {
+  writeLocalStorage(manualLibraryRefreshStorageKey, String(timestamp));
 }
 
 function normalizePhone(phone: string) {
@@ -1428,13 +1633,21 @@ function EmptyPage({
   page,
   authSession,
   onlineCount,
+  onlineUsers,
   isOnlineCountUnavailable,
+  isRefreshingLibrary,
+  libraryRefreshCooldownSeconds,
+  onRefreshLibrary,
   onLogout
 }: {
   page: Exclude<AppPage, "music" | "lyrics">;
   authSession: AuthSession | null;
   onlineCount: number | null;
+  onlineUsers: OnlineUser[];
   isOnlineCountUnavailable: boolean;
+  isRefreshingLibrary: boolean;
+  libraryRefreshCooldownSeconds: number;
+  onRefreshLibrary: () => void;
   onLogout: () => void;
 }) {
   const pageContent: Record<Exclude<AppPage, "music" | "lyrics">, { title: string; message: string }> = {
@@ -1442,6 +1655,7 @@ function EmptyPage({
     profile: { title: "我", message: authSession ? authSession.nickname || authSession.phone : "未登录" }
   };
   const content = pageContent[page];
+  const canViewOnlineUsers = authSession?.nickname === "Bright";
 
   return (
     <section className="simple-page" aria-label={content.title}>
@@ -1456,9 +1670,38 @@ function EmptyPage({
             <strong>{isOnlineCountUnavailable || onlineCount === null ? "--" : onlineCount}</strong>
             <span>{isOnlineCountUnavailable ? "暂不可用" : onlineCount === null ? "同步中" : "人"}</span>
           </div>
-          <button className="logout-button" type="button" onClick={onLogout}>
-            退出登录
-          </button>
+          {canViewOnlineUsers ? (
+            <div className="online-user-list" aria-label="当前在线用户昵称">
+              <div className="online-user-list-title">当前在线用户昵称</div>
+              {isOnlineCountUnavailable ? (
+                <div className="online-user-list-empty">暂不可用</div>
+              ) : onlineCount === null ? (
+                <div className="online-user-list-empty">同步中</div>
+              ) : onlineUsers.length > 0 ? (
+                <div className="online-user-chips">
+                  {onlineUsers.map((user, index) => (
+                    <span key={`${user.user_id ?? index}-${user.nickname}`}>{user.nickname}</span>
+                  ))}
+                </div>
+              ) : (
+                <div className="online-user-list-empty">暂无在线用户</div>
+              )}
+            </div>
+          ) : null}
+          <div className="profile-actions">
+            <button
+              className="profile-action-button refresh-library-button"
+              type="button"
+              disabled={isRefreshingLibrary || libraryRefreshCooldownSeconds > 0}
+              onClick={onRefreshLibrary}
+            >
+              {isRefreshingLibrary ? "正在刷新" : "刷新音乐列表"}
+            </button>
+            <button className="profile-action-button logout-button" type="button" onClick={onLogout}>
+              退出登录
+            </button>
+          </div>
+          {libraryRefreshCooldownSeconds > 0 && !isRefreshingLibrary ? <div className="profile-action-hint">{libraryRefreshCooldownSeconds}秒后可再次刷新</div> : null}
         </div>
       ) : (
         <div className="simple-page-empty">{content.message}</div>
@@ -1668,9 +1911,11 @@ function EyeOffIcon() {
 function MusicIcon() {
   return (
     <IconBase>
-      <path d="M9 18V5l10-2v13" />
-      <circle cx="6" cy="18" r="3" />
-      <circle cx="16" cy="16" r="3" />
+      <path className="icon-accent" d="M5.5 20.4a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8Zm10-2.1a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8Z" />
+      <path d="M8.4 17.5V5.9l9.9-2.2v11.6" />
+      <path className="icon-detail" d="m8.4 8.5 9.9-2.2" />
+      <circle cx="5.5" cy="17.5" r="2.9" />
+      <circle cx="15.5" cy="15.4" r="2.9" />
     </IconBase>
   );
 }
@@ -1678,8 +1923,10 @@ function MusicIcon() {
 function DiscoverIcon() {
   return (
     <IconBase>
-      <circle cx="12" cy="12" r="9" />
-      <path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z" />
+      <circle className="icon-accent" cx="12" cy="12" r="4.2" />
+      <circle cx="12" cy="12" r="8.7" />
+      <path d="m15.9 8.1-2.2 5.6-5.6 2.2 2.2-5.6z" />
+      <path className="icon-detail" d="M12 3.3v1.8M12 18.9v1.8M20.7 12h-1.8M5.1 12H3.3" />
     </IconBase>
   );
 }
@@ -1687,8 +1934,13 @@ function DiscoverIcon() {
 function LyricsIcon() {
   return (
     <IconBase>
-      <path d="M7 4h10M7 8h10M7 12h7M7 16h5" />
-      <path d="M4 4v16M20 4v16" />
+      <path className="icon-accent" d="M6.8 4.1h7l3.7 3.7v12.1H6.8z" />
+      <path d="M6.5 4.1h7.4l3.6 3.6v12.2H6.5a2 2 0 0 1-2-2V6.1a2 2 0 0 1 2-2Z" />
+      <path className="icon-detail" d="M13.9 4.1v3.6h3.6" />
+      <path d="M8.1 10.4h5.5M8.1 13.5h3.9M8.1 16.6h3" />
+      <path d="M15.4 16.6v-4.3l3.1-.7v4.3" />
+      <circle cx="14.2" cy="16.8" r="1.2" />
+      <circle cx="17.3" cy="16.1" r="1.2" />
     </IconBase>
   );
 }
@@ -1696,8 +1948,10 @@ function LyricsIcon() {
 function ProfileIcon() {
   return (
     <IconBase>
-      <circle cx="12" cy="8" r="4" />
-      <path d="M4.5 21a7.5 7.5 0 0 1 15 0" />
+      <path className="icon-accent" d="M12 12.4a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2Zm-7.4 7.2c1-3.7 3.6-5.8 7.4-5.8s6.4 2.1 7.4 5.8Z" />
+      <circle cx="12" cy="8.3" r="4.1" />
+      <path d="M4.6 19.6c1-3.7 3.6-5.8 7.4-5.8s6.4 2.1 7.4 5.8" />
+      <path className="icon-detail" d="M8.7 18.5h6.6" />
     </IconBase>
   );
 }
