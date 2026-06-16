@@ -1,18 +1,23 @@
 import { type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   addFavoriteTrack,
+  addFavoriteTrackToCategory,
+  createFavoriteCategory,
+  deleteFavoriteCategory,
+  getFavoriteCategories,
   getFavoriteTracks,
   getTrackLyrics,
   getTracks,
   loginUser,
   removeFavoriteTrack,
+  removeFavoriteTrackFromCategory,
   registerUser,
   scanLibrary,
   sendPresenceHeartbeat,
   sendPresenceOffline,
   streamURL
 } from "./api";
-import type { AuthUser, LyricLine, OnlineUser, Track, TrackLyrics } from "./types";
+import type { AuthUser, FavoriteCategory, LyricLine, OnlineUser, Track, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -38,10 +43,18 @@ type TrackContextMenu = {
   x: number;
   y: number;
 };
+type CategoryContextMenu = {
+  category: FavoriteCategory;
+  x: number;
+  y: number;
+};
 type LongPressStart = {
   pointerId: number;
   x: number;
   y: number;
+};
+type CategoryLongPressStart = LongPressStart & {
+  category: FavoriteCategory;
 };
 type LyricsStatus = "idle" | "loading" | "ready" | "empty" | "error";
 type LyricsScrollState = {
@@ -50,8 +63,7 @@ type LyricsScrollState = {
 };
 type TrackSortKey = "title" | "artist";
 
-const musicTabs = ["音乐列表", "收藏", "歌曲搜索"] as const;
-type MusicTab = (typeof musicTabs)[number];
+type MusicTab = "音乐列表" | "收藏" | "分类" | "歌曲搜索";
 const appPages: Array<{ id: AppPage; label: string }> = [
   { id: "music", label: "音乐" },
   { id: "lyrics", label: "歌词" },
@@ -68,6 +80,7 @@ const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
 const manualLibraryRefreshStorageKey = "media-player-manual-library-refresh-at";
+const sleepTimerStorageKey = "media-player-sleep-timer-minutes";
 const authSessionDurationMs = 7 * 24 * 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
 const manualLibraryRefreshCooldownMs = 60_000;
@@ -77,16 +90,24 @@ const passwordMaxLength = 64;
 const mainlandPhonePattern = /^1[3-9]\d{9}$/;
 const longPressDelayMs = 520;
 const longPressMoveTolerancePx = 10;
-const contextMenuWidth = 132;
-const contextMenuHeight = 54;
+const contextMenuWidth = 148;
+const trackContextMenuHeight = 148;
+const categoryContextMenuHeight = 54;
 const contextMenuMargin = 8;
+const favoriteCategoryNameMaxLength = 16;
+const sleepTimerPresetMinutes = [15, 30, 60, 90];
+const sleepTimerMinMinutes = 1;
+const sleepTimerMaxMinutes = 360;
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartRef = useRef<LongPressStart | null>(null);
+  const categoryLongPressTimerRef = useRef<number | null>(null);
+  const categoryLongPressStartRef = useRef<CategoryLongPressStart | null>(null);
   const suppressNextClickRef = useRef(false);
+  const suppressNextCategoryClickRef = useRef(false);
   const initialAuthRef = useRef<AuthReadResult | null>(null);
   const initialAuthProfileRef = useRef<AuthFormState | null>(null);
   const presenceSessionIdRef = useRef<string | null>(null);
@@ -123,9 +144,12 @@ function App() {
   const [isManualLibraryRefreshing, setIsManualLibraryRefreshing] = useState(false);
   const [activePage, setActivePage] = useState<AppPage>("music");
   const [activeTab, setActiveTab] = useState<MusicTab>("音乐列表");
+  const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [musicSortKey, setMusicSortKey] = useState<TrackSortKey | null>(null);
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(() => new Set());
+  const [favoriteCategories, setFavoriteCategories] = useState<FavoriteCategory[]>([]);
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
+  const [categoryContextMenu, setCategoryContextMenu] = useState<CategoryContextMenu | null>(null);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("all");
   const [isPlaybackModeMenuOpen, setIsPlaybackModeMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -134,11 +158,18 @@ function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
+  const [categoryName, setCategoryName] = useState("");
+  const [isCategorySubmitting, setIsCategorySubmitting] = useState(false);
+  const [categoryPickerTrack, setCategoryPickerTrack] = useState<Track | null>(null);
   const [toastMessage, setToastMessage] = useState("");
   const [loadMessage, setLoadMessage] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(12);
   const [duration, setDuration] = useState(185);
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(() => readSleepTimerMinutes());
+  const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(null);
+  const [sleepTimerNow, setSleepTimerNow] = useState(() => Date.now());
 
   const currentTrack = useMemo(() => {
     if (!playbackQueue.length) {
@@ -165,9 +196,15 @@ function App() {
   useEffect(() => {
     if (!authSession?.userId) {
       setFavoriteTrackIds(new Set());
+      setFavoriteCategories([]);
+      setActiveCategoryId(null);
       return;
     }
-    void refreshFavoriteTracks({ showList: activePage === "music" && activeTab === "收藏" });
+    void refreshFavoriteCategories();
+    void refreshFavoriteTracks({
+      showList: activePage === "music" && (activeTab === "收藏" || activeTab === "分类"),
+      categoryId: activeTab === "分类" ? activeCategoryId : undefined
+    });
   }, [authSession?.userId]);
 
   useEffect(() => {
@@ -176,23 +213,25 @@ function App() {
         window.clearTimeout(toastTimerRef.current);
       }
       cancelLongPress();
+      cancelCategoryLongPress();
     };
   }, []);
 
   useEffect(() => {
-    if (!trackContextMenu) {
+    if (!trackContextMenu && !categoryContextMenu) {
       return;
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setTrackContextMenu(null);
+        setCategoryContextMenu(null);
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [trackContextMenu]);
+  }, [trackContextMenu, categoryContextMenu]);
 
   useEffect(() => {
     if (!isPlaybackModeMenuOpen) {
@@ -211,6 +250,7 @@ function App() {
 
   const manualLibraryRefreshRemainingMs = Math.max(0, lastManualLibraryRefreshAt + manualLibraryRefreshCooldownMs - libraryRefreshClock);
   const manualLibraryRefreshCooldownSeconds = Math.ceil(manualLibraryRefreshRemainingMs / 1000);
+  const sleepTimerRemainingSeconds = sleepTimerEndsAt ? Math.max(0, Math.ceil((sleepTimerEndsAt - sleepTimerNow) / 1000)) : null;
 
   useEffect(() => {
     if (manualLibraryRefreshRemainingMs <= 0) {
@@ -225,6 +265,30 @@ function App() {
       window.clearTimeout(timeoutID);
     };
   }, [manualLibraryRefreshRemainingMs]);
+
+  useEffect(() => {
+    if (!sleepTimerEndsAt) {
+      return;
+    }
+
+    const remainingMs = sleepTimerEndsAt - Date.now();
+    if (remainingMs <= 0) {
+      audioRef.current?.pause();
+      setIsPlaying(false);
+      setSleepTimerEndsAt(null);
+      setSleepTimerNow(Date.now());
+      showToast("睡眠定时器已结束");
+      return;
+    }
+
+    const timeoutID = window.setTimeout(() => {
+      setSleepTimerNow(Date.now());
+    }, Math.min(1000, remainingMs));
+
+    return () => {
+      window.clearTimeout(timeoutID);
+    };
+  }, [sleepTimerEndsAt, sleepTimerNow]);
 
   useLayoutEffect(() => {
     if (activePage !== "music" || activeTab !== "音乐列表" || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
@@ -430,12 +494,26 @@ function App() {
     }
   }
 
-  async function refreshFavoriteTracks({ showList = false }: { showList?: boolean } = {}) {
+  async function refreshFavoriteCategories() {
+    if (!authSession?.userId) {
+      setFavoriteCategories([]);
+      return;
+    }
+
+    try {
+      const payload = await getFavoriteCategories(authSession.userId);
+      setFavoriteCategories(sortFavoriteCategories(payload.categories));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "分类加载失败");
+    }
+  }
+
+  async function refreshFavoriteTracks({ showList = false, categoryId }: { showList?: boolean; categoryId?: number | null } = {}) {
     if (!authSession?.userId) {
       setFavoriteTrackIds(new Set());
       if (showList) {
         setTracks([]);
-        setLoadMessage("请先登录后查看收藏");
+        setLoadMessage(categoryId ? "请先登录后查看分类" : "请先登录后查看收藏");
       }
       return;
     }
@@ -445,15 +523,20 @@ function App() {
       setLoadMessage("");
     }
     try {
-      const payload = await getFavoriteTracks(authSession.userId);
-      setFavoriteTrackIds(new Set(payload.tracks.map((track) => track.id)));
+      const payload = await getFavoriteTracks(authSession.userId, categoryId ?? undefined);
+      if (categoryId) {
+        const favoritesPayload = await getFavoriteTracks(authSession.userId);
+        setFavoriteTrackIds(new Set(favoritesPayload.tracks.map((track) => track.id)));
+      } else {
+        setFavoriteTrackIds(new Set(payload.tracks.map((track) => track.id)));
+      }
       if (showList) {
         setTracks(payload.tracks);
       }
     } catch (error) {
       if (showList) {
         setTracks([]);
-        setLoadMessage(error instanceof Error ? error.message : "收藏列表加载失败");
+        setLoadMessage(error instanceof Error ? error.message : categoryId ? "分类歌曲加载失败" : "收藏列表加载失败");
       }
     } finally {
       if (showList) {
@@ -479,7 +562,9 @@ function App() {
     shouldRevealCurrentTrackRef.current = false;
     setActiveTab(tab);
     setActivePage("music");
+    setActiveCategoryId(null);
     setIsPlaybackModeMenuOpen(false);
+    setCategoryContextMenu(null);
     if (tab === "音乐列表") {
       setIsLibraryFiltered(false);
       setIsSearchOpen(false);
@@ -498,6 +583,31 @@ function App() {
     setSearchQuery("");
     setIsSearchOpen(true);
     setTrackContextMenu(null);
+  }
+
+  function handleCustomCategoryClick() {
+    setActivePage("music");
+    setIsSearchOpen(false);
+    setTrackContextMenu(null);
+    setCategoryContextMenu(null);
+    setIsCategoryDialogOpen(true);
+  }
+
+  function handleCategoryClick(category: FavoriteCategory) {
+    if (suppressNextCategoryClickRef.current) {
+      suppressNextCategoryClickRef.current = false;
+      return;
+    }
+    shouldRevealCurrentTrackRef.current = false;
+    setActivePage("music");
+    setActiveTab("分类");
+    setActiveCategoryId(category.id);
+    setIsLibraryFiltered(false);
+    setIsSearchOpen(false);
+    setTrackContextMenu(null);
+    setCategoryContextMenu(null);
+    setLoadMessage("");
+    void refreshFavoriteTracks({ showList: true, categoryId: category.id });
   }
 
   function handleMusicSortClick(sortKey: TrackSortKey) {
@@ -523,6 +633,7 @@ function App() {
     setActivePage(page);
     setIsPlaybackModeMenuOpen(false);
     setTrackContextMenu(null);
+    setCategoryContextMenu(null);
     if (page === "lyrics") {
       setIsSearchOpen(false);
       return;
@@ -530,6 +641,7 @@ function App() {
     if (page !== "music") {
       setIsSearchOpen(false);
       setActiveTab("音乐列表");
+      setActiveCategoryId(null);
       setIsLibraryFiltered(false);
       setTracks(sortMusicTracks(libraryTracks, musicSortKey));
     }
@@ -604,10 +716,15 @@ function App() {
     setActivePage("music");
     setIsSearchOpen(false);
     setActiveTab("音乐列表");
+    setActiveCategoryId(null);
     setLibraryTracks([]);
     setTracks([]);
     setFavoriteTrackIds(new Set());
+    setFavoriteCategories([]);
     setTrackContextMenu(null);
+    setCategoryContextMenu(null);
+    setIsCategoryDialogOpen(false);
+    setCategoryPickerTrack(null);
     setOnlineCount(null);
     setOnlineUsers([]);
     setIsOnlineCountUnavailable(false);
@@ -634,7 +751,10 @@ function App() {
         preservePlayback: true
       });
       if (result.ok) {
-        void refreshFavoriteTracks({ showList: activePage === "music" && activeTab === "收藏" });
+        void refreshFavoriteTracks({
+          showList: activePage === "music" && (activeTab === "收藏" || activeTab === "分类"),
+          categoryId: activeTab === "分类" ? activeCategoryId : undefined
+        });
         showToast("音乐列表已刷新");
       } else {
         showToast(result.message ?? "音乐列表刷新失败");
@@ -658,6 +778,105 @@ function App() {
       setToastMessage("");
       toastTimerRef.current = null;
     }, 3000);
+  }
+
+  function handleSetSleepTimerMinutes(minutes: number | null) {
+    const normalizedMinutes = normalizeSleepTimerMinutes(minutes);
+    setSleepTimerMinutes(normalizedMinutes);
+    persistSleepTimerMinutes(normalizedMinutes);
+    if (!normalizedMinutes) {
+      setSleepTimerEndsAt(null);
+      setSleepTimerNow(Date.now());
+    }
+  }
+
+  function handleStartSleepTimer() {
+    if (!sleepTimerMinutes) {
+      showToast("请选择睡眠定时器时间");
+      return;
+    }
+
+    const now = Date.now();
+    setSleepTimerNow(now);
+    setSleepTimerEndsAt(now + sleepTimerMinutes * 60_000);
+    showToast(`睡眠定时器将在${sleepTimerMinutes}分钟后停止播放`);
+  }
+
+  function handleStopSleepTimer() {
+    setSleepTimerEndsAt(null);
+    setSleepTimerNow(Date.now());
+    showToast("睡眠定时器已关闭");
+  }
+
+  async function handleCreateCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authSession?.userId) {
+      showToast("请先登录后创建分类");
+      return;
+    }
+
+    const name = categoryName.trim();
+    if (!name) {
+      showToast("请输入分类名称");
+      return;
+    }
+    if (Array.from(name).length > favoriteCategoryNameMaxLength) {
+      showToast(`分类名称不能超过${favoriteCategoryNameMaxLength}个字符`);
+      return;
+    }
+    if (favoriteCategories.some((category) => category.name.localeCompare(name, undefined, { sensitivity: "accent" }) === 0)) {
+      showToast("分类名称已存在");
+      return;
+    }
+
+    setIsCategorySubmitting(true);
+    try {
+      const payload = await createFavoriteCategory({
+        user_id: authSession.userId,
+        name
+      });
+      setFavoriteCategories((previous) => sortFavoriteCategories([...previous, payload.category]));
+      setCategoryName("");
+      setIsCategoryDialogOpen(false);
+      setActiveTab("分类");
+      setActiveCategoryId(payload.category.id);
+      setIsLibraryFiltered(false);
+      setIsSearchOpen(false);
+      setTracks([]);
+      setLoadMessage("暂无分类歌曲");
+      showToast("分类已创建");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "创建分类失败");
+    } finally {
+      setIsCategorySubmitting(false);
+    }
+  }
+
+  function closeCategoryDialog() {
+    setIsCategoryDialogOpen(false);
+    setCategoryName("");
+  }
+
+  async function handleDeleteCategory(category: FavoriteCategory) {
+    if (!authSession?.userId) {
+      setCategoryContextMenu(null);
+      showToast("请先登录后删除分类");
+      return;
+    }
+
+    setCategoryContextMenu(null);
+    try {
+      await deleteFavoriteCategory(authSession.userId, category.id);
+      setFavoriteCategories((previous) => previous.filter((item) => item.id !== category.id));
+      if (activeTab === "分类" && activeCategoryId === category.id) {
+        setActiveTab("收藏");
+        setActiveCategoryId(null);
+        void refreshFavoriteTracks({ showList: true });
+      }
+      showToast("分类已删除");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "删除分类失败");
+    }
   }
 
   async function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
@@ -735,6 +954,46 @@ function App() {
     openTrackMenu(track, event.clientX, event.clientY);
   }
 
+  function handleCategoryPointerDown(event: ReactPointerEvent<HTMLButtonElement>, category: FavoriteCategory) {
+    if (event.pointerType === "mouse") {
+      return;
+    }
+    cancelCategoryLongPress();
+    const { clientX, clientY } = event;
+    categoryLongPressStartRef.current = {
+      pointerId: event.pointerId,
+      x: clientX,
+      y: clientY,
+      category
+    };
+    categoryLongPressTimerRef.current = window.setTimeout(() => {
+      suppressNextCategoryClickRef.current = true;
+      categoryLongPressTimerRef.current = null;
+      categoryLongPressStartRef.current = null;
+      openCategoryMenu(category, clientX, clientY);
+    }, longPressDelayMs);
+  }
+
+  function handleCategoryPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === "mouse" || !categoryLongPressStartRef.current) {
+      return;
+    }
+    if (event.pointerId !== categoryLongPressStartRef.current.pointerId) {
+      return;
+    }
+    const deltaX = Math.abs(event.clientX - categoryLongPressStartRef.current.x);
+    const deltaY = Math.abs(event.clientY - categoryLongPressStartRef.current.y);
+    if (deltaX > longPressMoveTolerancePx || deltaY > longPressMoveTolerancePx) {
+      cancelCategoryLongPress();
+    }
+  }
+
+  function handleCategoryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, category: FavoriteCategory) {
+    event.preventDefault();
+    cancelCategoryLongPress();
+    openCategoryMenu(category, event.clientX, event.clientY);
+  }
+
   function cancelLongPress() {
     longPressStartRef.current = null;
     if (!longPressTimerRef.current) {
@@ -744,12 +1003,34 @@ function App() {
     longPressTimerRef.current = null;
   }
 
+  function cancelCategoryLongPress() {
+    categoryLongPressStartRef.current = null;
+    if (!categoryLongPressTimerRef.current) {
+      return;
+    }
+    window.clearTimeout(categoryLongPressTimerRef.current);
+    categoryLongPressTimerRef.current = null;
+  }
+
   function openTrackMenu(track: Track, clientX: number, clientY: number) {
     const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
-    const maxY = Math.max(contextMenuMargin, window.innerHeight - contextMenuHeight - contextMenuMargin);
+    const maxY = Math.max(contextMenuMargin, window.innerHeight - trackContextMenuHeight - contextMenuMargin);
     setIsPlaybackModeMenuOpen(false);
+    setCategoryContextMenu(null);
     setTrackContextMenu({
       track,
+      x: Math.min(Math.max(contextMenuMargin, clientX), maxX),
+      y: Math.min(Math.max(contextMenuMargin, clientY), maxY)
+    });
+  }
+
+  function openCategoryMenu(category: FavoriteCategory, clientX: number, clientY: number) {
+    const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
+    const maxY = Math.max(contextMenuMargin, window.innerHeight - categoryContextMenuHeight - contextMenuMargin);
+    setIsPlaybackModeMenuOpen(false);
+    setTrackContextMenu(null);
+    setCategoryContextMenu({
+      category,
       x: Math.min(Math.max(contextMenuMargin, clientX), maxX),
       y: Math.min(Math.max(contextMenuMargin, clientY), maxY)
     });
@@ -773,7 +1054,7 @@ function App() {
       }
       return next;
     });
-    if (wasFavorite && activeTab === "收藏") {
+    if (wasFavorite && (activeTab === "收藏" || activeTab === "分类")) {
       setTracks((previous) => previous.filter((item) => item.id !== track.id));
     }
 
@@ -785,12 +1066,75 @@ function App() {
         await addFavoriteTrack({ user_id: authSession.userId, track_id: track.id });
         showToast("已收藏");
       }
-      if (activeTab === "收藏") {
-        void refreshFavoriteTracks({ showList: true });
+      if (activeTab === "收藏" || activeTab === "分类") {
+        void refreshFavoriteTracks({ showList: true, categoryId: activeTab === "分类" ? activeCategoryId : undefined });
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : "收藏操作失败");
-      void refreshFavoriteTracks({ showList: activeTab === "收藏" });
+      void refreshFavoriteTracks({
+        showList: activeTab === "收藏" || activeTab === "分类",
+        categoryId: activeTab === "分类" ? activeCategoryId : undefined
+      });
+    }
+  }
+
+  function openCategoryPicker(track: Track) {
+    setTrackContextMenu(null);
+    if (!authSession?.userId) {
+      showToast("请先登录后加入分类");
+      return;
+    }
+    if (!favoriteCategories.length) {
+      showToast("请先创建分类");
+      setIsCategoryDialogOpen(true);
+      return;
+    }
+    setCategoryPickerTrack(track);
+  }
+
+  async function addTrackToCategory(category: FavoriteCategory) {
+    if (!authSession?.userId || !categoryPickerTrack) {
+      setCategoryPickerTrack(null);
+      return;
+    }
+
+    const track = categoryPickerTrack;
+    setCategoryPickerTrack(null);
+    try {
+      await addFavoriteTrackToCategory(category.id, {
+        user_id: authSession.userId,
+        track_id: track.id
+      });
+      setFavoriteTrackIds((previous) => {
+        const next = new Set(previous);
+        next.add(track.id);
+        return next;
+      });
+      if (activeTab === "分类" && activeCategoryId === category.id) {
+        void refreshFavoriteTracks({ showList: true, categoryId: category.id });
+      }
+      showToast(`已加入${category.name}`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "加入分类失败");
+      void refreshFavoriteTracks({ showList: activeTab === "收藏" || activeTab === "分类", categoryId: activeTab === "分类" ? activeCategoryId : undefined });
+    }
+  }
+
+  async function removeTrackFromCurrentCategory(track: Track) {
+    if (!authSession?.userId || !activeCategoryId) {
+      setTrackContextMenu(null);
+      return;
+    }
+
+    setTrackContextMenu(null);
+    setTracks((previous) => previous.filter((item) => item.id !== track.id));
+    try {
+      await removeFavoriteTrackFromCategory(authSession.userId, activeCategoryId, track.id);
+      showToast("已移出分类");
+      void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "移出分类失败");
+      void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId });
     }
   }
 
@@ -895,12 +1239,14 @@ function App() {
     lyricsScrollStateRef.current = { trackID, top };
   }
 
-  const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : "暂无本地音乐");
+  const activeCategory = favoriteCategories.find((category) => category.id === activeCategoryId) ?? null;
+  const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : activeTab === "分类" ? "暂无分类歌曲" : "暂无本地音乐");
   const isAuthVisible = !authSession;
   const canSubmitAuth = !isAuthSubmitting && isAuthFormReady(authMode, authForm);
   const playingTrackId = isPlaying ? currentTrack?.id ?? null : null;
   const activeMenuTrack = trackContextMenu?.track ?? null;
   const isActiveMenuTrackFavorite = activeMenuTrack ? favoriteTrackIds.has(activeMenuTrack.id) : false;
+  const isViewingActiveCategory = activeTab === "分类" && Boolean(activeCategory);
   const lyricLines = trackLyrics?.lines ?? [];
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
   const canSortMusicColumns = activeTab === "音乐列表";
@@ -921,11 +1267,37 @@ function App() {
         {activePage === "music" ? (
           <section className="music-page" aria-label="音乐">
             <nav className="mode-tabs" aria-label="播放器视图">
-              {musicTabs.map((tab) => (
-                <button key={tab} className={tab === activeTab ? "active" : ""} type="button" aria-current={tab === activeTab ? "page" : undefined} onClick={() => handleTabClick(tab)}>
-                  {tab}
+              <button className={activeTab === "音乐列表" ? "active" : ""} type="button" aria-current={activeTab === "音乐列表" ? "page" : undefined} onClick={() => handleTabClick("音乐列表")}>
+                音乐列表
+              </button>
+              <button className={activeTab === "收藏" ? "active" : ""} type="button" aria-current={activeTab === "收藏" ? "page" : undefined} onClick={() => handleTabClick("收藏")}>
+                收藏
+              </button>
+              <button className="custom-category-trigger" type="button" onClick={handleCustomCategoryClick}>
+                自定义
+              </button>
+              {favoriteCategories.map((category) => (
+                <button
+                  key={category.id}
+                  className={`user-category-tab ${activeTab === "分类" && activeCategoryId === category.id ? "active" : ""}`}
+                  type="button"
+                  aria-current={activeTab === "分类" && activeCategoryId === category.id ? "page" : undefined}
+                  title={`${category.name}，长按删除`}
+                  onClick={() => handleCategoryClick(category)}
+                  onContextMenu={(event) => handleCategoryContextMenu(event, category)}
+                  onPointerDown={(event) => handleCategoryPointerDown(event, category)}
+                  onPointerMove={handleCategoryPointerMove}
+                  onPointerUp={cancelCategoryLongPress}
+                  onPointerCancel={cancelCategoryLongPress}
+                  onPointerLeave={cancelCategoryLongPress}
+                  onDragStart={(event) => event.preventDefault()}
+                >
+                  {category.name}
                 </button>
               ))}
+              <button className={activeTab === "歌曲搜索" ? "active search-tab" : "search-tab"} type="button" aria-current={activeTab === "歌曲搜索" ? "page" : undefined} onClick={() => handleTabClick("歌曲搜索")}>
+                歌曲搜索
+              </button>
             </nav>
 
             <section className="song-table" aria-label="本地音乐列表" aria-busy={isLoading}>
@@ -978,7 +1350,11 @@ function App() {
                     <span>{track.artist}</span>
                   </button>
                 ))}
-                {!tracks.length ? <div className="empty-table">{isLoading ? (isScanning ? "正在重新检查音乐文件夹" : activeTab === "收藏" ? "正在加载收藏歌曲" : "正在加载本地音乐列表") : emptyMessage}</div> : null}
+                {!tracks.length ? (
+                  <div className="empty-table">
+                    {isLoading ? (isScanning ? "正在重新检查音乐文件夹" : activeTab === "收藏" ? "正在加载收藏歌曲" : activeTab === "分类" ? "正在加载分类歌曲" : "正在加载本地音乐列表") : emptyMessage}
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -993,6 +1369,30 @@ function App() {
                 >
                   <button type="button" role="menuitem" onClick={() => void toggleFavorite(trackContextMenu.track)}>
                     {isActiveMenuTrackFavorite ? "取消收藏" : "收藏"}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => openCategoryPicker(trackContextMenu.track)}>
+                    加入分类
+                  </button>
+                  {isViewingActiveCategory ? (
+                    <button type="button" role="menuitem" onClick={() => void removeTrackFromCurrentCategory(trackContextMenu.track)}>
+                      移出分类
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {categoryContextMenu ? (
+              <div className="context-menu-layer" role="presentation" onPointerDown={() => setCategoryContextMenu(null)}>
+                <div
+                  className="track-context-menu category-context-menu"
+                  role="menu"
+                  aria-label="分类操作"
+                  style={{ left: categoryContextMenu.x, top: categoryContextMenu.y }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  <button type="button" role="menuitem" onClick={() => void handleDeleteCategory(categoryContextMenu.category)}>
+                    删除分类
                   </button>
                 </div>
               </div>
@@ -1027,6 +1427,65 @@ function App() {
                     </button>
                   </div>
                 </form>
+              </div>
+            ) : null}
+
+            {isCategoryDialogOpen ? (
+              <div className="search-dialog-backdrop" role="presentation" onClick={closeCategoryDialog}>
+                <form
+                  className="search-dialog category-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="新建分类"
+                  onClick={(event) => event.stopPropagation()}
+                  onSubmit={handleCreateCategory}
+                >
+                  <h2>新建分类</h2>
+                  <input
+                    className="search-input"
+                    type="text"
+                    value={categoryName}
+                    placeholder="输入分类名称"
+                    aria-label="分类名称"
+                    maxLength={favoriteCategoryNameMaxLength}
+                    autoFocus
+                    onChange={(event) => setCategoryName(event.target.value)}
+                  />
+                  <div className="search-actions">
+                    <button type="button" onClick={closeCategoryDialog}>
+                      取消
+                    </button>
+                    <button className="primary" type="submit" disabled={isCategorySubmitting}>
+                      {isCategorySubmitting ? "创建中" : "确认"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : null}
+
+            {categoryPickerTrack ? (
+              <div className="search-dialog-backdrop" role="presentation" onClick={() => setCategoryPickerTrack(null)}>
+                <div
+                  className="search-dialog category-picker-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="加入分类"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <h2>加入分类</h2>
+                  <div className="category-picker-list">
+                    {favoriteCategories.map((category) => (
+                      <button key={category.id} className="category-picker-option" type="button" onClick={() => void addTrackToCategory(category)}>
+                        {category.name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="search-actions">
+                    <button type="button" onClick={() => setCategoryPickerTrack(null)}>
+                      取消
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1116,6 +1575,11 @@ function App() {
             isOnlineCountUnavailable={isOnlineCountUnavailable}
             isRefreshingLibrary={isManualLibraryRefreshing || isScanning}
             libraryRefreshCooldownSeconds={manualLibraryRefreshCooldownSeconds}
+            sleepTimerMinutes={sleepTimerMinutes}
+            sleepTimerRemainingSeconds={sleepTimerRemainingSeconds}
+            onSetSleepTimerMinutes={handleSetSleepTimerMinutes}
+            onStartSleepTimer={handleStartSleepTimer}
+            onStopSleepTimer={handleStopSleepTimer}
             onRefreshLibrary={handleManualLibraryRefresh}
             onLogout={handleLogout}
           />
@@ -1212,6 +1676,15 @@ function sortMusicTracks(tracks: Track[], sortKey: TrackSortKey | null) {
       return filename;
     }
 
+    return left.id - right.id;
+  });
+}
+
+function sortFavoriteCategories(categories: FavoriteCategory[]) {
+  return [...categories].sort((left, right) => {
+    if (left.sort_order !== right.sort_order) {
+      return left.sort_order - right.sort_order;
+    }
     return left.id - right.id;
   });
 }
@@ -1575,6 +2048,32 @@ function persistManualLibraryRefreshAt(timestamp: number) {
   writeLocalStorage(manualLibraryRefreshStorageKey, String(timestamp));
 }
 
+function readSleepTimerMinutes() {
+  const rawValue = readLocalStorage(sleepTimerStorageKey);
+  if (rawValue === null) {
+    return 30;
+  }
+  if (rawValue === "off") {
+    return null;
+  }
+  return normalizeSleepTimerMinutes(Number(rawValue)) ?? 30;
+}
+
+function persistSleepTimerMinutes(minutes: number | null) {
+  writeLocalStorage(sleepTimerStorageKey, minutes ? String(minutes) : "off");
+}
+
+function normalizeSleepTimerMinutes(minutes: number | null) {
+  if (minutes === null || !Number.isFinite(minutes)) {
+    return null;
+  }
+  const roundedMinutes = Math.floor(minutes);
+  if (roundedMinutes < sleepTimerMinMinutes) {
+    return null;
+  }
+  return Math.min(roundedMinutes, sleepTimerMaxMinutes);
+}
+
 function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
@@ -1629,6 +2128,17 @@ function formatDuration(seconds?: number | null) {
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
+function formatSleepTimerRemaining(seconds: number) {
+  const remainingSeconds = Math.max(0, Math.ceil(seconds));
+  const hours = Math.floor(remainingSeconds / 3600);
+  const minutes = Math.floor((remainingSeconds % 3600) / 60);
+  const rest = remainingSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
 function EmptyPage({
   page,
   authSession,
@@ -1637,6 +2147,11 @@ function EmptyPage({
   isOnlineCountUnavailable,
   isRefreshingLibrary,
   libraryRefreshCooldownSeconds,
+  sleepTimerMinutes,
+  sleepTimerRemainingSeconds,
+  onSetSleepTimerMinutes,
+  onStartSleepTimer,
+  onStopSleepTimer,
   onRefreshLibrary,
   onLogout
 }: {
@@ -1647,6 +2162,11 @@ function EmptyPage({
   isOnlineCountUnavailable: boolean;
   isRefreshingLibrary: boolean;
   libraryRefreshCooldownSeconds: number;
+  sleepTimerMinutes: number | null;
+  sleepTimerRemainingSeconds: number | null;
+  onSetSleepTimerMinutes: (minutes: number | null) => void;
+  onStartSleepTimer: () => void;
+  onStopSleepTimer: () => void;
   onRefreshLibrary: () => void;
   onLogout: () => void;
 }) {
@@ -1664,15 +2184,18 @@ function EmptyPage({
       </header>
       {page === "profile" && authSession ? (
         <div className="profile-page-content">
-          <div className="profile-name">{content.message}</div>
-          <div className="online-stat" aria-label="当前APP在线总人数">
-            <span>当前APP在线总人数</span>
+          <div className="profile-row profile-identity-row">
+            <span className="profile-row-title">账号</span>
+            <span className="profile-name">{content.message}</span>
+          </div>
+          <div className="profile-row online-stat" aria-label="当前APP在线总人数">
+            <span className="profile-row-title">在线人数</span>
             <strong>{isOnlineCountUnavailable || onlineCount === null ? "--" : onlineCount}</strong>
             <span>{isOnlineCountUnavailable ? "暂不可用" : onlineCount === null ? "同步中" : "人"}</span>
           </div>
           {canViewOnlineUsers ? (
-            <div className="online-user-list" aria-label="当前在线用户昵称">
-              <div className="online-user-list-title">当前在线用户昵称</div>
+            <div className="profile-row online-user-list" aria-label="当前在线用户昵称">
+              <div className="online-user-list-title">在线用户</div>
               {isOnlineCountUnavailable ? (
                 <div className="online-user-list-empty">暂不可用</div>
               ) : onlineCount === null ? (
@@ -1688,7 +2211,15 @@ function EmptyPage({
               )}
             </div>
           ) : null}
-          <div className="profile-actions">
+          <SleepTimerPanel
+            minutes={sleepTimerMinutes}
+            remainingSeconds={sleepTimerRemainingSeconds}
+            onSetMinutes={onSetSleepTimerMinutes}
+            onStart={onStartSleepTimer}
+            onStop={onStopSleepTimer}
+          />
+          <div className="profile-row profile-action-row">
+            <span className="profile-row-title">音乐列表</span>
             <button
               className="profile-action-button refresh-library-button"
               type="button"
@@ -1697,6 +2228,9 @@ function EmptyPage({
             >
               {isRefreshingLibrary ? "正在刷新" : "刷新音乐列表"}
             </button>
+          </div>
+          <div className="profile-row profile-action-row">
+            <span className="profile-row-title">登录状态</span>
             <button className="profile-action-button logout-button" type="button" onClick={onLogout}>
               退出登录
             </button>
@@ -1708,6 +2242,124 @@ function EmptyPage({
       )}
     </section>
   );
+}
+
+function SleepTimerPanel({
+  minutes,
+  remainingSeconds,
+  onSetMinutes,
+  onStart,
+  onStop
+}: {
+  minutes: number | null;
+  remainingSeconds: number | null;
+  onSetMinutes: (minutes: number | null) => void;
+  onStart: () => void;
+  onStop: () => void;
+}) {
+  const customMinutesInputRef = useRef<HTMLInputElement | null>(null);
+  const [customMinutes, setCustomMinutes] = useState(() => (minutes ? String(minutes) : ""));
+  const isRunning = remainingSeconds !== null;
+  const customMinutesValue = parseSleepTimerInput(customMinutes);
+
+  useEffect(() => {
+    setCustomMinutes(minutes ? String(minutes) : "");
+  }, [minutes]);
+
+  function handleCustomSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    applyCustomMinutes();
+  }
+
+  function applyCustomMinutes() {
+    const inputValue = customMinutesInputRef.current?.value ?? customMinutes;
+    const nextMinutes = parseSleepTimerInput(inputValue);
+    if (!nextMinutes) {
+      return;
+    }
+    setCustomMinutes(String(nextMinutes));
+    onSetMinutes(nextMinutes);
+  }
+
+  function handleCustomChange(value: string) {
+    setCustomMinutes(value.replace(/\D/g, "").slice(0, 3));
+  }
+
+  const statusText = isRunning
+    ? `剩余 ${formatSleepTimerRemaining(remainingSeconds)} 后停止播放`
+    : minutes
+      ? `已选择 ${minutes} 分钟`
+      : "未开启";
+
+  return (
+    <section className="profile-row sleep-timer-panel" aria-label="睡眠定时器">
+      <div className="sleep-timer-header">
+        <div className="sleep-timer-copy">
+          <div className="sleep-timer-title">睡眠定时器</div>
+          <div className="sleep-timer-status" aria-live="polite">
+            {statusText}
+          </div>
+        </div>
+        <button
+          className={isRunning ? "sleep-timer-action is-running" : "sleep-timer-action"}
+          type="button"
+          disabled={!isRunning && !minutes}
+          onClick={isRunning ? onStop : onStart}
+        >
+          {isRunning ? "关闭定时器" : "开始"}
+        </button>
+      </div>
+
+      <div className="sleep-timer-presets" role="group" aria-label="选择睡眠定时器时间">
+        <button
+          className={minutes === null ? "sleep-timer-preset active" : "sleep-timer-preset"}
+          type="button"
+          aria-pressed={minutes === null}
+          onClick={() => onSetMinutes(null)}
+        >
+          不限时
+        </button>
+        {sleepTimerPresetMinutes.map((presetMinutes) => (
+          <button
+            key={presetMinutes}
+            className={minutes === presetMinutes ? "sleep-timer-preset active" : "sleep-timer-preset"}
+            type="button"
+            aria-pressed={minutes === presetMinutes}
+            onClick={() => onSetMinutes(presetMinutes)}
+          >
+            {presetMinutes}分钟
+          </button>
+        ))}
+      </div>
+
+      <form className="sleep-timer-custom" onSubmit={handleCustomSubmit}>
+        <label className="sleep-timer-custom-field">
+          <span>自定义</span>
+          <input
+            type="text"
+            name="sleep_timer_minutes"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            ref={customMinutesInputRef}
+            value={customMinutes}
+            placeholder={`${sleepTimerMinMinutes}-${sleepTimerMaxMinutes}`}
+            aria-label="自定义睡眠定时器分钟数"
+            onChange={(event) => handleCustomChange(event.target.value)}
+          />
+        </label>
+        <button type="button" disabled={!customMinutesValue} onClick={applyCustomMinutes}>
+          应用
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function parseSleepTimerInput(value: string) {
+  if (!value.trim()) {
+    return null;
+  }
+  return normalizeSleepTimerMinutes(Number(value));
 }
 
 function AuthPage({

@@ -38,6 +38,15 @@ type LibrarySetting struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type FavoriteCategory struct {
+	ID        int64     `json:"id"`
+	UserID    int64     `json:"user_id"`
+	Name      string    `json:"name"`
+	SortOrder int       `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type ScanResult struct {
 	RootPath string   `json:"root_path"`
 	Found    int      `json:"found"`

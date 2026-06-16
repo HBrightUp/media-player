@@ -32,12 +32,13 @@ import (
 
 const musicDirectoryKey = "music_directory"
 const (
-	nicknameMaxRunes   = 20
-	passwordMinLength  = 6
-	passwordMaxLength  = 64
-	passwordHashRounds = 100_000
-	passwordHashLength = 32
-	presenceTTL        = 75 * time.Second
+	nicknameMaxRunes         = 20
+	favoriteCategoryMaxRunes = 16
+	passwordMinLength        = 6
+	passwordMaxLength        = 64
+	passwordHashRounds       = 100_000
+	passwordHashLength       = 32
+	presenceTTL              = 75 * time.Second
 )
 
 var mainlandPhonePattern = regexp.MustCompile(`^1[3-9]\d{9}$`)
@@ -65,6 +66,16 @@ type loginRequest struct {
 }
 
 type favoriteRequest struct {
+	UserID  int64 `json:"user_id"`
+	TrackID int64 `json:"track_id"`
+}
+
+type favoriteCategoryRequest struct {
+	UserID int64  `json:"user_id"`
+	Name   string `json:"name"`
+}
+
+type favoriteCategoryTrackRequest struct {
 	UserID  int64 `json:"user_id"`
 	TrackID int64 `json:"track_id"`
 }
@@ -122,6 +133,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/library/scan", s.handleScan)
 	mux.HandleFunc("/api/favorites", s.handleFavorites)
 	mux.HandleFunc("/api/favorites/", s.handleFavoriteRoute)
+	mux.HandleFunc("/api/favorite-categories", s.handleFavoriteCategories)
+	mux.HandleFunc("/api/favorite-categories/", s.handleFavoriteCategoryRoute)
 	mux.HandleFunc("/api/tracks", s.handleTracks)
 	mux.HandleFunc("/api/tracks/", s.handleTrackRoute)
 	return s.withCORS(mux)
@@ -382,7 +395,18 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		tracks, err := s.store.ListFavoriteTracks(r.Context(), userID)
+		var tracks []models.Track
+		categoryIDText := strings.TrimSpace(r.URL.Query().Get("category_id"))
+		if categoryIDText != "" {
+			categoryID, err := validatePositiveID(categoryIDText, "分类")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			tracks, err = s.store.ListFavoriteTracksByCategory(r.Context(), userID, categoryID)
+		} else {
+			tracks, err = s.store.ListFavoriteTracks(r.Context(), userID)
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "读取收藏列表失败")
 			return
@@ -444,6 +468,127 @@ func (s *Server) handleFavoriteRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
 	})
+}
+
+func (s *Server) handleFavoriteCategories(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		categories, err := s.store.ListFavoriteCategories(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取分类失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"categories": categories,
+		})
+
+	case http.MethodPost:
+		var request favoriteCategoryRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "请求格式不正确")
+			return
+		}
+		if request.UserID <= 0 {
+			writeError(w, http.StatusBadRequest, "用户标识不正确")
+			return
+		}
+		name, err := validateFavoriteCategoryName(request.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		category, err := s.store.CreateFavoriteCategory(r.Context(), request.UserID, name)
+		if err != nil {
+			if isForeignKeyViolation(err) {
+				writeError(w, http.StatusNotFound, "用户不存在")
+				return
+			}
+			if isUniqueViolation(err) {
+				writeError(w, http.StatusConflict, "分类名称已存在")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "创建分类失败")
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"category": category,
+		})
+
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Request) {
+	categoryID, trackID, resource, ok := parseFavoriteCategoryRoute(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch {
+	case resource == "category" && r.Method == http.MethodDelete:
+		userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.store.DeleteFavoriteCategory(r.Context(), userID, categoryID); err != nil {
+			writeError(w, http.StatusInternalServerError, "删除分类失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true,
+		})
+
+	case resource == "tracks" && r.Method == http.MethodPost:
+		var request favoriteCategoryTrackRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "请求格式不正确")
+			return
+		}
+		if request.UserID <= 0 {
+			writeError(w, http.StatusBadRequest, "用户标识不正确")
+			return
+		}
+		if request.TrackID <= 0 {
+			writeError(w, http.StatusBadRequest, "歌曲标识不正确")
+			return
+		}
+		if err := s.store.AddFavoriteTrackToCategory(r.Context(), request.UserID, categoryID, request.TrackID); err != nil {
+			if isForeignKeyViolation(err) {
+				writeError(w, http.StatusNotFound, "用户、歌曲或分类不存在")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "加入分类失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true,
+		})
+
+	case resource == "track" && r.Method == http.MethodDelete:
+		userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.store.DeleteFavoriteTrackFromCategory(r.Context(), userID, categoryID, trackID); err != nil {
+			writeError(w, http.StatusInternalServerError, "移出分类失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true,
+		})
+
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleTrackRoute(w http.ResponseWriter, r *http.Request) {
@@ -593,6 +738,17 @@ func validatePresenceSessionID(sessionID string) (string, error) {
 		return "", errors.New("会话标识过长")
 	}
 	return sessionID, nil
+}
+
+func validateFavoriteCategoryName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("分类名称不能为空")
+	}
+	if utf8.RuneCountInString(name) > favoriteCategoryMaxRunes {
+		return "", fmt.Errorf("分类名称不能超过%d个字符", favoriteCategoryMaxRunes)
+	}
+	return name, nil
 }
 
 func normalizePresencePhone(phone string) string {
@@ -767,9 +923,39 @@ func parseTrackRoute(path string) (int64, string, bool) {
 	return id, parts[3], true
 }
 
+func parseFavoriteCategoryRoute(path string) (int64, int64, string, bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "favorite-categories" {
+		return 0, 0, "", false
+	}
+	categoryID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || categoryID <= 0 {
+		return 0, 0, "", false
+	}
+	if len(parts) == 3 {
+		return categoryID, 0, "category", true
+	}
+	if len(parts) == 4 && parts[3] == "tracks" {
+		return categoryID, 0, "tracks", true
+	}
+	if len(parts) == 5 && parts[3] == "tracks" {
+		trackID, err := strconv.ParseInt(parts[4], 10, 64)
+		if err != nil || trackID <= 0 {
+			return 0, 0, "", false
+		}
+		return categoryID, trackID, "track", true
+	}
+	return 0, 0, "", false
+}
+
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func publicUser(user models.User) map[string]any {

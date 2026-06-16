@@ -273,6 +273,42 @@ func (s *Store) ListFavoriteTracks(ctx context.Context, userID int64) ([]models.
 	return tracks, rows.Err()
 }
 
+func (s *Store) ListFavoriteTracksByCategory(ctx context.Context, userID, categoryID int64) ([]models.Track, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			t.id,
+			t.path,
+			t.relative_path,
+			t.filename,
+			t.title,
+			t.artist,
+			t.album,
+			t.format,
+			t.size_bytes,
+			t.duration_seconds,
+			t.modified_at
+		FROM favorite_category_tracks fct
+		JOIN tracks t ON t.id = fct.track_id
+		WHERE fct.user_id = $1
+			AND fct.category_id = $2
+		ORDER BY fct.added_at DESC, t.id DESC
+	`, userID, categoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tracks := make([]models.Track, 0)
+	for rows.Next() {
+		track, err := scanTrack(rows)
+		if err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, track)
+	}
+	return tracks, rows.Err()
+}
+
 func (s *Store) AddFavoriteTrack(ctx context.Context, userID, trackID int64) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO favorite_tracks (user_id, track_id)
@@ -288,6 +324,97 @@ func (s *Store) DeleteFavoriteTrack(ctx context.Context, userID, trackID int64) 
 		WHERE user_id = $1
 			AND track_id = $2
 	`, userID, trackID)
+	return err
+}
+
+func (s *Store) ListFavoriteCategories(ctx context.Context, userID int64) ([]models.FavoriteCategory, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, name, sort_order, created_at, updated_at
+		FROM favorite_categories
+		WHERE user_id = $1
+		ORDER BY sort_order, id
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	categories := make([]models.FavoriteCategory, 0)
+	for rows.Next() {
+		category, err := scanFavoriteCategory(rows)
+		if err != nil {
+			return nil, err
+		}
+		categories = append(categories, category)
+	}
+	return categories, rows.Err()
+}
+
+func (s *Store) CreateFavoriteCategory(ctx context.Context, userID int64, name string) (models.FavoriteCategory, error) {
+	var category models.FavoriteCategory
+	err := s.pool.QueryRow(ctx, `
+		WITH next_order AS (
+			SELECT COALESCE(MAX(sort_order), 0) + 10 AS sort_order
+			FROM favorite_categories
+			WHERE user_id = $1
+		)
+		INSERT INTO favorite_categories (user_id, name, sort_order, updated_at)
+		SELECT $1, $2, sort_order, now()
+		FROM next_order
+		RETURNING id, user_id, name, sort_order, created_at, updated_at
+	`, userID, name).Scan(
+		&category.ID,
+		&category.UserID,
+		&category.Name,
+		&category.SortOrder,
+		&category.CreatedAt,
+		&category.UpdatedAt,
+	)
+	return category, err
+}
+
+func (s *Store) DeleteFavoriteCategory(ctx context.Context, userID, categoryID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM favorite_categories
+		WHERE user_id = $1
+			AND id = $2
+	`, userID, categoryID)
+	return err
+}
+
+func (s *Store) AddFavoriteTrackToCategory(ctx context.Context, userID, categoryID, trackID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO favorite_tracks (user_id, track_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, track_id) DO NOTHING
+	`, userID, trackID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO favorite_category_tracks (user_id, category_id, track_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id, category_id, track_id) DO NOTHING
+	`, userID, categoryID, trackID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteFavoriteTrackFromCategory(ctx context.Context, userID, categoryID, trackID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM favorite_category_tracks
+		WHERE user_id = $1
+			AND category_id = $2
+			AND track_id = $3
+	`, userID, categoryID, trackID)
 	return err
 }
 
@@ -479,4 +606,17 @@ func scanTrack(row rowScanner) (models.Track, error) {
 	}
 	track.StreamURL = fmt.Sprintf("/api/tracks/%d/stream", track.ID)
 	return track, nil
+}
+
+func scanFavoriteCategory(row rowScanner) (models.FavoriteCategory, error) {
+	var category models.FavoriteCategory
+	err := row.Scan(
+		&category.ID,
+		&category.UserID,
+		&category.Name,
+		&category.SortOrder,
+		&category.CreatedAt,
+		&category.UpdatedAt,
+	)
+	return category, err
 }

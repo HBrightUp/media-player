@@ -16,3 +16,4 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 
 .cache/
+.local-postgres/

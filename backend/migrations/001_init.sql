@@ -39,6 +39,27 @@ CREATE TABLE IF NOT EXISTS favorite_tracks (
   PRIMARY KEY (user_id, track_id)
 );
 
+CREATE TABLE IF NOT EXISTS favorite_categories (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS favorite_category_tracks (
+  user_id BIGINT NOT NULL,
+  category_id BIGINT NOT NULL,
+  track_id BIGINT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, category_id, track_id),
+  FOREIGN KEY (user_id, track_id) REFERENCES favorite_tracks(user_id, track_id) ON DELETE CASCADE,
+  FOREIGN KEY (category_id, user_id) REFERENCES favorite_categories(id, user_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS track_lyrics (
   track_id BIGINT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
   format TEXT NOT NULL CHECK (format IN ('lrc', 'plain')),
@@ -93,3 +114,7 @@ CREATE INDEX IF NOT EXISTS tracks_album_idx ON tracks (lower(album));
 CREATE INDEX IF NOT EXISTS users_phone_idx ON users (phone);
 CREATE INDEX IF NOT EXISTS favorite_tracks_user_created_idx ON favorite_tracks (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS favorite_tracks_track_id_idx ON favorite_tracks (track_id);
+CREATE UNIQUE INDEX IF NOT EXISTS favorite_categories_user_name_unique_idx ON favorite_categories (user_id, lower(name));
+CREATE INDEX IF NOT EXISTS favorite_categories_user_sort_idx ON favorite_categories (user_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS favorite_category_tracks_user_category_added_idx ON favorite_category_tracks (user_id, category_id, added_at DESC);
+CREATE INDEX IF NOT EXISTS favorite_category_tracks_user_track_idx ON favorite_category_tracks (user_id, track_id);

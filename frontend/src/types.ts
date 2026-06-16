@@ -72,6 +72,25 @@ export type FavoriteRequest = {
   track_id: number;
 };
 
+export type FavoriteCategory = {
+  id: number;
+  user_id: number;
+  name: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FavoriteCategoryRequest = {
+  user_id: number;
+  name: string;
+};
+
+export type FavoriteCategoryTrackRequest = {
+  user_id: number;
+  track_id: number;
+};
+
 export type PresenceRequest = {
   session_id: string;
   user_id?: number;

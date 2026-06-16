@@ -225,9 +225,18 @@ html.is-standalone-app .top-line {
   grid-area: tabs;
   align-self: end;
   display: flex;
+  align-items: center;
   justify-content: flex-start;
   gap: 8px;
   padding: 0 clamp(24px, 4vw, 56px) 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mode-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .mode-tabs button {
@@ -250,8 +259,20 @@ html.is-standalone-app .top-line {
   text-align: center;
 }
 
-.mode-tabs button:last-child {
+.mode-tabs .search-tab {
   margin-left: auto;
+}
+
+.mode-tabs .custom-category-trigger {
+  color: rgba(215, 242, 255, 0.86);
+  border-style: dashed;
+}
+
+.mode-tabs .user-category-tab {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mode-tabs button:hover {
@@ -440,7 +461,7 @@ html.is-standalone-app .top-line {
 
 .track-context-menu {
   position: fixed;
-  width: 132px;
+  width: 148px;
   display: grid;
   padding: 6px;
   background: rgba(28, 30, 35, 0.82);
@@ -463,6 +484,10 @@ html.is-standalone-app .top-line {
 
 .track-context-menu button:hover {
   background: rgba(10, 132, 255, 0.2);
+}
+
+.category-context-menu {
+  width: 132px;
 }
 
 .search-dialog-backdrop {
@@ -555,6 +580,36 @@ html.is-standalone-app .top-line {
 .search-actions button:disabled {
   cursor: progress;
   opacity: 0.74;
+}
+
+.category-picker-list {
+  max-height: min(240px, 44svh);
+  display: grid;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.category-picker-option {
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 14px;
+  color: rgba(239, 251, 255, 0.94);
+  background: rgba(118, 118, 128, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 760;
+  text-align: left;
+}
+
+.category-picker-option:hover {
+  background: rgba(10, 132, 255, 0.22);
+  border-color: rgba(132, 227, 255, 0.32);
+}
+
+.category-picker-dialog .search-actions {
+  grid-template-columns: 1fr;
 }
 
 .toast-message {
@@ -762,65 +817,99 @@ html.is-standalone-app .top-line {
 }
 
 .profile-page-content {
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 18px;
-  padding: 0 24px 84px;
+  justify-items: stretch;
+  align-content: start;
+  gap: 0;
+  overflow-y: auto;
+  padding: 12px 24px 84px;
   color: var(--text);
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.profile-page-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.profile-page-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.profile-page-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+
+.profile-row {
+  --profile-label-width: 96px;
+  width: min(520px, 100%);
+  justify-self: start;
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: var(--profile-label-width) minmax(0, max-content) max-content;
+  justify-content: start;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 0;
+  color: rgba(237, 247, 250, 0.8);
+  background: transparent;
+  border: 0;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.profile-row-title,
+.online-user-list-title,
+.sleep-timer-title {
+  min-width: 0;
+  color: rgba(226, 246, 249, 0.62);
+  font-size: 14px;
+  font-weight: 780;
+  white-space: nowrap;
+}
+
+.profile-identity-row,
+.profile-action-row {
+  grid-template-columns: var(--profile-label-width) minmax(0, max-content);
 }
 
 .profile-name {
+  justify-self: start;
   max-width: 100%;
   overflow: hidden;
   color: rgba(239, 247, 250, 0.92);
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 780;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .online-stat {
-  min-width: min(320px, 100%);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  grid-template-columns: var(--profile-label-width) auto auto;
   align-items: baseline;
   column-gap: 8px;
-  padding: 14px 16px;
-  color: rgba(237, 247, 250, 0.78);
-  background: rgba(5, 15, 28, 0.34);
-  border: 1px solid rgba(213, 244, 255, 0.18);
-  border-radius: 8px;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(10px);
   font-size: 15px;
   font-weight: 680;
 }
 
 .online-stat strong {
   color: rgba(239, 251, 255, 0.96);
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 820;
   font-variant-numeric: tabular-nums;
 }
 
 .online-user-list {
-  width: min(420px, 100%);
-  display: grid;
-  gap: 10px;
-  padding: 14px 16px;
-  color: rgba(237, 247, 250, 0.82);
-  background: rgba(5, 15, 28, 0.28);
-  border: 1px solid rgba(213, 244, 255, 0.16);
-  border-radius: 8px;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.16);
-  backdrop-filter: blur(10px);
+  grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
 }
 
 .online-user-list-title {
-  font-size: 14px;
-  font-weight: 760;
+  align-self: start;
+  padding-top: 5px;
 }
 
 .online-user-chips {
@@ -837,12 +926,12 @@ html.is-standalone-app .top-line {
   min-height: 30px;
   display: inline-flex;
   align-items: center;
-  padding: 5px 10px;
+  padding: 5px 0;
   overflow: hidden;
   color: rgba(241, 251, 255, 0.92);
-  background: rgba(89, 215, 255, 0.12);
-  border: 1px solid rgba(89, 215, 255, 0.22);
-  border-radius: 999px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   font-size: 13px;
   font-weight: 720;
   text-overflow: ellipsis;
@@ -855,6 +944,138 @@ html.is-standalone-app .top-line {
   font-weight: 680;
 }
 
+.sleep-timer-panel {
+  grid-template-columns: var(--profile-label-width) minmax(0, min(360px, calc(100vw - 160px)));
+  min-height: 214px;
+  align-items: start;
+}
+
+.sleep-timer-header {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: var(--profile-label-width) minmax(0, max-content) max-content;
+  justify-content: start;
+  align-items: center;
+  gap: 12px;
+}
+
+.sleep-timer-copy {
+  min-width: 0;
+  display: contents;
+}
+
+.sleep-timer-title {
+  grid-column: 1;
+}
+
+.sleep-timer-status {
+  grid-column: 2;
+  min-height: 18px;
+  overflow: hidden;
+  color: rgba(237, 247, 250, 0.7);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sleep-timer-action,
+.sleep-timer-custom button,
+.sleep-timer-preset {
+  min-height: 34px;
+  color: rgba(241, 251, 255, 0.9);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.sleep-timer-action {
+  grid-column: 3;
+  justify-self: start;
+  min-width: 92px;
+  padding: 0 14px;
+  color: rgba(132, 208, 255, 0.94);
+  background: transparent;
+}
+
+.sleep-timer-action.is-running {
+  color: rgba(255, 159, 153, 0.94);
+  background: transparent;
+}
+
+.sleep-timer-presets {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sleep-timer-preset {
+  flex: 1 1 70px;
+  padding: 0 10px;
+}
+
+.sleep-timer-preset:hover:not(:disabled),
+.sleep-timer-custom button:hover:not(:disabled),
+.sleep-timer-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sleep-timer-preset.active {
+  color: rgba(132, 208, 255, 0.96);
+  background: rgba(10, 132, 255, 0.16);
+}
+
+.sleep-timer-custom {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.sleep-timer-custom-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: rgba(237, 247, 250, 0.62);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.sleep-timer-custom input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  color: rgba(241, 251, 255, 0.92);
+  background: rgba(255, 255, 255, 0.04);
+  border: 0;
+  border-radius: 8px;
+  outline: none;
+  font-size: 14px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.sleep-timer-custom input:focus {
+  box-shadow: var(--apple-focus-ring);
+}
+
+.sleep-timer-custom input::placeholder {
+  color: rgba(237, 247, 250, 0.36);
+}
+
+.sleep-timer-custom button {
+  min-width: 68px;
+  height: 36px;
+  padding: 0 12px;
+}
+
 .profile-actions {
   display: flex;
   flex-wrap: wrap;
@@ -863,42 +1084,44 @@ html.is-standalone-app .top-line {
 }
 
 .profile-action-button {
-  min-width: 132px;
-  height: 42px;
-  padding: 0 18px;
-  color: rgba(255, 255, 255, 0.9);
-  background: var(--apple-control-bg);
-  border: 1px solid var(--apple-control-border);
-  border-radius: 999px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(14px);
+  justify-self: start;
+  min-width: 0;
+  height: 38px;
+  padding: 0;
+  color: rgba(132, 208, 255, 0.94);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  backdrop-filter: none;
   font-size: 15px;
   font-weight: 760;
+  text-align: left;
 }
 
 .profile-action-button:hover:not(:disabled) {
-  background: var(--apple-control-bg-hover);
-  border-color: var(--apple-control-border-strong);
+  color: rgba(203, 236, 255, 0.98);
+  background: transparent;
 }
 
 .refresh-library-button {
-  background: rgba(10, 132, 255, 0.24);
-  border-color: rgba(10, 132, 255, 0.36);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 10px 24px rgba(10, 132, 255, 0.16);
+  background: transparent;
+  box-shadow: none;
 }
 
 .refresh-library-button:hover:not(:disabled) {
-  background: rgba(10, 132, 255, 0.32);
-  border-color: rgba(132, 208, 255, 0.44);
+  background: transparent;
 }
 
 .profile-action-hint {
+  width: min(520px, 100%);
+  justify-self: start;
   min-height: 18px;
+  padding-top: 10px;
   color: rgba(237, 247, 250, 0.56);
   font-size: 13px;
   font-weight: 680;
+  text-align: left;
 }
 
 .control-bar {
@@ -2023,27 +2246,44 @@ input[type="range"] {
   }
 
   .profile-page-content {
-    gap: 14px;
     padding: 0 16px 54px;
   }
 
+  .profile-row {
+    --profile-label-width: 78px;
+    grid-template-columns: var(--profile-label-width) minmax(0, max-content) max-content;
+    justify-content: start;
+    min-height: 54px;
+    gap: 8px 10px;
+    padding: 10px 0;
+  }
+
+  .profile-identity-row,
+  .profile-action-row {
+    grid-template-columns: var(--profile-label-width) minmax(0, max-content);
+  }
+
+  .profile-row-title,
+  .online-user-list-title,
+  .sleep-timer-title {
+    font-size: 13px;
+  }
+
   .profile-name {
-    font-size: 18px;
+    font-size: 16px;
   }
 
   .online-stat {
-    min-width: min(280px, 100%);
-    padding: 12px 14px;
+    grid-template-columns: var(--profile-label-width) auto auto;
     font-size: 13px;
   }
 
   .online-stat strong {
-    font-size: 24px;
+    font-size: 20px;
   }
 
   .online-user-list {
-    width: min(320px, 100%);
-    padding: 12px 14px;
+    grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
   }
 
   .online-user-list-title {
@@ -2060,10 +2300,53 @@ input[type="range"] {
     font-size: 12px;
   }
 
+  .sleep-timer-panel {
+    grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
+    min-height: 244px;
+  }
+
+  .sleep-timer-header {
+    grid-template-columns: var(--profile-label-width) minmax(0, max-content) max-content;
+    justify-content: start;
+    gap: 9px;
+  }
+
+  .sleep-timer-action {
+    min-width: 0;
+    padding: 0;
+  }
+
+  .sleep-timer-title {
+    font-size: 14px;
+  }
+
+  .sleep-timer-status {
+    font-size: 12px;
+  }
+
+  .sleep-timer-presets {
+    gap: 7px;
+  }
+
+  .sleep-timer-preset {
+    flex-basis: calc(50% - 4px);
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .sleep-timer-custom {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+
+  .sleep-timer-custom input,
+  .sleep-timer-custom button {
+    height: 34px;
+    font-size: 13px;
+  }
+
   .logout-button {
-    min-width: 118px;
     height: 38px;
-    border-radius: 999px;
     font-size: 14px;
   }
 

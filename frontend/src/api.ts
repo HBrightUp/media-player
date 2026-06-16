@@ -1,5 +1,8 @@
 import type {
   AuthResponse,
+  FavoriteCategory,
+  FavoriteCategoryRequest,
+  FavoriteCategoryTrackRequest,
   FavoriteRequest,
   LibrarySetting,
   LibrarySettingResponse,
@@ -19,6 +22,9 @@ const scanRequestTimeoutMs = 120_000;
 
 type TracksResponse = {
   tracks: Track[];
+};
+type FavoriteCategoriesResponse = {
+  categories: FavoriteCategory[];
 };
 type RequestOptions = {
   timeoutMs?: number;
@@ -84,8 +90,12 @@ export function getTrackLyrics(trackID: number): Promise<TrackLyrics> {
   return request<TrackLyrics>(`/api/tracks/${encodeURIComponent(String(trackID))}/lyrics`);
 }
 
-export function getFavoriteTracks(userID: number): Promise<TracksResponse> {
-  return request<TracksResponse>(`/api/favorites?user_id=${encodeURIComponent(String(userID))}`);
+export function getFavoriteTracks(userID: number, categoryID?: number): Promise<TracksResponse> {
+  const params = new URLSearchParams({ user_id: String(userID) });
+  if (categoryID) {
+    params.set("category_id", String(categoryID));
+  }
+  return request<TracksResponse>(`/api/favorites?${params.toString()}`);
 }
 
 export function addFavoriteTrack(payload: FavoriteRequest): Promise<{ ok: boolean }> {
@@ -99,6 +109,39 @@ export function removeFavoriteTrack(userID: number, trackID: number): Promise<{ 
   return request<{ ok: boolean }>(`/api/favorites/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(userID))}`, {
     method: "DELETE"
   });
+}
+
+export function getFavoriteCategories(userID: number): Promise<FavoriteCategoriesResponse> {
+  return request<FavoriteCategoriesResponse>(`/api/favorite-categories?user_id=${encodeURIComponent(String(userID))}`);
+}
+
+export function createFavoriteCategory(payload: FavoriteCategoryRequest): Promise<{ category: FavoriteCategory }> {
+  return request<{ category: FavoriteCategory }>("/api/favorite-categories", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteFavoriteCategory(userID: number, categoryID: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/favorite-categories/${encodeURIComponent(String(categoryID))}?user_id=${encodeURIComponent(String(userID))}`, {
+    method: "DELETE"
+  });
+}
+
+export function addFavoriteTrackToCategory(categoryID: number, payload: FavoriteCategoryTrackRequest): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/favorite-categories/${encodeURIComponent(String(categoryID))}/tracks`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function removeFavoriteTrackFromCategory(userID: number, categoryID: number, trackID: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    `/api/favorite-categories/${encodeURIComponent(String(categoryID))}/tracks/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(userID))}`,
+    {
+      method: "DELETE"
+    }
+  );
 }
 
 export function getLibrarySetting(): Promise<LibrarySetting> {
