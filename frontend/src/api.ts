@@ -12,6 +12,7 @@ import type {
   RegisterRequest,
   ScanResult,
   Track,
+  TrackMembershipsResponse,
   TrackLyrics
 } from "./types";
 
@@ -96,6 +97,10 @@ export function getFavoriteTracks(userID: number, categoryID?: number): Promise<
     params.set("category_id", String(categoryID));
   }
   return request<TracksResponse>(`/api/favorites?${params.toString()}`);
+}
+
+export function getTrackMemberships(userID: number): Promise<TrackMembershipsResponse> {
+  return request<TrackMembershipsResponse>(`/api/track-memberships?user_id=${encodeURIComponent(String(userID))}`);
 }
 
 export function addFavoriteTrack(payload: FavoriteRequest): Promise<{ ok: boolean }> {

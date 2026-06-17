@@ -47,6 +47,12 @@ type FavoriteCategory struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type TrackCategoryMembership struct {
+	TrackID      int64  `json:"track_id"`
+	CategoryID   int64  `json:"category_id"`
+	CategoryName string `json:"category_name"`
+}
+
 type ScanResult struct {
 	RootPath string   `json:"root_path"`
 	Found    int      `json:"found"`

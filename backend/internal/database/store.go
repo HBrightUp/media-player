@@ -309,6 +309,62 @@ func (s *Store) ListFavoriteTracksByCategory(ctx context.Context, userID, catego
 	return tracks, rows.Err()
 }
 
+func (s *Store) ListTrackMemberships(ctx context.Context, userID int64) ([]int64, []models.TrackCategoryMembership, error) {
+	favoriteRows, err := s.pool.Query(ctx, `
+		SELECT track_id
+		FROM favorite_tracks
+		WHERE user_id = $1
+		ORDER BY track_id
+	`, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer favoriteRows.Close()
+
+	favoriteTrackIDs := make([]int64, 0)
+	for favoriteRows.Next() {
+		var trackID int64
+		if err := favoriteRows.Scan(&trackID); err != nil {
+			return nil, nil, err
+		}
+		favoriteTrackIDs = append(favoriteTrackIDs, trackID)
+	}
+	if err := favoriteRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	categoryRows, err := s.pool.Query(ctx, `
+		SELECT
+			fct.track_id,
+			fct.category_id,
+			fc.name
+		FROM favorite_category_tracks fct
+		JOIN favorite_categories fc
+			ON fc.id = fct.category_id
+			AND fc.user_id = fct.user_id
+		WHERE fct.user_id = $1
+		ORDER BY fct.track_id, fc.sort_order, fc.id
+	`, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer categoryRows.Close()
+
+	categoryMemberships := make([]models.TrackCategoryMembership, 0)
+	for categoryRows.Next() {
+		var membership models.TrackCategoryMembership
+		if err := categoryRows.Scan(&membership.TrackID, &membership.CategoryID, &membership.CategoryName); err != nil {
+			return nil, nil, err
+		}
+		categoryMemberships = append(categoryMemberships, membership)
+	}
+	if err := categoryRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return favoriteTrackIDs, categoryMemberships, nil
+}
+
 func (s *Store) AddFavoriteTrack(ctx context.Context, userID, trackID int64) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO favorite_tracks (user_id, track_id)

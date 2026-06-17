@@ -1,4 +1,4 @@
-import { type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   addFavoriteTrack,
   addFavoriteTrackToCategory,
@@ -6,6 +6,7 @@ import {
   deleteFavoriteCategory,
   getFavoriteCategories,
   getFavoriteTracks,
+  getTrackMemberships,
   getTrackLyrics,
   getTracks,
   loginUser,
@@ -17,7 +18,7 @@ import {
   sendPresenceOffline,
   streamURL
 } from "./api";
-import type { AuthUser, FavoriteCategory, LyricLine, OnlineUser, Track, TrackLyrics } from "./types";
+import type { AuthUser, FavoriteCategory, LyricLine, OnlineUser, Track, TrackCategoryMembership, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -60,8 +61,14 @@ type LyricsStatus = "idle" | "loading" | "ready" | "empty" | "error";
 type LyricsScrollState = {
   trackID: number | null;
   top: number;
+  activeLineIndex: number;
 };
 type TrackSortKey = "title" | "artist";
+type PlaybackQueueScope = { kind: "library" | "favorites" | "category" | "search"; categoryId?: number | null };
+type DetachedCurrentTrack = {
+  track: Track;
+  queueIndex: number;
+};
 
 type MusicTab = "音乐列表" | "收藏" | "分类" | "歌曲搜索";
 const appPages: Array<{ id: AppPage; label: string }> = [
@@ -80,7 +87,6 @@ const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
 const manualLibraryRefreshStorageKey = "media-player-manual-library-refresh-at";
-const sleepTimerStorageKey = "media-player-sleep-timer-minutes";
 const authSessionDurationMs = 7 * 24 * 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
 const manualLibraryRefreshCooldownMs = 60_000;
@@ -95,7 +101,6 @@ const trackContextMenuHeight = 148;
 const categoryContextMenuHeight = 54;
 const contextMenuMargin = 8;
 const favoriteCategoryNameMaxLength = 16;
-const sleepTimerPresetMinutes = [15, 30, 60, 90];
 const sleepTimerMinMinutes = 1;
 const sleepTimerMaxMinutes = 360;
 
@@ -111,7 +116,7 @@ function App() {
   const initialAuthRef = useRef<AuthReadResult | null>(null);
   const initialAuthProfileRef = useRef<AuthFormState | null>(null);
   const presenceSessionIdRef = useRef<string | null>(null);
-  const lyricsScrollStateRef = useRef<LyricsScrollState>({ trackID: null, top: 0 });
+  const lyricsScrollStateRef = useRef<LyricsScrollState>({ trackID: null, top: 0, activeLineIndex: -1 });
   const musicListRef = useRef<HTMLDivElement | null>(null);
   const shouldRevealCurrentTrackRef = useRef(false);
   const loadedLibrarySessionKeyRef = useRef<string | null>(null);
@@ -127,7 +132,9 @@ function App() {
   const [libraryTracks, setLibraryTracks] = useState<Track[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
+  const [playbackQueueScope, setPlaybackQueueScope] = useState<PlaybackQueueScope>({ kind: "library" });
   const [currentTrackId, setCurrentTrackId] = useState<number | null>(null);
+  const [detachedCurrentTrack, setDetachedCurrentTrack] = useState<DetachedCurrentTrack | null>(null);
   const [trackLyrics, setTrackLyrics] = useState<TrackLyrics | null>(null);
   const [lyricsStatus, setLyricsStatus] = useState<LyricsStatus>("idle");
   const [authSession, setAuthSession] = useState<AuthSession | null>(initialAuthRef.current.session);
@@ -147,6 +154,7 @@ function App() {
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [musicSortKey, setMusicSortKey] = useState<TrackSortKey | null>(null);
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(() => new Set());
+  const [trackCategoryMembershipMap, setTrackCategoryMembershipMap] = useState<Map<number, TrackCategoryMembership[]>>(() => new Map());
   const [favoriteCategories, setFavoriteCategories] = useState<FavoriteCategory[]>([]);
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
   const [categoryContextMenu, setCategoryContextMenu] = useState<CategoryContextMenu | null>(null);
@@ -167,16 +175,43 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(12);
   const [duration, setDuration] = useState(185);
-  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(() => readSleepTimerMinutes());
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(30);
   const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(null);
   const [sleepTimerNow, setSleepTimerNow] = useState(() => Date.now());
 
   const currentTrack = useMemo(() => {
     if (!playbackQueue.length) {
+      if (detachedCurrentTrack && detachedCurrentTrack.track.id === currentTrackId) {
+        return detachedCurrentTrack.track;
+      }
       return null;
     }
-    return playbackQueue.find((track) => track.id === currentTrackId) ?? playbackQueue[0];
-  }, [currentTrackId, playbackQueue]);
+    const queuedTrack = playbackQueue.find((track) => track.id === currentTrackId);
+    if (queuedTrack) {
+      return queuedTrack;
+    }
+    if (detachedCurrentTrack && detachedCurrentTrack.track.id === currentTrackId) {
+      return detachedCurrentTrack.track;
+    }
+    return playbackQueue[0];
+  }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
+
+  useEffect(() => {
+    if (!detachedCurrentTrack) {
+      return;
+    }
+    if (currentTrackId !== detachedCurrentTrack.track.id || playbackQueue.some((track) => track.id === detachedCurrentTrack.track.id)) {
+      setDetachedCurrentTrack(null);
+    }
+  }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
+
+  const trackCategoryIdSetMap = useMemo(() => {
+    const categoryIdSetMap = new Map<number, Set<number>>();
+    trackCategoryMembershipMap.forEach((memberships, trackID) => {
+      categoryIdSetMap.set(trackID, new Set(memberships.map((membership) => membership.category_id)));
+    });
+    return categoryIdSetMap;
+  }, [trackCategoryMembershipMap]);
 
   useEffect(() => {
     if (!authSession) {
@@ -196,11 +231,13 @@ function App() {
   useEffect(() => {
     if (!authSession?.userId) {
       setFavoriteTrackIds(new Set());
+      setTrackCategoryMembershipMap(new Map());
       setFavoriteCategories([]);
       setActiveCategoryId(null);
       return;
     }
     void refreshFavoriteCategories();
+    void refreshTrackMemberships();
     void refreshFavoriteTracks({
       showList: activePage === "music" && (activeTab === "收藏" || activeTab === "分类"),
       categoryId: activeTab === "分类" ? activeCategoryId : undefined
@@ -431,12 +468,95 @@ function App() {
 
   const activeDuration = duration || currentTrack?.duration_seconds || 185;
 
+  function getActivePlaybackQueueScope(): PlaybackQueueScope {
+    if (activeTab === "收藏") {
+      return { kind: "favorites" };
+    }
+    if (activeTab === "分类") {
+      return { kind: "category", categoryId: activeCategoryId };
+    }
+    if (isLibraryFiltered) {
+      return { kind: "search" };
+    }
+    return { kind: "library" };
+  }
+
+  function removeTrackFromPlaybackQueueWhen(track: Track, shouldRemove: (scope: PlaybackQueueScope) => boolean) {
+    if (!shouldRemove(playbackQueueScope)) {
+      return;
+    }
+
+    if (currentTrackId === track.id) {
+      const queueIndex = playbackQueue.findIndex((item) => item.id === track.id);
+      setDetachedCurrentTrack((previous) => {
+        if (previous?.track.id === track.id) {
+          return previous;
+        }
+        return {
+          track: currentTrack ?? track,
+          queueIndex: Math.max(0, queueIndex)
+        };
+      });
+    }
+    setPlaybackQueue((previous) => {
+      const next = previous.filter((item) => item.id !== track.id);
+      return next.length === previous.length ? previous : next;
+    });
+  }
+
+  function removeTrackFromFavoritePlaybackQueues(track: Track) {
+    removeTrackFromPlaybackQueueWhen(track, (scope) => scope.kind === "favorites" || scope.kind === "category");
+  }
+
+  function removeTrackFromActiveCategoryPlaybackQueue(track: Track) {
+    removeTrackFromPlaybackQueueWhen(
+      track,
+      (scope) => scope.kind === "category" && scope.categoryId === activeCategoryId
+    );
+  }
+
+  function getAdjacentQueuedTrack(direction: 1 | -1) {
+    if (!playbackQueue.length) {
+      return null;
+    }
+    if (!currentTrack?.id) {
+      return direction === 1 ? playbackQueue[0] : playbackQueue[playbackQueue.length - 1];
+    }
+
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack.id);
+    if (currentIndex < 0) {
+      const detachedIndex = detachedCurrentTrack?.track.id === currentTrack.id ? detachedCurrentTrack.queueIndex : 0;
+      if (direction === 1) {
+        const nextIndex = detachedIndex >= playbackQueue.length ? 0 : detachedIndex;
+        return playbackQueue[nextIndex];
+      }
+      const previousIndex = detachedIndex <= 0 ? playbackQueue.length - 1 : detachedIndex - 1;
+      return playbackQueue[previousIndex];
+    }
+
+    const nextIndex = (currentIndex + direction + playbackQueue.length) % playbackQueue.length;
+    return playbackQueue[nextIndex];
+  }
+
+  function isCurrentTrackQueued() {
+    return Boolean(currentTrack?.id && playbackQueue.some((track) => track.id === currentTrack.id));
+  }
+
+  function clearDetachedPlayback() {
+    setIsPlaying(false);
+    if (detachedCurrentTrack) {
+      setDetachedCurrentTrack(null);
+      setCurrentTrackId(null);
+    }
+  }
+
   function syncLibraryTracks(nextTracks: Track[], { resetQueue = false }: { resetQueue?: boolean } = {}) {
     const visibleTracks = sortMusicTracks(nextTracks, musicSortKey);
     setLibraryTracks((previous) => (areTrackListsEqual(previous, nextTracks) ? previous : nextTracks));
     if (activeTab === "音乐列表") {
       setTracks((previous) => (areTrackListsEqual(previous, visibleTracks) ? previous : visibleTracks));
     }
+    setPlaybackQueueScope({ kind: "library" });
     setPlaybackQueue((previous) => {
       if (resetQueue || !previous.length) {
         return visibleTracks;
@@ -508,6 +628,79 @@ function App() {
     }
   }
 
+  async function refreshTrackMemberships() {
+    if (!authSession?.userId) {
+      setFavoriteTrackIds(new Set());
+      setTrackCategoryMembershipMap(new Map());
+      return;
+    }
+
+    try {
+      const payload = await getTrackMemberships(authSession.userId);
+      setFavoriteTrackIds(new Set(payload.favorite_track_ids));
+      setTrackCategoryMembershipMap(buildTrackCategoryMembershipMap(payload.category_memberships));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "歌曲状态加载失败");
+    }
+  }
+
+  function removeTrackCategoryMembership(trackID: number, categoryID: number) {
+    setTrackCategoryMembershipMap((previous) => {
+      const memberships = previous.get(trackID);
+      if (!memberships?.some((membership) => membership.category_id === categoryID)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      const remaining = memberships.filter((membership) => membership.category_id !== categoryID);
+      if (remaining.length) {
+        next.set(trackID, remaining);
+      } else {
+        next.delete(trackID);
+      }
+      return next;
+    });
+  }
+
+  function removeCategoryMemberships(categoryID: number) {
+    setTrackCategoryMembershipMap((previous) => {
+      let changed = false;
+      const next = new Map<number, TrackCategoryMembership[]>();
+      previous.forEach((memberships, trackID) => {
+        const remaining = memberships.filter((membership) => membership.category_id !== categoryID);
+        if (remaining.length !== memberships.length) {
+          changed = true;
+        }
+        if (remaining.length) {
+          next.set(trackID, remaining);
+        }
+      });
+      return changed ? next : previous;
+    });
+  }
+
+  function upsertTrackCategoryMembership(trackID: number, category: FavoriteCategory) {
+    setTrackCategoryMembershipMap((previous) => {
+      const memberships = previous.get(trackID) ?? [];
+      if (memberships.some((membership) => membership.category_id === category.id)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.set(trackID, [...memberships, { track_id: trackID, category_id: category.id, category_name: category.name }]);
+      return next;
+    });
+  }
+
+  function clearTrackMemberships(trackID: number) {
+    setTrackCategoryMembershipMap((previous) => {
+      if (!previous.has(trackID)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.delete(trackID);
+      return next;
+    });
+  }
+
   async function refreshFavoriteTracks({ showList = false, categoryId }: { showList?: boolean; categoryId?: number | null } = {}) {
     if (!authSession?.userId) {
       setFavoriteTrackIds(new Set());
@@ -550,6 +743,7 @@ function App() {
     setLibraryTracks([]);
     setTracks([]);
     setPlaybackQueue([]);
+    setDetachedCurrentTrack(null);
     setCurrentTrackId(null);
     setTrackLyrics(null);
     setLyricsStatus("idle");
@@ -621,6 +815,7 @@ function App() {
     setSearchQuery("");
     setTracks(sortedTracks);
     setPlaybackQueue(sortedTracks);
+    setPlaybackQueueScope({ kind: "library" });
     if (currentTrack?.id) {
       shouldRevealCurrentTrackRef.current = true;
     }
@@ -720,6 +915,7 @@ function App() {
     setLibraryTracks([]);
     setTracks([]);
     setFavoriteTrackIds(new Set());
+    setTrackCategoryMembershipMap(new Map());
     setFavoriteCategories([]);
     setTrackContextMenu(null);
     setCategoryContextMenu(null);
@@ -751,6 +947,7 @@ function App() {
         preservePlayback: true
       });
       if (result.ok) {
+        void refreshTrackMemberships();
         void refreshFavoriteTracks({
           showList: activePage === "music" && (activeTab === "收藏" || activeTab === "分类"),
           categoryId: activeTab === "分类" ? activeCategoryId : undefined
@@ -783,23 +980,26 @@ function App() {
   function handleSetSleepTimerMinutes(minutes: number | null) {
     const normalizedMinutes = normalizeSleepTimerMinutes(minutes);
     setSleepTimerMinutes(normalizedMinutes);
-    persistSleepTimerMinutes(normalizedMinutes);
     if (!normalizedMinutes) {
       setSleepTimerEndsAt(null);
       setSleepTimerNow(Date.now());
     }
   }
 
-  function handleStartSleepTimer() {
-    if (!sleepTimerMinutes) {
+  function handleStartSleepTimer(minutesOverride?: number) {
+    const nextMinutes = normalizeSleepTimerMinutes(minutesOverride ?? sleepTimerMinutes);
+    if (!nextMinutes) {
       showToast("请选择睡眠定时器时间");
       return;
     }
 
+    if (nextMinutes !== sleepTimerMinutes) {
+      setSleepTimerMinutes(nextMinutes);
+    }
     const now = Date.now();
     setSleepTimerNow(now);
-    setSleepTimerEndsAt(now + sleepTimerMinutes * 60_000);
-    showToast(`睡眠定时器将在${sleepTimerMinutes}分钟后停止播放`);
+    setSleepTimerEndsAt(now + nextMinutes * 60_000);
+    showToast(`睡眠定时器将在${nextMinutes}分钟后停止播放`);
   }
 
   function handleStopSleepTimer() {
@@ -868,14 +1068,17 @@ function App() {
     try {
       await deleteFavoriteCategory(authSession.userId, category.id);
       setFavoriteCategories((previous) => previous.filter((item) => item.id !== category.id));
+      removeCategoryMemberships(category.id);
       if (activeTab === "分类" && activeCategoryId === category.id) {
         setActiveTab("收藏");
         setActiveCategoryId(null);
         void refreshFavoriteTracks({ showList: true });
       }
       showToast("分类已删除");
+      void refreshTrackMemberships();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "删除分类失败");
+      void refreshTrackMemberships();
     }
   }
 
@@ -1061,6 +1264,8 @@ function App() {
     try {
       if (wasFavorite) {
         await removeFavoriteTrack(authSession.userId, track.id);
+        removeTrackFromFavoritePlaybackQueues(track);
+        clearTrackMemberships(track.id);
         showToast("已取消收藏");
       } else {
         await addFavoriteTrack({ user_id: authSession.userId, track_id: track.id });
@@ -1069,8 +1274,10 @@ function App() {
       if (activeTab === "收藏" || activeTab === "分类") {
         void refreshFavoriteTracks({ showList: true, categoryId: activeTab === "分类" ? activeCategoryId : undefined });
       }
+      void refreshTrackMemberships();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "收藏操作失败");
+      void refreshTrackMemberships();
       void refreshFavoriteTracks({
         showList: activeTab === "收藏" || activeTab === "分类",
         categoryId: activeTab === "分类" ? activeCategoryId : undefined
@@ -1110,12 +1317,15 @@ function App() {
         next.add(track.id);
         return next;
       });
+      upsertTrackCategoryMembership(track.id, category);
       if (activeTab === "分类" && activeCategoryId === category.id) {
         void refreshFavoriteTracks({ showList: true, categoryId: category.id });
       }
       showToast(`已加入${category.name}`);
+      void refreshTrackMemberships();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "加入分类失败");
+      void refreshTrackMemberships();
       void refreshFavoriteTracks({ showList: activeTab === "收藏" || activeTab === "分类", categoryId: activeTab === "分类" ? activeCategoryId : undefined });
     }
   }
@@ -1130,21 +1340,28 @@ function App() {
     setTracks((previous) => previous.filter((item) => item.id !== track.id));
     try {
       await removeFavoriteTrackFromCategory(authSession.userId, activeCategoryId, track.id);
+      removeTrackFromActiveCategoryPlaybackQueue(track);
+      removeTrackCategoryMembership(track.id, activeCategoryId);
       showToast("已移出分类");
       void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId });
+      void refreshTrackMemberships();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "移出分类失败");
+      void refreshTrackMemberships();
       void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId });
     }
   }
 
   function playTrack(track: Track) {
+    setDetachedCurrentTrack(null);
     setPlaybackQueue(tracks.length ? tracks : [track]);
+    setPlaybackQueueScope(getActivePlaybackQueueScope());
     setCurrentTrackId(track.id);
     setIsPlaying(Boolean(track.stream_url));
   }
 
   function playTrackFromQueue(track: Track) {
+    setDetachedCurrentTrack(null);
     setCurrentTrackId(track.id);
     setIsPlaying(Boolean(track.stream_url));
   }
@@ -1158,7 +1375,9 @@ function App() {
     if (!currentTrack) {
       if (!playbackQueue.length && tracks.length) {
         setPlaybackQueue(tracks);
+        setPlaybackQueueScope(getActivePlaybackQueueScope());
       }
+      setDetachedCurrentTrack(null);
       setCurrentTrackId(trackToPlay.id);
     }
     if (!trackToPlay.stream_url) {
@@ -1169,37 +1388,31 @@ function App() {
   }
 
   function stepTrack(direction: 1 | -1) {
-    if (!playbackQueue.length) {
+    const nextTrack = getAdjacentQueuedTrack(direction);
+    if (!nextTrack) {
+      clearDetachedPlayback();
       return;
     }
     if (direction === 1 && playbackMode === "shuffle") {
       playRandomTrack();
       return;
     }
-    const currentIndex = Math.max(
-      0,
-      playbackQueue.findIndex((track) => track.id === currentTrack?.id)
-    );
-    const nextIndex = (currentIndex + direction + playbackQueue.length) % playbackQueue.length;
-    playTrackFromQueue(playbackQueue[nextIndex]);
+    playTrackFromQueue(nextTrack);
   }
 
   function playRandomTrack() {
     if (!playbackQueue.length) {
+      clearDetachedPlayback();
       return;
     }
-    if (playbackQueue.length === 1) {
-      playTrackFromQueue(playbackQueue[0]);
+    const randomCandidates = currentTrack?.id && playbackQueue.length > 1 ? playbackQueue.filter((track) => track.id !== currentTrack.id) : playbackQueue;
+    if (!randomCandidates.length) {
+      clearDetachedPlayback();
       return;
     }
 
-    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
-    const randomRange = currentIndex >= 0 ? playbackQueue.length - 1 : playbackQueue.length;
-    let nextIndex = Math.floor(Math.random() * randomRange);
-    if (currentIndex >= 0 && nextIndex >= currentIndex) {
-      nextIndex += 1;
-    }
-    playTrackFromQueue(playbackQueue[nextIndex]);
+    const nextIndex = Math.floor(Math.random() * randomCandidates.length);
+    playTrackFromQueue(randomCandidates[nextIndex]);
   }
 
   function selectPlaybackMode(mode: PlaybackMode) {
@@ -1212,7 +1425,7 @@ function App() {
     if (!audio) {
       return;
     }
-    if (playbackMode === "one") {
+    if (playbackMode === "one" && isCurrentTrackQueued()) {
       audio.currentTime = 0;
       void audio.play();
       return;
@@ -1235,8 +1448,8 @@ function App() {
     setCurrentTime(nextTime);
   }
 
-  function updateLyricsScrollPosition(trackID: number, top: number) {
-    lyricsScrollStateRef.current = { trackID, top };
+  function updateLyricsScrollPosition(trackID: number, top: number, activeLineIndex: number) {
+    lyricsScrollStateRef.current = { trackID, top, activeLineIndex };
   }
 
   const activeCategory = favoriteCategories.find((category) => category.id === activeCategoryId) ?? null;
@@ -1250,6 +1463,11 @@ function App() {
   const lyricLines = trackLyrics?.lines ?? [];
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
   const canSortMusicColumns = activeTab === "音乐列表";
+  const canShowTrackStatus = activeTab === "音乐列表" || activeTab === "收藏" || activeTab === "分类";
+  const statusSlotCount = favoriteCategories.length + 1;
+  const songTableStyle = canShowTrackStatus
+    ? ({ "--status-slot-count": statusSlotCount } as CSSProperties & Record<"--status-slot-count", number>)
+    : undefined;
   const currentTrackLabel = currentTrack ? `${currentTrack.artist} - ${currentTrack.title}` : "";
 
   return (
@@ -1273,9 +1491,6 @@ function App() {
               <button className={activeTab === "收藏" ? "active" : ""} type="button" aria-current={activeTab === "收藏" ? "page" : undefined} onClick={() => handleTabClick("收藏")}>
                 收藏
               </button>
-              <button className="custom-category-trigger" type="button" onClick={handleCustomCategoryClick}>
-                自定义
-              </button>
               {favoriteCategories.map((category) => (
                 <button
                   key={category.id}
@@ -1295,12 +1510,15 @@ function App() {
                   {category.name}
                 </button>
               ))}
+              <button className="custom-category-trigger" type="button" onClick={handleCustomCategoryClick}>
+                自定义
+              </button>
               <button className={activeTab === "歌曲搜索" ? "active search-tab" : "search-tab"} type="button" aria-current={activeTab === "歌曲搜索" ? "page" : undefined} onClick={() => handleTabClick("歌曲搜索")}>
                 歌曲搜索
               </button>
             </nav>
 
-            <section className="song-table" aria-label="本地音乐列表" aria-busy={isLoading}>
+            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} style={songTableStyle} aria-label="本地音乐列表" aria-busy={isLoading}>
               <div className="table-head">
                 <span />
                 {canSortMusicColumns ? (
@@ -1327,29 +1545,51 @@ function App() {
                 ) : (
                   <span>歌手</span>
                 )}
+                {canShowTrackStatus ? <span className="table-status-head">状态</span> : null}
               </div>
               <div className="table-body" ref={musicListRef}>
-                {tracks.map((track, index) => (
-                  <button
-                    key={track.id}
-                    type="button"
-                    data-track-id={track.id}
-                    className={`table-row ${track.id === playingTrackId ? "active" : ""}`}
-                    aria-current={track.id === playingTrackId ? "true" : undefined}
-                    onClick={() => handleTrackClick(track)}
-                    onContextMenu={(event) => handleRowContextMenu(event, track)}
-                    onPointerDown={(event) => handleRowPointerDown(event, track)}
-                    onPointerMove={handleRowPointerMove}
-                    onPointerUp={cancelLongPress}
-                    onPointerCancel={cancelLongPress}
-                    onPointerLeave={cancelLongPress}
-                    onDragStart={(event) => event.preventDefault()}
-                  >
-                    <span className="row-index">{index + 1}</span>
-                    <span className="row-title">{track.title}</span>
-                    <span>{track.artist}</span>
-                  </button>
-                ))}
+                {tracks.map((track, index) => {
+                  const categoryMemberships = trackCategoryMembershipMap.get(track.id) ?? [];
+                  const categoryIDSet = trackCategoryIdSetMap.get(track.id);
+                  const isTrackFavorite = favoriteTrackIds.has(track.id);
+                  const trackStatusLabel = getTrackStatusLabel(isTrackFavorite, categoryMemberships, favoriteCategories);
+                  return (
+                    <button
+                      key={track.id}
+                      type="button"
+                      data-track-id={track.id}
+                      className={`table-row ${track.id === playingTrackId ? "active" : ""}`}
+                      aria-current={track.id === playingTrackId ? "true" : undefined}
+                      onClick={() => handleTrackClick(track)}
+                      onContextMenu={(event) => handleRowContextMenu(event, track)}
+                      onPointerDown={(event) => handleRowPointerDown(event, track)}
+                      onPointerMove={handleRowPointerMove}
+                      onPointerUp={cancelLongPress}
+                      onPointerCancel={cancelLongPress}
+                      onPointerLeave={cancelLongPress}
+                      onDragStart={(event) => event.preventDefault()}
+                    >
+                      <span className="row-index">{index + 1}</span>
+                      <span className="row-title">{track.title}</span>
+                      <span className="row-artist">{track.artist}</span>
+                      {canShowTrackStatus ? (
+                        <span className="row-status" aria-label={trackStatusLabel} title={trackStatusLabel}>
+                          <span className={`track-status-heart ${isTrackFavorite ? "active" : ""}`} title={isTrackFavorite ? "已收藏" : "未收藏"} aria-hidden="true">
+                            <HeartStatusIcon filled={isTrackFavorite} />
+                          </span>
+                          {favoriteCategories.map((category) => {
+                            const isInCategory = categoryIDSet?.has(category.id) ?? false;
+                            return (
+                              <span key={category.id} className={`track-status-heart ${isInCategory ? "active" : ""}`} title={`${category.name}：${isInCategory ? "已加入" : "未加入"}`} aria-hidden="true">
+                                <HeartStatusIcon filled={isInCategory} />
+                              </span>
+                            );
+                          })}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
                 {!tracks.length ? (
                   <div className="empty-table">
                     {isLoading ? (isScanning ? "正在重新检查音乐文件夹" : activeTab === "收藏" ? "正在加载收藏歌曲" : activeTab === "分类" ? "正在加载分类歌曲" : "正在加载本地音乐列表") : emptyMessage}
@@ -1689,6 +1929,25 @@ function sortFavoriteCategories(categories: FavoriteCategory[]) {
   });
 }
 
+function buildTrackCategoryMembershipMap(memberships: TrackCategoryMembership[]) {
+  const membershipMap = new Map<number, TrackCategoryMembership[]>();
+  for (const membership of memberships) {
+    const trackMemberships = membershipMap.get(membership.track_id) ?? [];
+    trackMemberships.push(membership);
+    membershipMap.set(membership.track_id, trackMemberships);
+  }
+  return membershipMap;
+}
+
+function getTrackStatusLabel(isFavorite: boolean, memberships: TrackCategoryMembership[], categories: FavoriteCategory[]) {
+  const categoryIDs = new Set(memberships.map((membership) => membership.category_id));
+  const parts = [`收藏：${isFavorite ? "已收藏" : "未收藏"}`];
+  for (const category of categories) {
+    parts.push(`${category.name}：${categoryIDs.has(category.id) ? "已加入" : "未加入"}`);
+  }
+  return parts.join("，");
+}
+
 function countTracksByArtist(tracks: Track[]) {
   const counts = new Map<string, number>();
   for (const track of tracks) {
@@ -1771,11 +2030,11 @@ function FullLyricsPage({
   currentTime: number;
   duration: number;
   savedScroll: LyricsScrollState;
-  onScrollPositionChange: (trackID: number, top: number) => void;
+  onScrollPositionChange: (trackID: number, top: number, activeLineIndex: number) => void;
 }) {
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
   const lyricsListRef = useRef<HTMLDivElement | null>(null);
-  const skipNextAutoScrollRef = useRef(true);
+  const initialSyncedLineIndexRef = useRef<number | null>(null);
   const ignoreScrollRef = useRef(false);
   const ignoreScrollTimerRef = useRef<number | null>(null);
   const userScrollPausedUntilRef = useRef(0);
@@ -1788,22 +2047,43 @@ function FullLyricsPage({
     };
   }, []);
 
-  useEffect(() => {
-    skipNextAutoScrollRef.current = true;
+  useLayoutEffect(() => {
+    initialSyncedLineIndexRef.current = null;
     const lyricsList = lyricsListRef.current;
     if (!lyricsList) {
       return;
     }
     markProgrammaticLyricsScroll(90);
-    lyricsList.scrollTop = currentTrack && savedScroll.trackID === currentTrack.id ? savedScroll.top : 0;
+    const canRestoreSavedPosition = Boolean(
+      currentTrack &&
+        savedScroll.trackID === currentTrack.id &&
+        savedScroll.activeLineIndex === activeLineIndex
+    );
+
+    if (canRestoreSavedPosition) {
+      lyricsList.scrollTop = savedScroll.top;
+      initialSyncedLineIndexRef.current = activeLineIndex;
+      return;
+    }
+
+    if (currentTrack && activeLineIndex >= 0 && activeLineRef.current) {
+      activeLineRef.current.scrollIntoView({
+        block: "center",
+        behavior: "auto"
+      });
+      initialSyncedLineIndexRef.current = activeLineIndex;
+      return;
+    }
+
+    lyricsList.scrollTop = 0;
   }, [currentTrack?.id, lines.length, savedScroll.trackID]);
 
   useEffect(() => {
     if (!currentTrack || activeLineIndex < 0) {
       return;
     }
-    if (skipNextAutoScrollRef.current) {
-      skipNextAutoScrollRef.current = false;
+    if (initialSyncedLineIndexRef.current === activeLineIndex) {
+      initialSyncedLineIndexRef.current = null;
       return;
     }
     if (Date.now() < userScrollPausedUntilRef.current) {
@@ -1831,7 +2111,7 @@ function FullLyricsPage({
     if (!currentTrack) {
       return;
     }
-    onScrollPositionChange(currentTrack.id, top);
+    onScrollPositionChange(currentTrack.id, top, activeLineIndex);
     if (!ignoreScrollRef.current) {
       userScrollPausedUntilRef.current = Date.now() + 6000;
     }
@@ -1865,7 +2145,6 @@ function FullLyricsPage({
   return (
     <section className="lyrics-page" aria-label="歌词">
       <header className="lyrics-page-header">
-        <h1>歌词</h1>
         <div className="lyrics-track-meta">
           <strong>{currentTrack?.title ?? "未选择歌曲"}</strong>
           <span>{currentTrack ? currentTrack.artist : "--"}</span>
@@ -2048,21 +2327,6 @@ function persistManualLibraryRefreshAt(timestamp: number) {
   writeLocalStorage(manualLibraryRefreshStorageKey, String(timestamp));
 }
 
-function readSleepTimerMinutes() {
-  const rawValue = readLocalStorage(sleepTimerStorageKey);
-  if (rawValue === null) {
-    return 30;
-  }
-  if (rawValue === "off") {
-    return null;
-  }
-  return normalizeSleepTimerMinutes(Number(rawValue)) ?? 30;
-}
-
-function persistSleepTimerMinutes(minutes: number | null) {
-  writeLocalStorage(sleepTimerStorageKey, minutes ? String(minutes) : "off");
-}
-
 function normalizeSleepTimerMinutes(minutes: number | null) {
   if (minutes === null || !Number.isFinite(minutes)) {
     return null;
@@ -2139,6 +2403,27 @@ function formatSleepTimerRemaining(seconds: number) {
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
+function getOnlineSummary(onlineCount: number | null, onlineUsers: OnlineUser[], isUnavailable: boolean) {
+  if (isUnavailable) {
+    return "暂不可用";
+  }
+  if (onlineCount === null) {
+    return "同步中";
+  }
+  if (onlineCount <= 0) {
+    return "暂无在线用户";
+  }
+
+  const onlineNames = onlineUsers
+    .map((user) => user.nickname.trim())
+    .filter(Boolean);
+  if (!onlineNames.length) {
+    return `共 ${onlineCount} 人`;
+  }
+
+  return `${onlineNames.join("、")}，共 ${onlineCount} 人`;
+}
+
 function EmptyPage({
   page,
   authSession,
@@ -2165,7 +2450,7 @@ function EmptyPage({
   sleepTimerMinutes: number | null;
   sleepTimerRemainingSeconds: number | null;
   onSetSleepTimerMinutes: (minutes: number | null) => void;
-  onStartSleepTimer: () => void;
+  onStartSleepTimer: (minutes?: number) => void;
   onStopSleepTimer: () => void;
   onRefreshLibrary: () => void;
   onLogout: () => void;
@@ -2175,42 +2460,25 @@ function EmptyPage({
     profile: { title: "我", message: authSession ? authSession.nickname || authSession.phone : "未登录" }
   };
   const content = pageContent[page];
-  const canViewOnlineUsers = authSession?.nickname === "Bright";
+  const displayOnlineUsers = onlineUsers.length
+    ? onlineUsers
+    : authSession
+      ? [{ user_id: authSession.userId, nickname: content.message }]
+      : [];
+  const onlineSummary = getOnlineSummary(onlineCount, displayOnlineUsers, isOnlineCountUnavailable);
 
   return (
     <section className="simple-page" aria-label={content.title}>
-      <header className="simple-page-header">
-        <h1>{content.title}</h1>
-      </header>
       {page === "profile" && authSession ? (
         <div className="profile-page-content">
           <div className="profile-row profile-identity-row">
             <span className="profile-row-title">账号</span>
             <span className="profile-name">{content.message}</span>
           </div>
-          <div className="profile-row online-stat" aria-label="当前APP在线总人数">
-            <span className="profile-row-title">在线人数</span>
-            <strong>{isOnlineCountUnavailable || onlineCount === null ? "--" : onlineCount}</strong>
-            <span>{isOnlineCountUnavailable ? "暂不可用" : onlineCount === null ? "同步中" : "人"}</span>
+          <div className="profile-row online-stat" aria-label="当前APP在线用户及总人数">
+            <span className="profile-row-title">在线用户</span>
+            <span className="online-summary" title={onlineSummary}>{onlineSummary}</span>
           </div>
-          {canViewOnlineUsers ? (
-            <div className="profile-row online-user-list" aria-label="当前在线用户昵称">
-              <div className="online-user-list-title">在线用户</div>
-              {isOnlineCountUnavailable ? (
-                <div className="online-user-list-empty">暂不可用</div>
-              ) : onlineCount === null ? (
-                <div className="online-user-list-empty">同步中</div>
-              ) : onlineUsers.length > 0 ? (
-                <div className="online-user-chips">
-                  {onlineUsers.map((user, index) => (
-                    <span key={`${user.user_id ?? index}-${user.nickname}`}>{user.nickname}</span>
-                  ))}
-                </div>
-              ) : (
-                <div className="online-user-list-empty">暂无在线用户</div>
-              )}
-            </div>
-          ) : null}
           <SleepTimerPanel
             minutes={sleepTimerMinutes}
             remainingSeconds={sleepTimerRemainingSeconds}
@@ -2254,31 +2522,30 @@ function SleepTimerPanel({
   minutes: number | null;
   remainingSeconds: number | null;
   onSetMinutes: (minutes: number | null) => void;
-  onStart: () => void;
+  onStart: (minutes?: number) => void;
   onStop: () => void;
 }) {
-  const customMinutesInputRef = useRef<HTMLInputElement | null>(null);
-  const [customMinutes, setCustomMinutes] = useState(() => (minutes ? String(minutes) : ""));
+  const [customMinutes, setCustomMinutes] = useState(() => String(minutes ?? 30));
   const isRunning = remainingSeconds !== null;
   const customMinutesValue = parseSleepTimerInput(customMinutes);
 
   useEffect(() => {
-    setCustomMinutes(minutes ? String(minutes) : "");
+    setCustomMinutes(String(minutes ?? 30));
   }, [minutes]);
 
   function handleCustomSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    applyCustomMinutes();
+    handleStartClick();
   }
 
-  function applyCustomMinutes() {
-    const inputValue = customMinutesInputRef.current?.value ?? customMinutes;
-    const nextMinutes = parseSleepTimerInput(inputValue);
+  function handleStartClick() {
+    const nextMinutes = parseSleepTimerInput(customMinutes);
     if (!nextMinutes) {
       return;
     }
     setCustomMinutes(String(nextMinutes));
     onSetMinutes(nextMinutes);
+    onStart(nextMinutes);
   }
 
   function handleCustomChange(value: string) {
@@ -2287,9 +2554,7 @@ function SleepTimerPanel({
 
   const statusText = isRunning
     ? `剩余 ${formatSleepTimerRemaining(remainingSeconds)} 后停止播放`
-    : minutes
-      ? `已选择 ${minutes} 分钟`
-      : "未开启";
+    : "";
 
   return (
     <section className="profile-row sleep-timer-panel" aria-label="睡眠定时器">
@@ -2300,57 +2565,33 @@ function SleepTimerPanel({
             {statusText}
           </div>
         </div>
+        <form className="sleep-timer-custom" onSubmit={handleCustomSubmit}>
+          <label className="sleep-timer-custom-field">
+            <span className="sleep-timer-input-wrap">
+              <input
+                type="text"
+                name="sleep_timer_minutes"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={3}
+                value={customMinutes}
+                placeholder={`${sleepTimerMinMinutes}-${sleepTimerMaxMinutes}`}
+                aria-label="自定义睡眠定时器分钟数"
+                onChange={(event) => handleCustomChange(event.target.value)}
+              />
+              <span className="sleep-timer-unit">分钟</span>
+            </span>
+          </label>
+        </form>
         <button
           className={isRunning ? "sleep-timer-action is-running" : "sleep-timer-action"}
           type="button"
-          disabled={!isRunning && !minutes}
-          onClick={isRunning ? onStop : onStart}
+          disabled={!isRunning && !customMinutesValue}
+          onClick={isRunning ? onStop : handleStartClick}
         >
           {isRunning ? "关闭定时器" : "开始"}
         </button>
       </div>
-
-      <div className="sleep-timer-presets" role="group" aria-label="选择睡眠定时器时间">
-        <button
-          className={minutes === null ? "sleep-timer-preset active" : "sleep-timer-preset"}
-          type="button"
-          aria-pressed={minutes === null}
-          onClick={() => onSetMinutes(null)}
-        >
-          不限时
-        </button>
-        {sleepTimerPresetMinutes.map((presetMinutes) => (
-          <button
-            key={presetMinutes}
-            className={minutes === presetMinutes ? "sleep-timer-preset active" : "sleep-timer-preset"}
-            type="button"
-            aria-pressed={minutes === presetMinutes}
-            onClick={() => onSetMinutes(presetMinutes)}
-          >
-            {presetMinutes}分钟
-          </button>
-        ))}
-      </div>
-
-      <form className="sleep-timer-custom" onSubmit={handleCustomSubmit}>
-        <label className="sleep-timer-custom-field">
-          <span>自定义</span>
-          <input
-            type="text"
-            name="sleep_timer_minutes"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            ref={customMinutesInputRef}
-            value={customMinutes}
-            placeholder={`${sleepTimerMinMinutes}-${sleepTimerMaxMinutes}`}
-            aria-label="自定义睡眠定时器分钟数"
-            onChange={(event) => handleCustomChange(event.target.value)}
-          />
-        </label>
-        <button type="button" disabled={!customMinutesValue} onClick={applyCustomMinutes}>
-          应用
-        </button>
-      </form>
     </section>
   );
 }
@@ -2619,6 +2860,14 @@ function PageIcon({ page }: { page: AppPage }) {
     return <ProfileIcon />;
   }
   return <MusicIcon />;
+}
+
+function HeartStatusIcon({ filled }: { filled: boolean }) {
+  return (
+    <IconBase>
+      <path className={filled ? "heart-fill" : undefined} d="M12 20.1s-7.6-4.6-9.1-10A4.5 4.5 0 0 1 11 6.5l1 1.1 1-1.1a4.5 4.5 0 0 1 8.1 3.6c-1.5 5.4-9.1 10-9.1 10z" />
+    </IconBase>
+  );
 }
 
 function PreviousIcon() {

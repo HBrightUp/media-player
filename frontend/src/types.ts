@@ -81,6 +81,17 @@ export type FavoriteCategory = {
   updated_at: string;
 };
 
+export type TrackCategoryMembership = {
+  track_id: number;
+  category_id: number;
+  category_name: string;
+};
+
+export type TrackMembershipsResponse = {
+  favorite_track_ids: number[];
+  category_memberships: TrackCategoryMembership[];
+};
+
 export type FavoriteCategoryRequest = {
   user_id: number;
   name: string;

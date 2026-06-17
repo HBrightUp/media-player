@@ -127,6 +127,8 @@ svg {
 }
 
 .now-playing-ticker {
+  --ticker-copy-gap: 260px;
+
   position: absolute;
   top: calc(17px + env(safe-area-inset-top));
   left: 50%;
@@ -149,13 +151,16 @@ svg {
   min-width: max-content;
   display: inline-flex;
   align-items: center;
-  gap: 260px;
-  padding: 0 12px;
+  gap: 0;
+  padding: 0;
   white-space: nowrap;
   animation: now-playing-marquee 18s linear infinite;
+  will-change: transform;
 }
 
 .now-playing-ticker span {
+  flex: 0 0 auto;
+  padding-right: var(--ticker-copy-gap);
   font-size: 16px;
   font-weight: 780;
   letter-spacing: 0;
@@ -259,11 +264,8 @@ html.is-standalone-app .top-line {
   text-align: center;
 }
 
-.mode-tabs .search-tab {
-  margin-left: auto;
-}
-
 .mode-tabs .custom-category-trigger {
+  margin-left: auto;
   color: rgba(215, 242, 255, 0.86);
   border-style: dashed;
 }
@@ -310,12 +312,20 @@ html.is-standalone-app .top-line {
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 56px minmax(220px, 340px) minmax(150px, 220px);
-  column-gap: clamp(16px, 2vw, 28px);
+  grid-template-columns: 48px clamp(160px, 16vw, 220px) clamp(84px, 9vw, 132px);
+  justify-content: start;
+  justify-items: start;
+  column-gap: clamp(6px, 0.8vw, 10px);
   align-items: center;
 }
 
+.song-table.with-status .table-head,
+.song-table.with-status .table-row {
+  grid-template-columns: 48px clamp(154px, 15vw, 210px) clamp(96px, 10vw, 140px) max(72px, calc(var(--status-slot-count, 1) * 25px + 8px));
+}
+
 .table-head {
+  margin-right: 6px;
   height: 76px;
   color: rgba(240, 240, 240, 0.76);
   border-bottom: 1px solid var(--line);
@@ -330,7 +340,7 @@ html.is-standalone-app .top-line {
   align-items: center;
   gap: 6px;
   min-height: 34px;
-  padding: 3px 10px;
+  padding: 3px 8px 3px 0;
   color: inherit;
   background: transparent;
   border: 1px solid transparent;
@@ -391,8 +401,9 @@ html.is-standalone-app .top-line {
 
 .table-row {
   width: 100%;
-  height: 77px;
-  padding: 0;
+  min-height: 77px;
+  height: auto;
+  padding: 9px 0;
   color: rgba(239, 239, 239, 0.72);
   text-align: left;
   background: transparent;
@@ -423,7 +434,6 @@ html.is-standalone-app .top-line {
   color: rgba(255, 255, 255, 0.94);
   background:
     linear-gradient(90deg, rgba(10, 132, 255, 0.26), rgba(213, 244, 255, 0.13) 56%, rgba(255, 255, 255, 0.02));
-  box-shadow: inset 4px 0 0 var(--accent);
 }
 
 .table-row.active .row-index,
@@ -434,14 +444,95 @@ html.is-standalone-app .top-line {
 .row-index {
   color: rgba(239, 239, 239, 0.68);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table-row > span {
+  min-width: 0;
 }
 
 .row-title,
-.table-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.table-row > span:not(.row-index):not(.row-status) {
+  overflow: visible;
+  line-height: 1.25;
+  overflow-wrap: break-word;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.row-artist {
+  max-width: 100%;
+  padding-right: 8px;
+  box-sizing: border-box;
+  overflow: visible;
+  overflow-wrap: break-word;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: normal;
+}
+
+.table-status-head {
+  justify-self: start;
+  margin-left: 6px;
+  text-align: left;
   white-space: nowrap;
+}
+
+.row-status {
+  justify-self: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding-left: 6px;
+  box-sizing: border-box;
+  color: rgba(233, 246, 255, 0.62);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-row .row-status {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-overflow: clip;
+}
+
+.row-status::-webkit-scrollbar {
+  display: none;
+}
+
+.track-status-heart {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 21px;
+  width: 21px;
+  height: 21px;
+  color: rgba(214, 234, 245, 0.74);
+}
+
+.track-status-heart svg {
+  width: 21px;
+  height: 21px;
+  stroke-width: 2.1;
+}
+
+.track-status-heart.active {
+  color: rgba(255, 93, 133, 0.94);
+  filter: drop-shadow(0 0 8px rgba(255, 93, 133, 0.2));
+}
+
+.track-status-heart .heart-fill {
+  fill: currentColor;
 }
 
 .empty-table {
@@ -514,12 +605,24 @@ html.is-standalone-app .top-line {
   backdrop-filter: blur(26px) saturate(1.18);
 }
 
+form.search-dialog {
+  width: min(280px, calc(100vw - 64px));
+  gap: 7px;
+  padding: 12px;
+  border-radius: 15px;
+}
+
 .search-dialog h2 {
   margin: 0;
   color: rgba(218, 246, 246, 0.94);
   font-size: 20px;
   font-weight: 780;
   letter-spacing: 0;
+}
+
+form.search-dialog h2 {
+  font-size: 16px;
+  text-align: center;
 }
 
 .search-input {
@@ -535,6 +638,15 @@ html.is-standalone-app .top-line {
   font-size: 16px;
 }
 
+form.search-dialog .search-input {
+  width: 159px;
+  height: 32px;
+  justify-self: center;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
 .search-input:focus {
   border-color: rgba(10, 132, 255, 0.78);
   box-shadow: var(--apple-focus-ring);
@@ -546,6 +658,12 @@ html.is-standalone-app .top-line {
   gap: 10px;
 }
 
+form.search-dialog .search-actions {
+  grid-template-columns: repeat(2, 76px);
+  gap: 7px;
+  justify-content: center;
+}
+
 .search-actions button {
   min-width: 0;
   height: 42px;
@@ -555,6 +673,13 @@ html.is-standalone-app .top-line {
   border-radius: 12px;
   font-size: 15px;
   font-weight: 760;
+}
+
+form.search-dialog .search-actions button {
+  height: 30px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 720;
 }
 
 .search-actions button:hover {
@@ -637,7 +762,7 @@ html.is-standalone-app .top-line {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: 92px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -651,19 +776,6 @@ html.is-standalone-app .top-line {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-.simple-page-header {
-  align-self: end;
-  padding: 0 32px 12px;
-}
-
-.simple-page-header h1 {
-  margin: 0;
-  color: rgba(218, 246, 246, 0.96);
-  font-size: 30px;
-  font-weight: 760;
-  letter-spacing: 0;
 }
 
 .simple-page-empty {
@@ -681,7 +793,7 @@ html.is-standalone-app .top-line {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: 128px minmax(0, 1fr);
+  grid-template-rows: 104px minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -689,23 +801,14 @@ html.is-standalone-app .top-line {
   min-width: 0;
   align-self: end;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "title time"
-    "track time";
-  align-items: end;
-  gap: 8px 18px;
+    "track"
+    "time";
+  align-items: start;
+  gap: 5px;
   padding: 0 clamp(28px, 8vw, 120px) 18px;
   color: rgba(238, 248, 250, 0.86);
-}
-
-.lyrics-page-header h1 {
-  grid-area: title;
-  margin: 0;
-  color: rgba(218, 246, 246, 0.96);
-  font-size: 30px;
-  font-weight: 760;
-  letter-spacing: 0;
 }
 
 .lyrics-track-meta {
@@ -738,6 +841,7 @@ html.is-standalone-app .top-line {
 
 .lyrics-page-time {
   grid-area: time;
+  justify-self: start;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -889,11 +993,23 @@ html.is-standalone-app .top-line {
 
 .online-stat {
   min-width: 0;
-  grid-template-columns: var(--profile-label-width) auto auto;
-  align-items: baseline;
-  column-gap: 8px;
+  grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
+  align-items: start;
+  column-gap: 14px;
   font-size: 15px;
   font-weight: 680;
+}
+
+.online-summary {
+  min-width: 0;
+  overflow: visible;
+  color: rgba(239, 251, 255, 0.92);
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .online-stat strong {
@@ -945,19 +1061,19 @@ html.is-standalone-app .top-line {
 }
 
 .sleep-timer-panel {
-  grid-template-columns: var(--profile-label-width) minmax(0, min(360px, calc(100vw - 160px)));
-  min-height: 214px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 82px;
+  align-items: center;
 }
 
 .sleep-timer-header {
   min-width: 0;
-  grid-column: 1 / -1;
+  grid-column: 1;
   display: grid;
-  grid-template-columns: var(--profile-label-width) minmax(0, max-content) max-content;
+  grid-template-columns: var(--profile-label-width) max-content max-content;
   justify-content: start;
   align-items: center;
-  gap: 12px;
+  gap: 10px 14px;
 }
 
 .sleep-timer-copy {
@@ -970,8 +1086,9 @@ html.is-standalone-app .top-line {
 }
 
 .sleep-timer-status {
-  grid-column: 2;
-  min-height: 18px;
+  grid-column: 2 / -1;
+  grid-row: 2;
+  min-height: 0;
   overflow: hidden;
   color: rgba(237, 247, 250, 0.7);
   font-size: 13px;
@@ -981,9 +1098,7 @@ html.is-standalone-app .top-line {
   white-space: nowrap;
 }
 
-.sleep-timer-action,
-.sleep-timer-custom button,
-.sleep-timer-preset {
+.sleep-timer-action {
   min-height: 34px;
   color: rgba(241, 251, 255, 0.9);
   background: transparent;
@@ -997,55 +1112,42 @@ html.is-standalone-app .top-line {
 .sleep-timer-action {
   grid-column: 3;
   justify-self: start;
-  min-width: 92px;
-  padding: 0 14px;
+  min-width: 48px;
+  padding: 0;
   color: rgba(132, 208, 255, 0.94);
   background: transparent;
 }
 
 .sleep-timer-action.is-running {
+  min-width: 94px;
+  padding: 0 10px;
   color: rgba(255, 159, 153, 0.94);
   background: transparent;
-}
-
-.sleep-timer-presets {
-  grid-column: 2 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sleep-timer-preset {
-  flex: 1 1 70px;
-  padding: 0 10px;
-}
-
-.sleep-timer-preset:hover:not(:disabled),
-.sleep-timer-custom button:hover:not(:disabled),
-.sleep-timer-action:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.sleep-timer-preset.active {
-  color: rgba(132, 208, 255, 0.96);
-  background: rgba(10, 132, 255, 0.16);
+  white-space: nowrap;
 }
 
 .sleep-timer-custom {
-  grid-column: 2 / -1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 8px;
+  grid-column: 2;
+  min-width: 0;
 }
 
 .sleep-timer-custom-field {
   min-width: 0;
-  display: grid;
-  gap: 6px;
+  display: inline-grid;
+  grid-template-columns: auto;
+  align-items: center;
+  gap: 0;
   color: rgba(237, 247, 250, 0.62);
   font-size: 12px;
   font-weight: 720;
+}
+
+.sleep-timer-input-wrap {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 58px) auto;
+  align-items: center;
+  gap: 6px;
 }
 
 .sleep-timer-custom input {
@@ -1070,10 +1172,17 @@ html.is-standalone-app .top-line {
   color: rgba(237, 247, 250, 0.36);
 }
 
-.sleep-timer-custom button {
-  min-width: 68px;
-  height: 36px;
-  padding: 0 12px;
+.sleep-timer-unit {
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  color: rgba(237, 247, 250, 0.62);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.sleep-timer-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .profile-actions {
@@ -1724,11 +1833,13 @@ input[type="range"] {
   }
 
   .table-body {
-    height: calc(100% - 60px);
+    height: auto;
+    min-height: 0;
   }
 
   .table-row {
-    height: 66px;
+    min-height: 66px;
+    height: auto;
   }
 
   .lyrics-page {
@@ -1801,8 +1912,14 @@ input[type="range"] {
 
   .table-head,
   .table-row {
-    grid-template-columns: 44px minmax(200px, 320px) minmax(132px, 210px);
-    column-gap: 20px;
+    grid-template-columns: 42px clamp(150px, 20vw, 210px) clamp(74px, 10vw, 122px);
+    column-gap: 8px;
+  }
+
+  .song-table.with-status .table-head,
+  .song-table.with-status .table-row {
+    grid-template-columns: 42px clamp(144px, 19vw, 200px) clamp(86px, 11vw, 128px) max(68px, calc(var(--status-slot-count, 1) * 25px + 8px));
+    column-gap: 8px;
   }
 
   .table-head {
@@ -1816,7 +1933,8 @@ input[type="range"] {
   }
 
   .table-row {
-    height: 64px;
+    min-height: 64px;
+    height: auto;
     font-size: 18px;
   }
 
@@ -1890,15 +2008,7 @@ input[type="range"] {
   }
 
   .simple-page {
-    grid-template-rows: 84px minmax(0, 1fr);
-  }
-
-  .simple-page-header {
-    padding: 0 28px 12px;
-  }
-
-  .simple-page-header h1 {
-    font-size: 28px;
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .simple-page-empty {
@@ -1948,7 +2058,8 @@ input[type="range"] {
   }
 
   .table-row {
-    height: 56px;
+    min-height: 56px;
+    height: auto;
     font-size: 17px;
   }
 
@@ -1958,10 +2069,6 @@ input[type="range"] {
 
   .lyrics-page {
     grid-template-rows: 92px minmax(0, 1fr);
-  }
-
-  .lyrics-page-header h1 {
-    font-size: 24px;
   }
 
   .lyrics-page-body {
@@ -2008,6 +2115,8 @@ input[type="range"] {
   }
 
   .now-playing-ticker {
+    --ticker-copy-gap: 360px;
+
     top: calc(9px + env(safe-area-inset-top));
     left: 50%;
     width: min(180px, calc(100vw - 220px));
@@ -2016,8 +2125,6 @@ input[type="range"] {
   }
 
   .now-playing-ticker-track {
-    gap: 360px;
-    padding: 0 10px;
     animation-duration: 15s;
   }
 
@@ -2058,8 +2165,14 @@ input[type="range"] {
 
   .table-head,
   .table-row {
-    grid-template-columns: 34px minmax(128px, 1fr) minmax(86px, 0.54fr);
-    column-gap: 10px;
+    grid-template-columns: 32px clamp(140px, 38vw, 178px) clamp(64px, 18vw, 92px);
+    column-gap: 5px;
+  }
+
+  .song-table.with-status .table-head,
+  .song-table.with-status .table-row {
+    grid-template-columns: 30px clamp(130px, 32vw, 158px) clamp(72px, 18vw, 92px) max(58px, calc(var(--status-slot-count, 1) * 19px + 8px));
+    column-gap: 6px;
   }
 
   .table-head {
@@ -2074,9 +2187,32 @@ input[type="range"] {
   }
 
   .table-row {
-    height: 52px;
+    min-height: 52px;
+    height: auto;
     font-size: 14px;
     font-weight: 680;
+  }
+
+  .table-status-head {
+    font-size: 12px;
+  }
+
+  .row-status {
+    min-height: 24px;
+    height: auto;
+    gap: 2px;
+    padding-left: 4px;
+  }
+
+  .track-status-heart {
+    flex-basis: 17px;
+    width: 17px;
+    height: 20px;
+  }
+
+  .track-status-heart svg {
+    width: 17px;
+    height: 17px;
   }
 
   .empty-table {
@@ -2091,15 +2227,10 @@ input[type="range"] {
   .lyrics-page-header {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "title"
       "track"
       "time";
     gap: 5px;
     padding: 0 18px 12px;
-  }
-
-  .lyrics-page-header h1 {
-    font-size: 24px;
   }
 
   .lyrics-track-meta {
@@ -2228,16 +2359,7 @@ input[type="range"] {
   }
 
   .simple-page {
-    grid-template-rows: 76px minmax(0, 1fr);
-  }
-
-  .simple-page-header {
-    padding: 0 16px 10px;
-  }
-
-  .simple-page-header h1 {
-    font-size: 24px;
-    font-weight: 760;
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .simple-page-empty {
@@ -2274,8 +2396,12 @@ input[type="range"] {
   }
 
   .online-stat {
-    grid-template-columns: var(--profile-label-width) auto auto;
+    grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
     font-size: 13px;
+  }
+
+  .online-summary {
+    font-size: 14px;
   }
 
   .online-stat strong {
@@ -2301,14 +2427,14 @@ input[type="range"] {
   }
 
   .sleep-timer-panel {
-    grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
-    min-height: 244px;
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 72px;
   }
 
   .sleep-timer-header {
-    grid-template-columns: var(--profile-label-width) minmax(0, max-content) max-content;
+    grid-template-columns: var(--profile-label-width) max-content max-content;
     justify-content: start;
-    gap: 9px;
+    gap: 8px;
   }
 
   .sleep-timer-action {
@@ -2324,23 +2450,11 @@ input[type="range"] {
     font-size: 12px;
   }
 
-  .sleep-timer-presets {
-    gap: 7px;
-  }
-
-  .sleep-timer-preset {
-    flex-basis: calc(50% - 4px);
-    min-height: 32px;
-    padding: 0 8px;
-    font-size: 12px;
-  }
-
   .sleep-timer-custom {
-    grid-template-columns: minmax(0, 1fr) 64px;
+    grid-column: 2;
   }
 
-  .sleep-timer-custom input,
-  .sleep-timer-custom button {
+  .sleep-timer-custom input {
     height: 34px;
     font-size: 13px;
   }
@@ -2463,8 +2577,14 @@ input[type="range"] {
 
   .table-head,
   .table-row {
-    grid-template-columns: 28px minmax(118px, 1fr) minmax(72px, 0.52fr);
-    column-gap: 8px;
+    grid-template-columns: 28px clamp(126px, 35vw, 150px) clamp(54px, 16vw, 72px);
+    column-gap: 4px;
+  }
+
+  .song-table.with-status .table-head,
+  .song-table.with-status .table-row {
+    grid-template-columns: 26px clamp(116px, 32vw, 140px) clamp(64px, 17vw, 78px) max(54px, calc(var(--status-slot-count, 1) * 19px + 8px));
+    column-gap: 5px;
   }
 
   .table-head {
@@ -2472,7 +2592,8 @@ input[type="range"] {
   }
 
   .table-row {
-    height: 49px;
+    min-height: 49px;
+    height: auto;
     font-size: 13px;
   }
 
@@ -2483,10 +2604,6 @@ input[type="range"] {
   .lyrics-page-header {
     padding-left: 16px;
     padding-right: 16px;
-  }
-
-  .lyrics-page-header h1 {
-    font-size: 22px;
   }
 
   .lyrics-track-meta strong {
@@ -2566,7 +2683,24 @@ input[type="range"] {
 @media (max-width: 360px) {
   .table-head,
   .table-row {
-    grid-template-columns: 28px minmax(110px, 1fr) minmax(62px, 0.56fr);
+    grid-template-columns: 26px clamp(112px, 34vw, 132px) clamp(46px, 14vw, 60px);
+    column-gap: 4px;
+  }
+
+  .song-table.with-status .table-head,
+  .song-table.with-status .table-row {
+    grid-template-columns: 24px clamp(106px, 32vw, 126px) clamp(58px, 16vw, 70px) max(50px, calc(var(--status-slot-count, 1) * 17px + 8px));
+    column-gap: 5px;
+  }
+
+  .track-status-heart {
+    flex-basis: 15px;
+    width: 15px;
+  }
+
+  .track-status-heart svg {
+    width: 15px;
+    height: 15px;
   }
 
   .control-bar {
@@ -2620,7 +2754,8 @@ input[type="range"] {
   }
 
   .table-row {
-    height: 44px;
+    min-height: 44px;
+    height: auto;
   }
 
   .lyrics-page {
@@ -2629,10 +2764,6 @@ input[type="range"] {
 
   .lyrics-page-header {
     padding-bottom: 8px;
-  }
-
-  .lyrics-page-header h1 {
-    font-size: 20px;
   }
 
   .full-lyrics-list {

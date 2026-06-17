@@ -135,6 +135,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/favorites/", s.handleFavoriteRoute)
 	mux.HandleFunc("/api/favorite-categories", s.handleFavoriteCategories)
 	mux.HandleFunc("/api/favorite-categories/", s.handleFavoriteCategoryRoute)
+	mux.HandleFunc("/api/track-memberships", s.handleTrackMemberships)
 	mux.HandleFunc("/api/tracks", s.handleTracks)
 	mux.HandleFunc("/api/tracks/", s.handleTrackRoute)
 	return s.withCORS(mux)
@@ -251,7 +252,7 @@ func (s *Server) handlePresenceHeartbeat(w http.ResponseWriter, r *http.Request)
 		phone = user.Phone
 	}
 	snapshot := s.presence.Touch(sessionID, request.UserID, phone, user.Nickname, time.Now())
-	writePresenceResponse(w, snapshot, hasUser && user.Nickname == "Bright")
+	writePresenceResponse(w, snapshot, true)
 }
 
 func (s *Server) handlePresenceOffline(w http.ResponseWriter, r *http.Request) {
@@ -444,6 +445,27 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (s *Server) handleTrackMemberships(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	favoriteTrackIDs, categoryMemberships, err := s.store.ListTrackMemberships(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取歌曲状态失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"favorite_track_ids":   favoriteTrackIDs,
+		"category_memberships": categoryMemberships,
+	})
 }
 
 func (s *Server) handleFavoriteRoute(w http.ResponseWriter, r *http.Request) {
