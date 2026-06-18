@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="ring" x1="96" x2="420" y1="426" y2="78" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#21F7D4"/>
+      <stop offset=".48" stop-color="#49A3FF"/>
+      <stop offset="1" stop-color="#B35CFF"/>
+    </linearGradient>
+    <linearGradient id="needleA" x1="186" x2="355" y1="362" y2="148" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE65D"/>
+      <stop offset=".48" stop-color="#FF7C45"/>
+      <stop offset="1" stop-color="#FF35B5"/>
+    </linearGradient>
+    <linearGradient id="needleB" x1="157" x2="317" y1="366" y2="188" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1AF5FF"/>
+      <stop offset="1" stop-color="#65FFB9"/>
+    </linearGradient>
+    <filter id="glow" x="35" y="35" width="442" height="442" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#16E7FF" flood-opacity=".24"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="14" flood-color="#FF50B7" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <g filter="url(#glow)">
+    <circle cx="256" cy="256" r="157" fill="none" stroke="url(#ring)" stroke-width="36"/>
+    <circle cx="256" cy="256" r="109" fill="#0B1729" opacity=".45"/>
+    <path fill="url(#needleA)" d="M343 127c22-9 43 12 33 34l-70 161c-4 10-12 18-22 22l-157 67c-22 10-43-12-33-34l68-157c4-10 12-18 22-22l159-71Z"/>
+    <path fill="url(#needleB)" d="m168 346 70-158c3-7 12-9 18-4l72 72c6 6 4 15-4 18l-156 72Z" opacity=".95"/>
+    <circle cx="256" cy="256" r="31" fill="#F7FFFF"/>
+    <circle cx="256" cy="256" r="14" fill="#24314D" opacity=".78"/>
+  </g>
+  <path fill="#FFFFFF" d="M395 338c21-3 35-17 38-38 3 21 17 35 38 38-21 3-35 17-38 38-3-21-17-35-38-38Z" opacity=".85"/>
+  <circle cx="108" cy="151" r="13" fill="#FFF05D"/>
+</svg>

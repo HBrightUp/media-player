@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   addFavoriteTrack,
   addFavoriteTrackToCategory,
@@ -49,6 +49,11 @@ type CategoryContextMenu = {
   x: number;
   y: number;
 };
+type FloatingPanelPosition = {
+  x: number;
+  y: number;
+  width?: number;
+};
 type LongPressStart = {
   pointerId: number;
   x: number;
@@ -77,6 +82,12 @@ const appPages: Array<{ id: AppPage; label: string }> = [
   { id: "discover", label: "发现" },
   { id: "profile", label: "我" }
 ];
+const appPageIconSources: Record<AppPage, string> = {
+  music: "/icons/nav-music-vivid.svg",
+  lyrics: "/icons/nav-lyrics-vivid.svg",
+  discover: "/icons/nav-discover-vivid.svg",
+  profile: "/icons/nav-profile-vivid.svg"
+};
 const playbackModes: PlaybackMode[] = ["all", "one", "shuffle"];
 const playbackModeLabels: Record<PlaybackMode, string> = {
   all: "列表循环",
@@ -94,12 +105,20 @@ const nicknameMaxLength = 20;
 const passwordMinLength = 6;
 const passwordMaxLength = 64;
 const mainlandPhonePattern = /^1[3-9]\d{9}$/;
+const trackPlayClickCooldownMs = 450;
+const trackSwitchDebounceWindowMs = 300;
+const trackSwitchDebounceDelayMs = 250;
 const longPressDelayMs = 520;
 const longPressMoveTolerancePx = 10;
 const contextMenuWidth = 148;
-const trackContextMenuHeight = 148;
+const trackContextMenuHeight = 96;
 const categoryContextMenuHeight = 54;
+const categorySelectorPopoverWidth = 104;
+const categorySelectorOptionHeight = 43;
+const categorySelectorBaseHeight = 18;
+const categorySelectorPopoverMaxHeight = 320;
 const contextMenuMargin = 8;
+const favoriteCategoryLimit = 12;
 const favoriteCategoryNameMaxLength = 16;
 const sleepTimerMinMinutes = 1;
 const sleepTimerMaxMinutes = 360;
@@ -113,6 +132,8 @@ function App() {
   const categoryLongPressStartRef = useRef<CategoryLongPressStart | null>(null);
   const suppressNextClickRef = useRef(false);
   const suppressNextCategoryClickRef = useRef(false);
+  const lastTrackPlayClickRef = useRef<{ trackID: number; clickedAt: number } | null>(null);
+  const pendingTrackPlayTimerRef = useRef<number | null>(null);
   const initialAuthRef = useRef<AuthReadResult | null>(null);
   const initialAuthProfileRef = useRef<AuthFormState | null>(null);
   const presenceSessionIdRef = useRef<string | null>(null);
@@ -152,6 +173,7 @@ function App() {
   const [activePage, setActivePage] = useState<AppPage>("music");
   const [activeTab, setActiveTab] = useState<MusicTab>("音乐列表");
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
+  const [lastSelectedCategoryId, setLastSelectedCategoryId] = useState<number | null>(null);
   const [musicSortKey, setMusicSortKey] = useState<TrackSortKey | null>(null);
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(() => new Set());
   const [trackCategoryMembershipMap, setTrackCategoryMembershipMap] = useState<Map<number, TrackCategoryMembership[]>>(() => new Map());
@@ -166,10 +188,13 @@ function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isCategorySelectorOpen, setIsCategorySelectorOpen] = useState(false);
+  const [categorySelectorPosition, setCategorySelectorPosition] = useState<FloatingPanelPosition | null>(null);
   const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
   const [categoryName, setCategoryName] = useState("");
   const [isCategorySubmitting, setIsCategorySubmitting] = useState(false);
   const [categoryPickerTrack, setCategoryPickerTrack] = useState<Track | null>(null);
+  const [categoryPickerPosition, setCategoryPickerPosition] = useState<FloatingPanelPosition | null>(null);
   const [toastMessage, setToastMessage] = useState("");
   const [loadMessage, setLoadMessage] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -205,14 +230,6 @@ function App() {
     }
   }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
 
-  const trackCategoryIdSetMap = useMemo(() => {
-    const categoryIdSetMap = new Map<number, Set<number>>();
-    trackCategoryMembershipMap.forEach((memberships, trackID) => {
-      categoryIdSetMap.set(trackID, new Set(memberships.map((membership) => membership.category_id)));
-    });
-    return categoryIdSetMap;
-  }, [trackCategoryMembershipMap]);
-
   useEffect(() => {
     if (!authSession) {
       loadedLibrarySessionKeyRef.current = null;
@@ -234,6 +251,7 @@ function App() {
       setTrackCategoryMembershipMap(new Map());
       setFavoriteCategories([]);
       setActiveCategoryId(null);
+      setLastSelectedCategoryId(null);
       return;
     }
     void refreshFavoriteCategories();
@@ -249,6 +267,7 @@ function App() {
       if (toastTimerRef.current) {
         window.clearTimeout(toastTimerRef.current);
       }
+      clearPendingTrackPlay();
       cancelLongPress();
       cancelCategoryLongPress();
     };
@@ -515,6 +534,50 @@ function App() {
     );
   }
 
+  function appendTrackToPlaybackQueueWhen(track: Track, shouldAppend: (scope: PlaybackQueueScope) => boolean) {
+    if (!shouldAppend(playbackQueueScope)) {
+      return;
+    }
+
+    setPlaybackQueue((previous) => {
+      if (previous.some((item) => item.id === track.id)) {
+        return previous;
+      }
+      return [...previous, track];
+    });
+  }
+
+  function appendTrackToFavoritePlaybackQueue(track: Track) {
+    appendTrackToPlaybackQueueWhen(track, (scope) => scope.kind === "favorites");
+  }
+
+  function appendTrackToCategoryPlaybackQueue(track: Track, categoryID: number) {
+    appendTrackToPlaybackQueueWhen(
+      track,
+      (scope) => scope.kind === "category" && scope.categoryId === categoryID
+    );
+  }
+
+  function syncFavoritePlaybackQueue(nextTracks: Track[], categoryId?: number | null) {
+    const isCategoryQueue = categoryId != null;
+    const shouldSync =
+      isCategoryQueue
+        ? playbackQueueScope.kind === "category" && playbackQueueScope.categoryId === categoryId
+        : playbackQueueScope.kind === "favorites";
+
+    if (!shouldSync) {
+      return;
+    }
+
+    setPlaybackQueue((previous) => {
+      if (!previous.length) {
+        return nextTracks;
+      }
+      const mergedQueue = mergePlaybackQueue(previous, nextTracks);
+      return areTrackListsEqual(previous, mergedQueue) ? previous : mergedQueue;
+    });
+  }
+
   function getAdjacentQueuedTrack(direction: 1 | -1) {
     if (!playbackQueue.length) {
       return null;
@@ -617,12 +680,20 @@ function App() {
   async function refreshFavoriteCategories() {
     if (!authSession?.userId) {
       setFavoriteCategories([]);
+      setLastSelectedCategoryId(null);
       return;
     }
 
     try {
       const payload = await getFavoriteCategories(authSession.userId);
-      setFavoriteCategories(sortFavoriteCategories(payload.categories));
+      const nextCategories = sortFavoriteCategories(payload.categories);
+      setFavoriteCategories(nextCategories);
+      setLastSelectedCategoryId((previous) => {
+        if (previous == null) {
+          return previous;
+        }
+        return nextCategories.some((category) => category.id === previous) ? previous : null;
+      });
     } catch (error) {
       showToast(error instanceof Error ? error.message : "分类加载失败");
     }
@@ -726,6 +797,7 @@ function App() {
       if (showList) {
         setTracks(payload.tracks);
       }
+      syncFavoritePlaybackQueue(payload.tracks, categoryId);
     } catch (error) {
       if (showList) {
         setTracks([]);
@@ -758,7 +830,10 @@ function App() {
     setActivePage("music");
     setActiveCategoryId(null);
     setIsPlaybackModeMenuOpen(false);
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
     setCategoryContextMenu(null);
+    closeCategoryPicker();
     if (tab === "音乐列表") {
       setIsLibraryFiltered(false);
       setIsSearchOpen(false);
@@ -779,11 +854,79 @@ function App() {
     setTrackContextMenu(null);
   }
 
+  function getCategorySelectorPosition(target: HTMLElement): FloatingPanelPosition {
+    const rect = target.getBoundingClientRect();
+    const availableWidth = Math.max(0, window.innerWidth - contextMenuMargin * 2);
+    const width = Math.min(availableWidth, categorySelectorPopoverWidth);
+    const estimatedHeight = Math.min(
+      categorySelectorPopoverMaxHeight,
+      categorySelectorBaseHeight + favoriteCategories.length * categorySelectorOptionHeight
+    );
+    const left = Math.min(
+      Math.max(contextMenuMargin, rect.left),
+      Math.max(contextMenuMargin, window.innerWidth - width - contextMenuMargin)
+    );
+    const belowTop = rect.bottom + contextMenuMargin;
+    const aboveTop = rect.top - estimatedHeight - contextMenuMargin;
+    const hasRoomBelow = belowTop + estimatedHeight <= window.innerHeight - contextMenuMargin;
+    return {
+      x: left,
+      y: hasRoomBelow ? belowTop : Math.max(contextMenuMargin, aboveTop),
+      width
+    };
+  }
+
+  function getCenteredCategoryPickerPosition(): FloatingPanelPosition {
+    const width = Math.min(Math.max(0, window.innerWidth - contextMenuMargin * 2), categorySelectorPopoverWidth);
+    return {
+      x: Math.max(contextMenuMargin, Math.round((window.innerWidth - width) / 2)),
+      y: Math.max(contextMenuMargin, Math.round(window.innerHeight / 2 - categorySelectorPopoverMaxHeight / 2)),
+      width
+    };
+  }
+
+  function handleCategorySelectorClick(event: ReactMouseEvent<HTMLButtonElement>) {
+    setActivePage("music");
+    setIsSearchOpen(false);
+    setTrackContextMenu(null);
+    setCategoryContextMenu(null);
+    closeCategoryPicker();
+    setIsCategoryDialogOpen(false);
+    if (!favoriteCategories.length) {
+      showToast("请先创建分类");
+      setIsCategoryDialogOpen(true);
+      return;
+    }
+    setCategorySelectorPosition(getCategorySelectorPosition(event.currentTarget));
+    setIsCategorySelectorOpen(true);
+  }
+
+  function closeCategorySelector() {
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
+  }
+
+  function closeCategoryPicker() {
+    setCategoryPickerTrack(null);
+    setCategoryPickerPosition(null);
+  }
+
+  function selectCategory(category: FavoriteCategory) {
+    closeCategorySelector();
+    handleCategoryClick(category);
+  }
+
   function handleCustomCategoryClick() {
     setActivePage("music");
     setIsSearchOpen(false);
     setTrackContextMenu(null);
     setCategoryContextMenu(null);
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
+    if (favoriteCategories.length >= favoriteCategoryLimit) {
+      showToast(`最多创建${favoriteCategoryLimit}个分类`);
+      return;
+    }
     setIsCategoryDialogOpen(true);
   }
 
@@ -796,8 +939,11 @@ function App() {
     setActivePage("music");
     setActiveTab("分类");
     setActiveCategoryId(category.id);
+    setLastSelectedCategoryId(category.id);
     setIsLibraryFiltered(false);
     setIsSearchOpen(false);
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
     setTrackContextMenu(null);
     setCategoryContextMenu(null);
     setLoadMessage("");
@@ -829,6 +975,9 @@ function App() {
     setIsPlaybackModeMenuOpen(false);
     setTrackContextMenu(null);
     setCategoryContextMenu(null);
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
+    closeCategoryPicker();
     if (page === "lyrics") {
       setIsSearchOpen(false);
       return;
@@ -919,8 +1068,10 @@ function App() {
     setFavoriteCategories([]);
     setTrackContextMenu(null);
     setCategoryContextMenu(null);
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
     setIsCategoryDialogOpen(false);
-    setCategoryPickerTrack(null);
+    closeCategoryPicker();
     setOnlineCount(null);
     setOnlineUsers([]);
     setIsOnlineCountUnavailable(false);
@@ -1024,6 +1175,10 @@ function App() {
       showToast(`分类名称不能超过${favoriteCategoryNameMaxLength}个字符`);
       return;
     }
+    if (favoriteCategories.length >= favoriteCategoryLimit) {
+      showToast(`最多创建${favoriteCategoryLimit}个分类`);
+      return;
+    }
     if (favoriteCategories.some((category) => category.name.localeCompare(name, undefined, { sensitivity: "accent" }) === 0)) {
       showToast("分类名称已存在");
       return;
@@ -1038,8 +1193,11 @@ function App() {
       setFavoriteCategories((previous) => sortFavoriteCategories([...previous, payload.category]));
       setCategoryName("");
       setIsCategoryDialogOpen(false);
+      setIsCategorySelectorOpen(false);
+      setCategorySelectorPosition(null);
       setActiveTab("分类");
       setActiveCategoryId(payload.category.id);
+      setLastSelectedCategoryId(payload.category.id);
       setIsLibraryFiltered(false);
       setIsSearchOpen(false);
       setTracks([]);
@@ -1065,9 +1223,12 @@ function App() {
     }
 
     setCategoryContextMenu(null);
+    setIsCategorySelectorOpen(false);
+    setCategorySelectorPosition(null);
     try {
       await deleteFavoriteCategory(authSession.userId, category.id);
       setFavoriteCategories((previous) => previous.filter((item) => item.id !== category.id));
+      setLastSelectedCategoryId((previous) => (previous === category.id ? null : previous));
       removeCategoryMemberships(category.id);
       if (activeTab === "分类" && activeCategoryId === category.id) {
         setActiveTab("收藏");
@@ -1115,6 +1276,28 @@ function App() {
       suppressNextClickRef.current = false;
       return;
     }
+    const now = Date.now();
+    const lastTrackPlayClick = lastTrackPlayClickRef.current;
+    const isCurrentTrack = currentTrack?.id === track.id;
+    if (isCurrentTrack && isPlaying) {
+      clearPendingTrackPlay();
+      return;
+    }
+    if (isCurrentTrack && !isPlaying) {
+      clearPendingTrackPlay();
+      lastTrackPlayClickRef.current = { trackID: track.id, clickedAt: now };
+      playTrack(track);
+      return;
+    }
+    if (lastTrackPlayClick?.trackID === track.id && now - lastTrackPlayClick.clickedAt < trackPlayClickCooldownMs) {
+      return;
+    }
+    if (lastTrackPlayClick && lastTrackPlayClick.trackID !== track.id && now - lastTrackPlayClick.clickedAt < trackSwitchDebounceWindowMs) {
+      scheduleTrackPlay(track, now);
+      return;
+    }
+    clearPendingTrackPlay();
+    lastTrackPlayClickRef.current = { trackID: track.id, clickedAt: now };
     playTrack(track);
   }
 
@@ -1215,6 +1398,23 @@ function App() {
     categoryLongPressTimerRef.current = null;
   }
 
+  function clearPendingTrackPlay() {
+    if (!pendingTrackPlayTimerRef.current) {
+      return;
+    }
+    window.clearTimeout(pendingTrackPlayTimerRef.current);
+    pendingTrackPlayTimerRef.current = null;
+  }
+
+  function scheduleTrackPlay(track: Track, clickedAt: number) {
+    clearPendingTrackPlay();
+    lastTrackPlayClickRef.current = { trackID: track.id, clickedAt };
+    pendingTrackPlayTimerRef.current = window.setTimeout(() => {
+      pendingTrackPlayTimerRef.current = null;
+      playTrack(track);
+    }, trackSwitchDebounceDelayMs);
+  }
+
   function openTrackMenu(track: Track, clientX: number, clientY: number) {
     const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - trackContextMenuHeight - contextMenuMargin);
@@ -1269,10 +1469,14 @@ function App() {
         showToast("已取消收藏");
       } else {
         await addFavoriteTrack({ user_id: authSession.userId, track_id: track.id });
+        appendTrackToFavoritePlaybackQueue(track);
         showToast("已收藏");
       }
-      if (activeTab === "收藏" || activeTab === "分类") {
-        void refreshFavoriteTracks({ showList: true, categoryId: activeTab === "分类" ? activeCategoryId : undefined });
+      if (activeTab === "收藏" || activeTab === "分类" || playbackQueueScope.kind === "favorites") {
+        void refreshFavoriteTracks({
+          showList: activeTab === "收藏" || activeTab === "分类",
+          categoryId: activeTab === "分类" ? activeCategoryId : undefined
+        });
       }
       void refreshTrackMemberships();
     } catch (error) {
@@ -1285,7 +1489,7 @@ function App() {
     }
   }
 
-  function openCategoryPicker(track: Track) {
+  function openCategoryPicker(track: Track, target?: HTMLElement) {
     setTrackContextMenu(null);
     if (!authSession?.userId) {
       showToast("请先登录后加入分类");
@@ -1296,17 +1500,18 @@ function App() {
       setIsCategoryDialogOpen(true);
       return;
     }
+    setCategoryPickerPosition(target ? getCategorySelectorPosition(target) : getCenteredCategoryPickerPosition());
     setCategoryPickerTrack(track);
   }
 
   async function addTrackToCategory(category: FavoriteCategory) {
     if (!authSession?.userId || !categoryPickerTrack) {
-      setCategoryPickerTrack(null);
+      closeCategoryPicker();
       return;
     }
 
     const track = categoryPickerTrack;
-    setCategoryPickerTrack(null);
+    closeCategoryPicker();
     try {
       await addFavoriteTrackToCategory(category.id, {
         user_id: authSession.userId,
@@ -1318,8 +1523,12 @@ function App() {
         return next;
       });
       upsertTrackCategoryMembership(track.id, category);
-      if (activeTab === "分类" && activeCategoryId === category.id) {
-        void refreshFavoriteTracks({ showList: true, categoryId: category.id });
+      appendTrackToCategoryPlaybackQueue(track, category.id);
+      if (
+        (activeTab === "分类" && activeCategoryId === category.id) ||
+        (playbackQueueScope.kind === "category" && playbackQueueScope.categoryId === category.id)
+      ) {
+        void refreshFavoriteTracks({ showList: activeTab === "分类" && activeCategoryId === category.id, categoryId: category.id });
       }
       showToast(`已加入${category.name}`);
       void refreshTrackMemberships();
@@ -1353,6 +1562,7 @@ function App() {
   }
 
   function playTrack(track: Track) {
+    clearPendingTrackPlay();
     setDetachedCurrentTrack(null);
     setPlaybackQueue(tracks.length ? tracks : [track]);
     setPlaybackQueueScope(getActivePlaybackQueueScope());
@@ -1361,12 +1571,14 @@ function App() {
   }
 
   function playTrackFromQueue(track: Track) {
+    clearPendingTrackPlay();
     setDetachedCurrentTrack(null);
     setCurrentTrackId(track.id);
     setIsPlaying(Boolean(track.stream_url));
   }
 
   function togglePlay() {
+    clearPendingTrackPlay();
     const trackToPlay = currentTrack ?? playbackQueue[0] ?? tracks[0] ?? null;
     if (!trackToPlay) {
       setIsPlaying(false);
@@ -1464,16 +1676,14 @@ function App() {
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
   const canSortMusicColumns = activeTab === "音乐列表";
   const canShowTrackStatus = activeTab === "音乐列表" || activeTab === "收藏" || activeTab === "分类";
-  const statusSlotCount = favoriteCategories.length + 1;
-  const songTableStyle = canShowTrackStatus
-    ? ({ "--status-slot-count": statusSlotCount } as CSSProperties & Record<"--status-slot-count", number>)
-    : undefined;
+  const statusCategory = activeTab === "分类" ? activeCategory : null;
+  const selectedCategoryId = activeTab === "分类" && activeCategoryId != null ? activeCategoryId : lastSelectedCategoryId;
   const currentTrackLabel = currentTrack ? `${currentTrack.artist} - ${currentTrack.title}` : "";
 
   return (
     <main className="player-screen" aria-label="MediaPlayer">
       <div className="top-line" />
-      {currentTrackLabel ? (
+      {activePage !== "music" && currentTrackLabel ? (
         <div className="now-playing-ticker" aria-label={`当前正在播放：${currentTrackLabel}`} aria-live="polite">
           <div className="now-playing-ticker-track">
             <span>{currentTrackLabel}</span>
@@ -1484,6 +1694,14 @@ function App() {
       <section className="app-page-area" aria-label="当前页面">
         {activePage === "music" ? (
           <section className="music-page" aria-label="音乐">
+            {currentTrackLabel ? (
+              <div className="now-playing-ticker" aria-label={`当前正在播放：${currentTrackLabel}`} aria-live="polite">
+                <div className="now-playing-ticker-track">
+                  <span>{currentTrackLabel}</span>
+                  <span aria-hidden="true">{currentTrackLabel}</span>
+                </div>
+              </div>
+            ) : null}
             <nav className="mode-tabs" aria-label="播放器视图">
               <button className={activeTab === "音乐列表" ? "active" : ""} type="button" aria-current={activeTab === "音乐列表" ? "page" : undefined} onClick={() => handleTabClick("音乐列表")}>
                 音乐列表
@@ -1491,25 +1709,16 @@ function App() {
               <button className={activeTab === "收藏" ? "active" : ""} type="button" aria-current={activeTab === "收藏" ? "page" : undefined} onClick={() => handleTabClick("收藏")}>
                 收藏
               </button>
-              {favoriteCategories.map((category) => (
-                <button
-                  key={category.id}
-                  className={`user-category-tab ${activeTab === "分类" && activeCategoryId === category.id ? "active" : ""}`}
-                  type="button"
-                  aria-current={activeTab === "分类" && activeCategoryId === category.id ? "page" : undefined}
-                  title={`${category.name}，长按删除`}
-                  onClick={() => handleCategoryClick(category)}
-                  onContextMenu={(event) => handleCategoryContextMenu(event, category)}
-                  onPointerDown={(event) => handleCategoryPointerDown(event, category)}
-                  onPointerMove={handleCategoryPointerMove}
-                  onPointerUp={cancelCategoryLongPress}
-                  onPointerCancel={cancelCategoryLongPress}
-                  onPointerLeave={cancelCategoryLongPress}
-                  onDragStart={(event) => event.preventDefault()}
-                >
-                  {category.name}
-                </button>
-              ))}
+              <button
+                className={activeTab === "分类" ? "active category-select-tab" : "category-select-tab"}
+                type="button"
+                aria-current={activeTab === "分类" ? "page" : undefined}
+                aria-label={activeCategory ? `分类：${activeCategory.name}` : "分类"}
+                title={activeCategory ? `当前分类：${activeCategory.name}` : "选择分类"}
+                onClick={handleCategorySelectorClick}
+              >
+                分类
+              </button>
               <button className="custom-category-trigger" type="button" onClick={handleCustomCategoryClick}>
                 自定义
               </button>
@@ -1518,7 +1727,7 @@ function App() {
               </button>
             </nav>
 
-            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} style={songTableStyle} aria-label="本地音乐列表" aria-busy={isLoading}>
+            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} aria-label="本地音乐列表" aria-busy={isLoading}>
               <div className="table-head">
                 <span />
                 {canSortMusicColumns ? (
@@ -1550,9 +1759,9 @@ function App() {
               <div className="table-body" ref={musicListRef}>
                 {tracks.map((track, index) => {
                   const categoryMemberships = trackCategoryMembershipMap.get(track.id) ?? [];
-                  const categoryIDSet = trackCategoryIdSetMap.get(track.id);
                   const isTrackFavorite = favoriteTrackIds.has(track.id);
-                  const trackStatusLabel = getTrackStatusLabel(isTrackFavorite, categoryMemberships, favoriteCategories);
+                  const categoryCount = getTrackCategoryCount(categoryMemberships);
+                  const trackStatusLabel = getTrackStatusLabel(isTrackFavorite, categoryMemberships, favoriteCategories, statusCategory);
                   return (
                     <button
                       key={track.id}
@@ -1573,18 +1782,22 @@ function App() {
                       <span className="row-title">{track.title}</span>
                       <span className="row-artist">{track.artist}</span>
                       {canShowTrackStatus ? (
-                        <span className="row-status" aria-label={trackStatusLabel} title={trackStatusLabel}>
+                        <span
+                          className="row-status"
+                          aria-label={trackStatusLabel}
+                          title={trackStatusLabel}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openCategoryPicker(track, event.currentTarget);
+                          }}
+                          onPointerDown={(event) => event.stopPropagation()}
+                        >
                           <span className={`track-status-heart ${isTrackFavorite ? "active" : ""}`} title={isTrackFavorite ? "已收藏" : "未收藏"} aria-hidden="true">
                             <HeartStatusIcon filled={isTrackFavorite} />
                           </span>
-                          {favoriteCategories.map((category) => {
-                            const isInCategory = categoryIDSet?.has(category.id) ?? false;
-                            return (
-                              <span key={category.id} className={`track-status-heart ${isInCategory ? "active" : ""}`} title={`${category.name}：${isInCategory ? "已加入" : "未加入"}`} aria-hidden="true">
-                                <HeartStatusIcon filled={isInCategory} />
-                              </span>
-                            );
-                          })}
+                          <span className={`track-category-count ${categoryCount > 0 ? "active" : ""}`} aria-hidden="true">
+                            {categoryCount}
+                          </span>
                         </span>
                       ) : null}
                     </button>
@@ -1607,17 +1820,18 @@ function App() {
                   style={{ left: trackContextMenu.x, top: trackContextMenu.y }}
                   onPointerDown={(event) => event.stopPropagation()}
                 >
-                  <button type="button" role="menuitem" onClick={() => void toggleFavorite(trackContextMenu.track)}>
-                    {isActiveMenuTrackFavorite ? "取消收藏" : "收藏"}
-                  </button>
-                  <button type="button" role="menuitem" onClick={() => openCategoryPicker(trackContextMenu.track)}>
-                    加入分类
-                  </button>
                   {isViewingActiveCategory ? (
                     <button type="button" role="menuitem" onClick={() => void removeTrackFromCurrentCategory(trackContextMenu.track)}>
                       移出分类
                     </button>
-                  ) : null}
+                  ) : (
+                    <button type="button" role="menuitem" onClick={() => void toggleFavorite(trackContextMenu.track)}>
+                      {isActiveMenuTrackFavorite ? "取消收藏" : "收藏"}
+                    </button>
+                  )}
+                  <button type="button" role="menuitem" onClick={(event) => openCategoryPicker(trackContextMenu.track, event.currentTarget)}>
+                    加入分类
+                  </button>
                 </div>
               </div>
             ) : null}
@@ -1634,6 +1848,44 @@ function App() {
                   <button type="button" role="menuitem" onClick={() => void handleDeleteCategory(categoryContextMenu.category)}>
                     删除分类
                   </button>
+                </div>
+              </div>
+            ) : null}
+
+            {isCategorySelectorOpen ? (
+              <div className="search-dialog-backdrop category-selector-backdrop" role="presentation" onClick={closeCategorySelector}>
+                <div
+                  className="search-dialog category-picker-dialog category-selector-dialog"
+                  role="menu"
+                  aria-label="自定义分类"
+                  style={categorySelectorPosition ? { left: categorySelectorPosition.x, top: categorySelectorPosition.y, width: categorySelectorPosition.width } : undefined}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="category-picker-list">
+                    {favoriteCategories.map((category) => {
+                      const isSelected = selectedCategoryId === category.id;
+                      return (
+                        <button
+                          key={category.id}
+                          className={`category-picker-option category-selector-option ${isSelected ? "active" : ""}`}
+                          type="button"
+                          role="menuitem"
+                          aria-current={isSelected ? "page" : undefined}
+                          title={`${category.name}，长按删除`}
+                          onClick={() => selectCategory(category)}
+                          onContextMenu={(event) => handleCategoryContextMenu(event, category)}
+                          onPointerDown={(event) => handleCategoryPointerDown(event, category)}
+                          onPointerMove={handleCategoryPointerMove}
+                          onPointerUp={cancelCategoryLongPress}
+                          onPointerCancel={cancelCategoryLongPress}
+                          onPointerLeave={cancelCategoryLongPress}
+                          onDragStart={(event) => event.preventDefault()}
+                        >
+                          <span className="category-picker-option-name">{category.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -1704,26 +1956,33 @@ function App() {
             ) : null}
 
             {categoryPickerTrack ? (
-              <div className="search-dialog-backdrop" role="presentation" onClick={() => setCategoryPickerTrack(null)}>
+              <div className="search-dialog-backdrop category-selector-backdrop" role="presentation" onClick={closeCategoryPicker}>
                 <div
-                  className="search-dialog category-picker-dialog"
-                  role="dialog"
-                  aria-modal="true"
+                  className="search-dialog category-picker-dialog category-selector-dialog"
+                  role="menu"
                   aria-label="加入分类"
+                  style={categoryPickerPosition ? { left: categoryPickerPosition.x, top: categoryPickerPosition.y, width: categoryPickerPosition.width } : undefined}
                   onClick={(event) => event.stopPropagation()}
                 >
-                  <h2>加入分类</h2>
                   <div className="category-picker-list">
-                    {favoriteCategories.map((category) => (
-                      <button key={category.id} className="category-picker-option" type="button" onClick={() => void addTrackToCategory(category)}>
-                        {category.name}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="search-actions">
-                    <button type="button" onClick={() => setCategoryPickerTrack(null)}>
-                      取消
-                    </button>
+                    {favoriteCategories.map((category) => {
+                      const pickerTrackMemberships = trackCategoryMembershipMap.get(categoryPickerTrack.id) ?? [];
+                      const isInCategory = pickerTrackMemberships.some((membership) => membership.category_id === category.id);
+                      return (
+                        <button
+                          key={category.id}
+                          className={`category-picker-option category-selector-option ${isInCategory ? "active" : ""}`}
+                          type="button"
+                          role="menuitem"
+                          aria-current={isInCategory ? "true" : undefined}
+                          title={isInCategory ? `${category.name}，已加入` : `加入${category.name}`}
+                          disabled={isInCategory}
+                          onClick={() => void addTrackToCategory(category)}
+                        >
+                          <span className="category-picker-option-name">{category.name}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1939,11 +2198,24 @@ function buildTrackCategoryMembershipMap(memberships: TrackCategoryMembership[])
   return membershipMap;
 }
 
-function getTrackStatusLabel(isFavorite: boolean, memberships: TrackCategoryMembership[], categories: FavoriteCategory[]) {
+function getTrackCategoryCount(memberships: TrackCategoryMembership[]) {
+  return new Set(memberships.map((membership) => membership.category_id)).size;
+}
+
+function getTrackStatusLabel(isFavorite: boolean, memberships: TrackCategoryMembership[], categories: FavoriteCategory[], activeCategory: FavoriteCategory | null) {
   const categoryIDs = new Set(memberships.map((membership) => membership.category_id));
   const parts = [`收藏：${isFavorite ? "已收藏" : "未收藏"}`];
-  for (const category of categories) {
-    parts.push(`${category.name}：${categoryIDs.has(category.id) ? "已加入" : "未加入"}`);
+  if (activeCategory) {
+    parts.push(`${activeCategory.name}：已加入`);
+    return parts.join("，");
+  }
+
+  const joinedCategories = categories
+    .filter((category) => categoryIDs.has(category.id))
+    .map((category) => category.name);
+  parts.push(`分类：${joinedCategories.length ? joinedCategories.join("、") : "无"}`);
+  if (joinedCategories.length !== categoryIDs.size) {
+    parts.push(`共 ${categoryIDs.size} 个分类`);
   }
   return parts.join("，");
 }
@@ -2801,65 +3073,8 @@ function EyeOffIcon() {
   );
 }
 
-function MusicIcon() {
-  return (
-    <IconBase>
-      <path className="icon-accent" d="M5.5 20.4a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8Zm10-2.1a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8Z" />
-      <path d="M8.4 17.5V5.9l9.9-2.2v11.6" />
-      <path className="icon-detail" d="m8.4 8.5 9.9-2.2" />
-      <circle cx="5.5" cy="17.5" r="2.9" />
-      <circle cx="15.5" cy="15.4" r="2.9" />
-    </IconBase>
-  );
-}
-
-function DiscoverIcon() {
-  return (
-    <IconBase>
-      <circle className="icon-accent" cx="12" cy="12" r="4.2" />
-      <circle cx="12" cy="12" r="8.7" />
-      <path d="m15.9 8.1-2.2 5.6-5.6 2.2 2.2-5.6z" />
-      <path className="icon-detail" d="M12 3.3v1.8M12 18.9v1.8M20.7 12h-1.8M5.1 12H3.3" />
-    </IconBase>
-  );
-}
-
-function LyricsIcon() {
-  return (
-    <IconBase>
-      <path className="icon-accent" d="M6.8 4.1h7l3.7 3.7v12.1H6.8z" />
-      <path d="M6.5 4.1h7.4l3.6 3.6v12.2H6.5a2 2 0 0 1-2-2V6.1a2 2 0 0 1 2-2Z" />
-      <path className="icon-detail" d="M13.9 4.1v3.6h3.6" />
-      <path d="M8.1 10.4h5.5M8.1 13.5h3.9M8.1 16.6h3" />
-      <path d="M15.4 16.6v-4.3l3.1-.7v4.3" />
-      <circle cx="14.2" cy="16.8" r="1.2" />
-      <circle cx="17.3" cy="16.1" r="1.2" />
-    </IconBase>
-  );
-}
-
-function ProfileIcon() {
-  return (
-    <IconBase>
-      <path className="icon-accent" d="M12 12.4a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2Zm-7.4 7.2c1-3.7 3.6-5.8 7.4-5.8s6.4 2.1 7.4 5.8Z" />
-      <circle cx="12" cy="8.3" r="4.1" />
-      <path d="M4.6 19.6c1-3.7 3.6-5.8 7.4-5.8s6.4 2.1 7.4 5.8" />
-      <path className="icon-detail" d="M8.7 18.5h6.6" />
-    </IconBase>
-  );
-}
-
 function PageIcon({ page }: { page: AppPage }) {
-  if (page === "lyrics") {
-    return <LyricsIcon />;
-  }
-  if (page === "discover") {
-    return <DiscoverIcon />;
-  }
-  if (page === "profile") {
-    return <ProfileIcon />;
-  }
-  return <MusicIcon />;
+  return <img className="page-icon-image" src={appPageIconSources[page]} alt="" draggable={false} decoding="async" />;
 }
 
 function HeartStatusIcon({ filled }: { filled: boolean }) {

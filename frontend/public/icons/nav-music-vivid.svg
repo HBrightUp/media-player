@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="body" x1="111" x2="386" y1="413" y2="83" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#15E6FF"/>
+      <stop offset=".42" stop-color="#8D5CFF"/>
+      <stop offset="1" stop-color="#FF4FA7"/>
+    </linearGradient>
+    <linearGradient id="flag" x1="268" x2="434" y1="107" y2="222" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE15A"/>
+      <stop offset=".5" stop-color="#FF7A45"/>
+      <stop offset="1" stop-color="#FF3DAE"/>
+    </linearGradient>
+    <radialGradient id="noteGlow" cx="0" cy="0" r="1" gradientTransform="matrix(158 0 0 126 185 348)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DFFF5" stop-opacity=".92"/>
+      <stop offset=".58" stop-color="#65E8FF" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#65E8FF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="28" y="40" width="456" height="436" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0CF4FF" flood-opacity=".25"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="#FF4FA7" flood-opacity=".32"/>
+    </filter>
+  </defs>
+  <g filter="url(#softGlow)">
+    <ellipse cx="185" cy="348" rx="108" ry="86" fill="url(#noteGlow)"/>
+    <ellipse cx="180" cy="354" rx="82" ry="63" fill="url(#body)" transform="rotate(-17 180 354)"/>
+    <ellipse cx="176" cy="348" rx="42" ry="31" fill="#BFFFF7" opacity=".68" transform="rotate(-17 176 348)"/>
+    <path fill="url(#body)" d="M252 332V123c0-22 19-38 40-34l26 5v222c0 34-28 61-62 61h-9c4-13 5-28 5-45Z"/>
+    <path fill="url(#flag)" d="M290 90 405 113c21 4 36 23 36 44v42c0 18-16 32-34 29l-89-17v-74l-28-6V90Z"/>
+    <path fill="#FFFFFF" d="M318 119 404 136c9 2 16 10 16 19v16l-102-20v-32Z" opacity=".42"/>
+  </g>
+  <circle cx="96" cy="142" r="14" fill="#FFE15A"/>
+  <circle cx="420" cy="322" r="10" fill="#52FFB8"/>
+  <path fill="#FFFFFF" d="M88 214c22-3 37-18 40-40 3 22 18 37 40 40-22 3-37 18-40 40-3-22-18-37-40-40Z" opacity=".86"/>
+</svg>
