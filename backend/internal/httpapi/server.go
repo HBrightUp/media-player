@@ -32,32 +32,32 @@ import (
 
 const musicDirectoryKey = "music_directory"
 const (
-	nicknameMaxRunes         = 20
 	favoriteCategoryMaxRunes = 16
 	passwordMinLength        = 6
 	passwordMaxLength        = 64
 	passwordHashRounds       = 100_000
 	passwordHashLength       = 32
 	presenceTTL              = 75 * time.Second
+	manualTrackRefreshWindow = time.Minute
+	audioFileAccessTTL       = 5 * time.Minute
+	audioFileAccessMaxFails  = 5
+	audioFileAccessLockout   = time.Minute
+	audioFileAccessTokenSize = 32
 )
 
 var mainlandPhonePattern = regexp.MustCompile(`^1[3-9]\d{9}$`)
 
 type Server struct {
-	store      *database.Store
-	scanner    *library.Scanner
-	corsOrigin string
-	presence   *presenceTracker
+	store               *database.Store
+	scanner             *library.Scanner
+	corsOrigin          string
+	presence            *presenceTracker
+	trackRefreshLimiter *manualRefreshLimiter
+	audioFileAccess     *audioFileAccessManager
 }
 
 type setLibraryRequest struct {
 	Path string `json:"path"`
-}
-
-type registerRequest struct {
-	Nickname string `json:"nickname"`
-	Phone    string `json:"phone"`
-	Password string `json:"password"`
 }
 
 type loginRequest struct {
@@ -113,12 +113,37 @@ type presenceTracker struct {
 	sessions map[string]presenceSession
 }
 
+type manualRefreshLimiter struct {
+	mu        sync.Mutex
+	lastByKey map[string]time.Time
+}
+
+type audioFileAccessManager struct {
+	mu         sync.Mutex
+	tokens     map[string]audioFileAccessGrant
+	failures   map[int64]audioFileAccessFailure
+	tokenBytes int
+	ttl        time.Duration
+}
+
+type audioFileAccessGrant struct {
+	UserID    int64
+	ExpiresAt time.Time
+}
+
+type audioFileAccessFailure struct {
+	Count       int
+	LockedUntil time.Time
+}
+
 func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Server {
 	return &Server{
-		store:      store,
-		scanner:    scanner,
-		corsOrigin: corsOrigin,
-		presence:   newPresenceTracker(),
+		store:               store,
+		scanner:             scanner,
+		corsOrigin:          corsOrigin,
+		presence:            newPresenceTracker(),
+		trackRefreshLimiter: newManualRefreshLimiter(),
+		audioFileAccess:     newAudioFileAccessManager(audioFileAccessTokenSize, audioFileAccessTTL),
 	}
 }
 
@@ -136,7 +161,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/favorite-categories", s.handleFavoriteCategories)
 	mux.HandleFunc("/api/favorite-categories/", s.handleFavoriteCategoryRoute)
 	mux.HandleFunc("/api/track-memberships", s.handleTrackMemberships)
+	mux.HandleFunc("/api/audio-files/authorize", s.handleAudioFileAuthorize)
+	mux.HandleFunc("/api/audio-files/import", s.handleAudioFileImport)
+	mux.HandleFunc("/api/audio-files", s.handleAudioFiles)
+	mux.HandleFunc("/api/audio-files/", s.handleAudioFileRoute)
 	mux.HandleFunc("/api/tracks", s.handleTracks)
+	mux.HandleFunc("/api/tracks/refresh", s.handleTrackRefresh)
 	mux.HandleFunc("/api/tracks/", s.handleTrackRoute)
 	return s.withCORS(mux)
 }
@@ -158,40 +188,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var request registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "请求格式不正确")
-		return
-	}
-	nickname, phone, password, err := validateRegisterRequest(request)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	hash, salt, err := hashPassword(password)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "创建用户失败")
-		return
-	}
-
-	user, err := s.store.CreateUser(r.Context(), models.User{
-		Phone:        phone,
-		CountryCode:  "+86",
-		Nickname:     nickname,
-		PasswordHash: hash,
-		PasswordSalt: salt,
-	})
-	if errors.Is(err, database.ErrUserAlreadyExists) {
-		writeError(w, http.StatusConflict, "手机号已注册，请直接登录")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "创建用户失败")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"user": publicUser(user),
-	})
+	writeError(w, http.StatusForbidden, "当前系统已关闭公开注册，请使用已有账号登录")
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -378,6 +375,43 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	tracks, err := s.store.ListTracks(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取歌曲列表失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tracks": tracks,
+	})
+}
+
+func (s *Server) handleTrackRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+
+	userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.store.GetUserByID(r.Context(), userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusUnauthorized, "请先登录后刷新歌单")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "读取用户失败")
+		return
+	}
+
+	if remaining, ok := s.trackRefreshLimiter.Allow(fmt.Sprintf("user:%d", userID), time.Now(), manualTrackRefreshWindow); !ok {
+		retryAfterSeconds := int((remaining + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("歌单刷新太频繁，请%d秒后再试", retryAfterSeconds))
+		return
+	}
+
 	tracks, err := s.store.ListTracks(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取歌曲列表失败")
@@ -695,25 +729,6 @@ func validateDirectory(path string) (string, error) {
 	return absolute, nil
 }
 
-func validateRegisterRequest(request registerRequest) (string, string, string, error) {
-	nickname := strings.TrimSpace(request.Nickname)
-	if nickname == "" {
-		return "", "", "", errors.New("昵称不能为空")
-	}
-	if utf8.RuneCountInString(nickname) > nicknameMaxRunes {
-		return "", "", "", fmt.Errorf("昵称不能超过%d个字符", nicknameMaxRunes)
-	}
-	phone, err := validatePhone(request.Phone)
-	if err != nil {
-		return "", "", "", err
-	}
-	password, err := validatePassword(request.Password)
-	if err != nil {
-		return "", "", "", err
-	}
-	return nickname, phone, password, nil
-}
-
 func validateLoginRequest(request loginRequest) (string, string, error) {
 	phone, err := validatePhone(request.Phone)
 	if err != nil {
@@ -839,6 +854,126 @@ func passwordHashBlock(password, salt []byte, blockIndex int) []byte {
 func newPresenceTracker() *presenceTracker {
 	return &presenceTracker{
 		sessions: make(map[string]presenceSession),
+	}
+}
+
+func newManualRefreshLimiter() *manualRefreshLimiter {
+	return &manualRefreshLimiter{
+		lastByKey: make(map[string]time.Time),
+	}
+}
+
+func (l *manualRefreshLimiter) Allow(key string, now time.Time, window time.Duration) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if last, ok := l.lastByKey[key]; ok {
+		nextAllowedAt := last.Add(window)
+		if now.Before(nextAllowedAt) {
+			return nextAllowedAt.Sub(now), false
+		}
+	}
+
+	l.lastByKey[key] = now
+	return 0, true
+}
+
+func newAudioFileAccessManager(tokenBytes int, ttl time.Duration) *audioFileAccessManager {
+	return &audioFileAccessManager{
+		tokens:     make(map[string]audioFileAccessGrant),
+		failures:   make(map[int64]audioFileAccessFailure),
+		tokenBytes: tokenBytes,
+		ttl:        ttl,
+	}
+}
+
+func (m *audioFileAccessManager) CheckLockout(userID int64, now time.Time) (time.Duration, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.failures[userID]
+	if !ok || state.LockedUntil.IsZero() {
+		return 0, false
+	}
+	if now.Before(state.LockedUntil) {
+		return state.LockedUntil.Sub(now), true
+	}
+	delete(m.failures, userID)
+	return 0, false
+}
+
+func (m *audioFileAccessManager) RecordFailure(userID int64, now time.Time, maxFailures int, lockout time.Duration) (time.Duration, int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state := m.failures[userID]
+	if !state.LockedUntil.IsZero() && now.Before(state.LockedUntil) {
+		return state.LockedUntil.Sub(now), 0, true
+	}
+	if !state.LockedUntil.IsZero() && !now.Before(state.LockedUntil) {
+		state = audioFileAccessFailure{}
+	}
+
+	state.Count++
+	if state.Count >= maxFailures {
+		state.Count = 0
+		state.LockedUntil = now.Add(lockout)
+		m.failures[userID] = state
+		return lockout, 0, true
+	}
+
+	m.failures[userID] = state
+	return 0, maxFailures - state.Count, false
+}
+
+func (m *audioFileAccessManager) ClearFailures(userID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.failures, userID)
+}
+
+func (m *audioFileAccessManager) Grant(userID int64, now time.Time) (string, time.Time, error) {
+	tokenBytes := make([]byte, m.tokenBytes)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", time.Time{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	expiresAt := now.Add(m.ttl)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanupExpiredLocked(now)
+	m.tokens[token] = audioFileAccessGrant{
+		UserID:    userID,
+		ExpiresAt: expiresAt,
+	}
+	return token, expiresAt, nil
+}
+
+func (m *audioFileAccessManager) Validate(userID int64, token string, now time.Time) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	grant, ok := m.tokens[token]
+	if !ok {
+		return false
+	}
+	if grant.UserID != userID || !now.Before(grant.ExpiresAt) {
+		delete(m.tokens, token)
+		return false
+	}
+	return true
+}
+
+func (m *audioFileAccessManager) cleanupExpiredLocked(now time.Time) {
+	for token, grant := range m.tokens {
+		if !now.Before(grant.ExpiresAt) {
+			delete(m.tokens, token)
+		}
 	}
 }
 
@@ -997,8 +1132,9 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			origin = "*"
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Audio-Access-Token")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

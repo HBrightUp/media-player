@@ -1,4 +1,8 @@
 import type {
+  AudioFileAccessResponse,
+  AudioFileImportReport,
+  AudioFileRenameRequest,
+  AudioFilesResponse,
   AuthResponse,
   FavoriteCategory,
   FavoriteCategoryRequest,
@@ -9,7 +13,6 @@ import type {
   LoginRequest,
   PresenceRequest,
   PresenceResponse,
-  RegisterRequest,
   ScanResult,
   Track,
   TrackMembershipsResponse,
@@ -20,6 +23,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const requestTimeoutMs = 30_000;
 const authRequestTimeoutMs = 12_000;
 const scanRequestTimeoutMs = 120_000;
+const audioFileRequestTimeoutMs = 30 * 60_000;
 
 type TracksResponse = {
   tracks: Track[];
@@ -31,6 +35,24 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+export class ApiError extends Error {
+  status: number;
+  retryAfterSeconds: number | null;
+
+  constructor(message: string, status: number, retryAfterSeconds: number | null = null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+function audioAccessHeaders(accessToken: string) {
+  return {
+    "X-Audio-Access-Token": accessToken
+  };
+}
+
 async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     throw new Error("网络不可用，请检查连接后重试");
@@ -41,13 +63,15 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   let response: Response;
 
   try {
+    const headers = new Headers(init?.headers);
+    const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
+    if (!isFormData && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
       signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {})
-      }
+      headers
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
@@ -73,10 +97,25 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
         message = response.statusText || message;
       }
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status, parseRetryAfterSeconds(response.headers.get("Retry-After")));
   }
 
   return response.json() as Promise<T>;
+}
+
+function parseRetryAfterSeconds(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.ceil(seconds);
+  }
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) {
+    return null;
+  }
+  return Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
 export function streamURL(track: Track): string {
@@ -85,6 +124,12 @@ export function streamURL(track: Track): string {
 
 export function getTracks(): Promise<TracksResponse> {
   return request<TracksResponse>("/api/tracks");
+}
+
+export function refreshTracks(userID: number): Promise<TracksResponse> {
+  return request<TracksResponse>(`/api/tracks/refresh?user_id=${encodeURIComponent(String(userID))}`, {
+    method: "POST"
+  });
 }
 
 export function getTrackLyrics(trackID: number): Promise<TrackLyrics> {
@@ -168,12 +213,68 @@ export function scanLibrary(): Promise<ScanResult> {
   });
 }
 
-export function registerUser(payload: RegisterRequest): Promise<AuthResponse> {
-  return request<AuthResponse>("/api/auth/register", {
+export function authorizeAudioFileAccess(userID: number, password: string): Promise<AudioFileAccessResponse> {
+  return request<AudioFileAccessResponse>("/api/audio-files/authorize", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify({
+      user_id: userID,
+      password
+    })
   }, {
     timeoutMs: authRequestTimeoutMs
+  });
+}
+
+export function getAudioFiles(userID: number, accessToken: string): Promise<AudioFilesResponse> {
+  return request<AudioFilesResponse>(`/api/audio-files?user_id=${encodeURIComponent(String(userID))}`, {
+    headers: audioAccessHeaders(accessToken)
+  });
+}
+
+export function importAudioFolder(userID: number, files: File[], accessToken: string): Promise<AudioFileImportReport> {
+  const formData = new FormData();
+  const manifest = files.map((file, index) => {
+    const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+    return {
+      field_name: `file_${index}`,
+      relative_path: relativePath,
+      size: file.size
+    };
+  });
+  formData.append("manifest", JSON.stringify({ files: manifest }));
+  files.forEach((file, index) => {
+    formData.append(`file_${index}`, file, file.name);
+  });
+
+  return request<AudioFileImportReport>(
+    `/api/audio-files/import?user_id=${encodeURIComponent(String(userID))}`,
+    {
+      method: "POST",
+      body: formData,
+      headers: audioAccessHeaders(accessToken)
+    },
+    {
+      timeoutMs: audioFileRequestTimeoutMs
+    }
+  );
+}
+
+export function renameAudioFile(trackID: number, payload: AudioFileRenameRequest, accessToken: string): Promise<{ ok: boolean; scan: ScanResult }> {
+  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(payload.user_id))}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    headers: audioAccessHeaders(accessToken)
+  }, {
+    timeoutMs: scanRequestTimeoutMs
+  });
+}
+
+export function deleteAudioFile(userID: number, trackID: number, accessToken: string): Promise<{ ok: boolean; scan: ScanResult }> {
+  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(userID))}`, {
+    method: "DELETE",
+    headers: audioAccessHeaders(accessToken)
+  }, {
+    timeoutMs: scanRequestTimeoutMs
   });
 }
 

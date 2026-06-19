@@ -56,12 +56,6 @@ export type AuthResponse = {
   user: AuthUser;
 };
 
-export type RegisterRequest = {
-  nickname: string;
-  phone: string;
-  password: string;
-};
-
 export type LoginRequest = {
   phone: string;
   password: string;
@@ -116,4 +110,47 @@ export type OnlineUser = {
 export type PresenceResponse = {
   online_count: number;
   online_users?: OnlineUser[];
+};
+
+export type AudioFileImportLimits = {
+  max_audio_file_bytes: number;
+  max_total_bytes: number;
+  max_file_count: number;
+  max_lyric_file_bytes: number;
+};
+
+export type AudioFilesResponse = {
+  files: Track[];
+  limits: AudioFileImportLimits;
+};
+
+export type AudioFileAccessResponse = {
+  token: string;
+  expires_at: string;
+};
+
+export type AudioFileImportItemResult = {
+  relative_path: string;
+  target_filename?: string;
+  status: "imported" | "skipped" | "failed";
+  reason?: string;
+  size_bytes?: number;
+};
+
+export type AudioFileImportReport = {
+  imported: number;
+  skipped: number;
+  failed: number;
+  converted: number;
+  lyrics_imported?: number;
+  lyrics_skipped?: number;
+  lyrics_failed?: number;
+  items: AudioFileImportItemResult[];
+  scan?: ScanResult;
+};
+
+export type AudioFileRenameRequest = {
+  user_id: number;
+  artist: string;
+  title: string;
 };

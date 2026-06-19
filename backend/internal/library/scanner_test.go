@@ -83,6 +83,52 @@ func TestBuildTrackDoesNotUseFilenameAsAlbum(t *testing.T) {
 	}
 }
 
+func TestTagsFromFilenameCleansTrailingHashSuffix(t *testing.T) {
+	tags := tagsFromFilename("Artist Name-Song Name-a8f31c9d.wav")
+	if tags.Title != "Song Name" {
+		t.Fatalf("title = %q, want %q", tags.Title, "Song Name")
+	}
+	if tags.Artist != "Artist Name" {
+		t.Fatalf("artist = %q, want %q", tags.Artist, "Artist Name")
+	}
+
+	tags = tagsFromFilename("Another Artist-Another Song_[A1B2C3D4].flac")
+	if tags.Title != "Another Song" {
+		t.Fatalf("title = %q, want %q", tags.Title, "Another Song")
+	}
+	if tags.Artist != "Another Artist" {
+		t.Fatalf("artist = %q, want %q", tags.Artist, "Another Artist")
+	}
+
+	tags = tagsFromFilename("周华健 - 雨人-b21de2f21128.flac")
+	if tags.Title != "雨人" {
+		t.Fatalf("title = %q, want %q", tags.Title, "雨人")
+	}
+	if tags.Artist != "周华健" {
+		t.Fatalf("artist = %q, want %q", tags.Artist, "周华健")
+	}
+}
+
+func TestStandardAudioNamePartsCleansMetadataHashSuffix(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "fallback.wav")
+
+	body := appendID3v23Frame(nil, "TIT2", utf8TextPayload("Song Name-a8f31c9d"))
+	body = appendID3v23Frame(body, "TPE1", utf8TextPayload("Artist Name_ABCDEF12"))
+	content := append(id3Header(3, body), []byte{0xFF, 0xFB, 0x90, 0x64}...)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	artist, title := StandardAudioNameParts(path, "fallback.wav")
+	if title != "Song Name" {
+		t.Fatalf("title = %q, want %q", title, "Song Name")
+	}
+	if artist != "Artist Name" {
+		t.Fatalf("artist = %q, want %q", artist, "Artist Name")
+	}
+}
+
 func TestBuildTrackReadsLyricsFromConfiguredDirectory(t *testing.T) {
 	root := t.TempDir()
 	lyricsRoot := t.TempDir()

@@ -145,8 +145,8 @@ func buildTrack(root, path, ext, lyricsRoot string) (models.Track, *models.Track
 	metadata := readTags(path, ext)
 	nameMetadata := tagsFromFilename(filename)
 
-	title := firstText(metadata.Title, nameMetadata.Title, strings.TrimSuffix(filename, filepath.Ext(filename)))
-	artist := firstText(metadata.Artist, nameMetadata.Artist, "未知歌手")
+	title := firstAudioNameText(metadata.Title, nameMetadata.Title, strings.TrimSuffix(filename, filepath.Ext(filename)))
+	artist := firstAudioNameText(metadata.Artist, nameMetadata.Artist, "未知歌手")
 	album := firstText(metadata.Album, "未知专辑")
 	lyrics := firstTrackLyrics(
 		readLyricsDirectory(root, path, lyricsRoot),
@@ -203,8 +203,8 @@ func tagsFromFilename(filename string) tags {
 	for _, separator := range []string{" - ", "-", "—", "–", "_"} {
 		artist, title, ok := strings.Cut(base, separator)
 		if ok {
-			artist = strings.TrimSpace(artist)
-			title = strings.TrimSpace(title)
+			artist = cleanAudioNamePart(artist)
+			title = cleanAudioNamePart(title)
 			if artist != "" && title != "" {
 				return tags{
 					Title:  title,
@@ -213,7 +213,16 @@ func tagsFromFilename(filename string) tags {
 			}
 		}
 	}
-	return tags{Title: base}
+	return tags{Title: cleanAudioNamePart(base)}
+}
+
+func firstAudioNameText(values ...string) string {
+	for _, value := range values {
+		if text := cleanAudioNamePart(value); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func firstText(values ...string) string {
@@ -932,6 +941,139 @@ func trimText(value string) string {
 	value = strings.Trim(value, "\x00")
 	value = strings.ReplaceAll(value, "\x00", " ")
 	return strings.TrimSpace(value)
+}
+
+func cleanAudioNamePart(value string) string {
+	text := trimText(value)
+	text = strings.NewReplacer("\u200b", "", "\u200c", "", "\u200d", "", "\ufeff", "").Replace(text)
+	for index := 0; index < 4; index++ {
+		previous := text
+		text = stripTrailingHashToken(text)
+		text = trimAudioNameTailSeparators(text)
+		if text == previous {
+			break
+		}
+	}
+	return text
+}
+
+func stripTrailingHashToken(value string) string {
+	text := trimText(value)
+	if stripped, ok := stripTrailingBracketedHash(text); ok {
+		return stripped
+	}
+	if stripped, ok := stripTrailingSeparatedHash(text); ok {
+		return stripped
+	}
+	return text
+}
+
+func stripTrailingBracketedHash(value string) (string, bool) {
+	runes := []rune(trimText(value))
+	end := trimRightSpaceRunes(runes)
+	if end == 0 {
+		return "", false
+	}
+	opening, ok := matchingOpeningBracket(runes[end-1])
+	if !ok {
+		return "", false
+	}
+	start := end - 2
+	for start >= 0 && runes[start] != opening {
+		start--
+	}
+	if start < 0 {
+		return "", false
+	}
+	token := string(runes[start+1 : end-1])
+	if !isLikelyHashToken(token) {
+		return "", false
+	}
+	prefix := trimAudioNameTailSeparators(string(runes[:start]))
+	if prefix == "" {
+		return "", false
+	}
+	return prefix, true
+}
+
+func stripTrailingSeparatedHash(value string) (string, bool) {
+	runes := []rune(trimText(value))
+	end := trimRightSpaceRunes(runes)
+	start := end
+	for start > 0 && isASCIIHexRune(runes[start-1]) {
+		start--
+	}
+	if start == end || !isLikelyHashToken(string(runes[start:end])) {
+		return "", false
+	}
+	separatorStart := start
+	for separatorStart > 0 && isAudioNameTailSeparator(runes[separatorStart-1]) {
+		separatorStart--
+	}
+	if separatorStart == start || separatorStart == 0 {
+		return "", false
+	}
+	return string(runes[:separatorStart]), true
+}
+
+func trimAudioNameTailSeparators(value string) string {
+	runes := []rune(trimText(value))
+	end := len(runes)
+	for end > 0 && isAudioNameTailSeparator(runes[end-1]) {
+		end--
+	}
+	return trimText(string(runes[:end]))
+}
+
+func trimRightSpaceRunes(runes []rune) int {
+	end := len(runes)
+	for end > 0 && strings.TrimSpace(string(runes[end-1])) == "" {
+		end--
+	}
+	return end
+}
+
+func matchingOpeningBracket(closing rune) (rune, bool) {
+	switch closing {
+	case ']':
+		return '[', true
+	case ')':
+		return '(', true
+	case '}':
+		return '{', true
+	case '】':
+		return '【', true
+	case '）':
+		return '（', true
+	default:
+		return 0, false
+	}
+}
+
+func isAudioNameTailSeparator(r rune) bool {
+	return r == '-' || r == '_' || r == '.' || strings.TrimSpace(string(r)) == ""
+}
+
+func isLikelyHashToken(value string) bool {
+	token := trimText(value)
+	runes := []rune(token)
+	if len(runes) < 8 || len(runes) > 64 {
+		return false
+	}
+	hasHexAlpha := false
+	for _, r := range runes {
+		if !isASCIIHexRune(r) {
+			return false
+		}
+		if (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			hasHexAlpha = true
+		}
+	}
+	return hasHexAlpha || len(runes) >= 12
+}
+
+func isASCIIHexRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 func ParseTrackID(path string) (int64, bool) {
