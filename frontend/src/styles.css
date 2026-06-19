@@ -1132,7 +1132,7 @@ form.search-dialog .search-actions button {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   justify-items: stretch;
   align-content: stretch;
   gap: 0;
@@ -1248,7 +1248,7 @@ form.search-dialog .search-actions button {
 }
 
 .profile-logout-area {
-  grid-row: 5;
+  grid-row: 6;
   width: 100%;
   justify-self: stretch;
   align-self: end;
@@ -1266,6 +1266,27 @@ form.search-dialog .search-actions button {
   font-weight: 780;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.profile-row-value {
+  justify-self: start;
+  min-width: 0;
+  color: rgba(239, 251, 255, 0.9);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.online-count-row {
+  grid-template-columns: var(--profile-label-width) minmax(0, 1fr);
+  align-items: start;
+}
+
+.online-count-value {
+  padding-top: 1px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .sleep-timer-panel {
@@ -2076,17 +2097,17 @@ form.search-dialog.audio-file-dialog .search-actions button,
   grid-area: bar;
   min-width: 0;
   display: grid;
-  grid-template-columns: 210px minmax(360px, 1fr);
+  grid-template-columns: 258px minmax(320px, 1fr);
   align-items: center;
   column-gap: 16px;
-  padding: 0 100px 28px 164px;
+  padding: 0 84px 28px 140px;
   color: var(--control);
 }
 
 .transport {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
 }
 
 .transport button {
@@ -2152,7 +2173,8 @@ form.search-dialog.audio-file-dialog .search-actions button,
   color: rgba(255, 255, 255, 0.8);
 }
 
-.playback-mode-picker {
+.playback-mode-picker,
+.equalizer-picker {
   position: relative;
   display: grid;
   place-items: center;
@@ -2164,6 +2186,24 @@ form.search-dialog.audio-file-dialog .search-actions button,
     radial-gradient(circle at 42% 22%, rgba(255, 242, 111, 0.18), rgba(132, 239, 255, 0.2) 52%, rgba(255, 84, 202, 0.13) 100%);
   border-color: rgba(121, 234, 255, 0.36);
   filter: drop-shadow(0 0 10px rgba(83, 230, 255, 0.22));
+}
+
+.transport .equalizer-button {
+  color: rgba(248, 253, 255, 0.98);
+  background:
+    radial-gradient(circle at 40% 20%, rgba(179, 255, 109, 0.22), rgba(94, 237, 255, 0.18) 54%, rgba(255, 84, 202, 0.11) 100%);
+  border-color: rgba(179, 255, 109, 0.28);
+}
+
+.transport .equalizer-button.active {
+  color: #fff;
+  background:
+    radial-gradient(circle at 35% 18%, rgba(255, 244, 105, 0.36), rgba(105, 239, 255, 0.28) 45%, rgba(255, 112, 218, 0.2) 100%);
+  border-color: rgba(255, 244, 105, 0.48);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 18px rgba(179, 255, 109, 0.24),
+    0 9px 20px rgba(0, 0, 0, 0.18);
 }
 
 .playback-mode-button text,
@@ -2243,7 +2283,16 @@ form.search-dialog.audio-file-dialog .search-actions button,
   stroke: rgb(179, 255, 109);
 }
 
-.transport .playback-mode-menu-scrim {
+.transport-icon.equalizer-icon .icon-fill {
+  fill: rgb(179, 255, 109);
+}
+
+.transport-icon.equalizer-icon .icon-accent {
+  stroke: rgb(255, 244, 105);
+}
+
+.transport .playback-mode-menu-scrim,
+.transport .equalizer-menu-scrim {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -2257,7 +2306,8 @@ form.search-dialog.audio-file-dialog .search-actions button,
   cursor: default;
 }
 
-.transport .playback-mode-menu-scrim:active {
+.transport .playback-mode-menu-scrim:active,
+.transport .equalizer-menu-scrim:active {
   transform: none;
 }
 
@@ -2329,6 +2379,227 @@ form.search-dialog.audio-file-dialog .search-actions button,
   color: #fff;
   background: rgba(10, 132, 255, 0.24);
   border-color: transparent;
+}
+
+.equalizer-panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 14px);
+  z-index: 21;
+  width: 342px;
+  max-width: calc(100vw - 28px);
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  color: rgba(244, 253, 255, 0.94);
+  background:
+    linear-gradient(145deg, rgba(12, 54, 92, 0.96), rgba(6, 25, 56, 0.94)),
+    var(--panel-blue-bg);
+  border: 1px solid var(--panel-blue-border);
+  border-radius: 16px;
+  box-shadow: var(--panel-blue-shadow);
+  transform: translateX(-50%);
+  backdrop-filter: blur(24px) saturate(1.18);
+}
+
+.equalizer-panel::after {
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  content: "";
+  background: linear-gradient(145deg, rgba(12, 54, 92, 0.96), rgba(6, 25, 56, 0.94));
+  border-right: 1px solid var(--panel-blue-border);
+  border-bottom: 1px solid var(--panel-blue-border);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.equalizer-panel-header {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.equalizer-panel-header span {
+  color: rgba(245, 253, 255, 0.96);
+  font-size: 16px;
+  font-weight: 820;
+}
+
+.equalizer-panel-header strong {
+  min-width: 58px;
+  min-height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 9px;
+  color: rgba(7, 36, 76, 0.96);
+  background: linear-gradient(135deg, rgb(179, 255, 109), rgb(112, 244, 255));
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 860;
+  white-space: nowrap;
+}
+
+.equalizer-presets {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.transport .equalizer-presets button {
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  color: rgba(238, 251, 255, 0.82);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(165, 236, 255, 0.16);
+  border-radius: 9px;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.transport .equalizer-presets button:hover {
+  background: rgba(112, 244, 255, 0.12);
+  border-color: rgba(112, 244, 255, 0.28);
+  box-shadow: none;
+  transform: none;
+}
+
+.transport .equalizer-presets button.active {
+  color: rgba(7, 36, 76, 0.96);
+  background: linear-gradient(135deg, rgb(255, 244, 105), rgb(179, 255, 109));
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.equalizer-bands {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 3px;
+}
+
+.equalizer-band {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+}
+
+.equalizer-band-value {
+  min-height: 18px;
+  color: rgba(255, 244, 105, 0.94);
+  font-size: 12px;
+  font-weight: 820;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.equalizer-slider-wrap {
+  --eq-level: 50%;
+  position: relative;
+  width: 32px;
+  height: 116px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.equalizer-slider-track,
+.equalizer-slider-fill {
+  position: absolute;
+  left: 50%;
+  width: 10px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+
+.equalizer-slider-track {
+  top: 0;
+  bottom: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 112, 218, 0.72), rgba(112, 244, 255, 0.72) 50%, rgba(179, 255, 109, 0.68));
+  border: 1px solid rgba(210, 250, 255, 0.24);
+  box-shadow: inset 0 1px 4px rgba(2, 12, 35, 0.66);
+}
+
+.equalizer-slider-fill {
+  bottom: 0;
+  height: var(--eq-level);
+  background:
+    linear-gradient(180deg, rgba(255, 244, 105, 0.96), rgba(112, 244, 255, 0.9));
+  box-shadow:
+    0 0 12px rgba(112, 244, 255, 0.28),
+    0 0 18px rgba(255, 244, 105, 0.14);
+}
+
+.equalizer-slider-thumb {
+  position: absolute;
+  left: 50%;
+  top: calc(100% - var(--eq-level));
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.96) 0 18%, transparent 20%),
+    linear-gradient(135deg, rgb(255, 244, 105), rgb(112, 244, 255) 54%, rgb(255, 112, 218));
+  border: 2px solid rgba(255, 255, 255, 0.94);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 3px rgba(112, 244, 255, 0.14),
+    0 0 14px rgba(112, 244, 255, 0.38),
+    0 3px 8px rgba(0, 0, 0, 0.28);
+  transform: translate(-50%, -50%);
+}
+
+.equalizer-slider-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.equalizer-slider-wrap:focus-within .equalizer-slider-track,
+.equalizer-slider-wrap:focus-within .equalizer-slider-thumb {
+  outline: 2px solid rgba(255, 244, 105, 0.64);
+  outline-offset: 5px;
+  border-radius: 999px;
+}
+
+.equalizer-band-name,
+.equalizer-band-frequency {
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.equalizer-band-name {
+  color: rgba(244, 253, 255, 0.9);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.equalizer-band-frequency {
+  color: rgba(226, 246, 249, 0.58);
+  font-size: 11px;
+  font-weight: 720;
 }
 
 .progress-group {
@@ -3271,7 +3542,7 @@ form.search-dialog.audio-file-dialog .search-actions button,
   }
 
   .control-bar {
-    grid-template-columns: 188px minmax(0, 1fr);
+    grid-template-columns: 238px minmax(0, 1fr);
     column-gap: 18px;
     padding: 0 36px 22px;
   }
@@ -3666,6 +3937,42 @@ form.search-dialog.audio-file-dialog .search-actions button,
     padding: 6px;
   }
 
+  .equalizer-panel {
+    position: fixed;
+    left: 50%;
+    bottom: calc(188px + env(safe-area-inset-bottom));
+    width: min(342px, calc(100vw - 24px));
+    padding: 12px;
+  }
+
+  .equalizer-panel::after {
+    display: none;
+  }
+
+  .equalizer-presets {
+    gap: 5px;
+  }
+
+  .transport .equalizer-presets button {
+    height: 28px;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  .equalizer-bands {
+    gap: 8px;
+  }
+
+  .equalizer-slider-wrap {
+    height: 96px;
+  }
+
+  .equalizer-band input,
+  .equalizer-band input::-webkit-slider-runnable-track,
+  .equalizer-band input::-moz-range-track {
+    width: 96px;
+  }
+
   .transport .playback-mode-menu button {
     height: 36px;
     grid-template-columns: 22px minmax(0, 1fr);
@@ -3772,6 +4079,10 @@ form.search-dialog.audio-file-dialog .search-actions button,
   }
 
   .profile-name {
+    font-size: 16px;
+  }
+
+  .profile-row-value {
     font-size: 16px;
   }
 
@@ -4019,6 +4330,42 @@ form.search-dialog.audio-file-dialog .search-actions button,
   .playback-mode-menu {
     width: 144px;
     padding: 6px;
+  }
+
+  .equalizer-panel {
+    width: min(318px, calc(100vw - 20px));
+    bottom: calc(184px + env(safe-area-inset-bottom));
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .equalizer-panel-header span {
+    font-size: 15px;
+  }
+
+  .equalizer-panel-header strong {
+    min-width: 50px;
+    min-height: 22px;
+    font-size: 11px;
+  }
+
+  .equalizer-slider-wrap {
+    height: 84px;
+  }
+
+  .equalizer-band input,
+  .equalizer-band input::-webkit-slider-runnable-track,
+  .equalizer-band input::-moz-range-track {
+    width: 84px;
+  }
+
+  .equalizer-band-value,
+  .equalizer-band-name {
+    font-size: 11px;
+  }
+
+  .equalizer-band-frequency {
+    font-size: 10px;
   }
 
   .transport .playback-mode-menu button {

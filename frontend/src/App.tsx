@@ -24,7 +24,7 @@ import {
   streamURL
 } from "./api";
 import type { UploadProgressSnapshot } from "./api";
-import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthUser, FavoriteCategory, LyricLine, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
+import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthUser, FavoriteCategory, LyricLine, OnlineUser, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -139,11 +139,34 @@ type BufferedAudioRange = {
   startPercent: number;
   endPercent: number;
 };
+const equalizerBands = [
+  { id: "sub", label: "60Hz", name: "低频", frequency: 60, filterType: "lowshelf", q: 0.7 },
+  { id: "bass", label: "150Hz", name: "厚度", frequency: 150, filterType: "peaking", q: 0.95 },
+  { id: "warmth", label: "400Hz", name: "中低", frequency: 400, filterType: "peaking", q: 1.05 },
+  { id: "presence", label: "2.5k", name: "人声", frequency: 2500, filterType: "peaking", q: 1 },
+  { id: "air", label: "10k", name: "空气", frequency: 10000, filterType: "highshelf", q: 0.7 }
+] as const;
+type EqualizerBandId = (typeof equalizerBands)[number]["id"];
+type EqualizerGains = Record<EqualizerBandId, number>;
+type EqualizerAudioChain = {
+  audio: HTMLAudioElement;
+  context: AudioContext;
+  source: MediaElementAudioSourceNode;
+  filters: BiquadFilterNode[];
+};
+type BrowserWindowWithAudioContext = Window & typeof globalThis & {
+  webkitAudioContext?: typeof AudioContext;
+};
 const bufferedRangeChangeTolerancePercent = 0.05;
 const bufferedFullCoverageToleranceSeconds = 0.75;
 const bufferedRangeMergeGapPercent = 0.25;
 const bufferUpdateResumeDelayMs = 900;
 const fullyBufferedRanges: BufferedAudioRange[] = [{ startPercent: 0, endPercent: 100 }];
+const equalizerStorageKey = "media-player-equalizer-gains";
+const equalizerGainMin = -9;
+const equalizerGainMax = 9;
+const equalizerGainStep = 0.5;
+const equalizerSmoothingTime = 0.018;
 
 type MusicTab = "音乐列表" | "收藏" | "分类" | "歌曲搜索";
 const appPages: Array<{ id: AppPage; label: string }> = [
@@ -280,8 +303,106 @@ function isAudioFullyBuffered(audio: HTMLAudioElement, mediaDuration: number) {
   return hasCoverageFromStart && coveredEnd >= mediaDuration - bufferedFullCoverageToleranceSeconds;
 }
 
+function clampEqualizerGain(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(equalizerGainMax, Math.max(equalizerGainMin, Math.round(value / equalizerGainStep) * equalizerGainStep));
+}
+
+function createEqualizerGains(overrides: Partial<EqualizerGains>): EqualizerGains {
+  const gains = {} as EqualizerGains;
+  for (const band of equalizerBands) {
+    gains[band.id] = clampEqualizerGain(overrides[band.id] ?? 0);
+  }
+  return gains;
+}
+
+const equalizerPresets: Array<{ id: string; label: string; gains: EqualizerGains }> = [
+  { id: "flat", label: "默认", gains: createEqualizerGains({}) },
+  { id: "bass", label: "低音", gains: createEqualizerGains({ sub: 3.5, bass: 2.5, warmth: -1, presence: 0.5, air: 0.5 }) },
+  { id: "vocal", label: "人声", gains: createEqualizerGains({ sub: -1.5, bass: -1, warmth: -2, presence: 3, air: 1.5 }) },
+  { id: "bright", label: "明亮", gains: createEqualizerGains({ sub: -0.5, bass: -0.5, warmth: -1, presence: 1.5, air: 3 }) },
+  { id: "night", label: "夜间", gains: createEqualizerGains({ sub: -2, bass: -1.5, warmth: -0.5, presence: -0.5, air: -2 }) }
+];
+
+function readEqualizerGains(): EqualizerGains {
+  if (typeof window === "undefined") {
+    return createEqualizerGains({});
+  }
+  try {
+    const rawValue = window.localStorage.getItem(equalizerStorageKey);
+    if (!rawValue) {
+      return createEqualizerGains({});
+    }
+    const storedValue = JSON.parse(rawValue) as Partial<Record<EqualizerBandId, unknown>>;
+    const nextGains = {} as EqualizerGains;
+    for (const band of equalizerBands) {
+      nextGains[band.id] = clampEqualizerGain(Number(storedValue[band.id] ?? 0));
+    }
+    return nextGains;
+  } catch {
+    return createEqualizerGains({});
+  }
+}
+
+function persistEqualizerGains(gains: EqualizerGains) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(equalizerStorageKey, JSON.stringify(gains));
+  } catch {
+    // Equalizer changes should keep working even when storage is unavailable.
+  }
+}
+
+function getEqualizerPresetId(gains: EqualizerGains) {
+  const preset = equalizerPresets.find((option) =>
+    equalizerBands.every((band) => Math.abs(option.gains[band.id] - gains[band.id]) < 0.05)
+  );
+  return preset?.id ?? "custom";
+}
+
+function formatEqualizerGain(gain: number) {
+  const clampedGain = clampEqualizerGain(gain);
+  if (clampedGain === 0) {
+    return "0dB";
+  }
+  return `${clampedGain > 0 ? "+" : ""}${clampedGain.toFixed(clampedGain % 1 === 0 ? 0 : 1)}dB`;
+}
+
+function getEqualizerLevelPercent(gain: number) {
+  const clampedGain = clampEqualizerGain(gain);
+  return ((clampedGain - equalizerGainMin) / (equalizerGainMax - equalizerGainMin)) * 100;
+}
+
+function IconBase({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {children}
+    </svg>
+  );
+}
+
+function EqualizerIcon() {
+  return (
+    <IconBase className="transport-icon equalizer-icon">
+      <path className="icon-core" d="M5.4 6.2v11.6" />
+      <path className="icon-core" d="M12 4.8v14.4" />
+      <path className="icon-core" d="M18.6 7.4v9.2" />
+      <rect className="icon-fill" x="3.6" y="8.1" width="3.6" height="4.6" rx="1.2" />
+      <rect className="icon-fill" x="10.2" y="12.4" width="3.6" height="4.6" rx="1.2" />
+      <rect className="icon-fill" x="16.8" y="5.2" width="3.6" height="4.6" rx="1.2" />
+      <path className="icon-accent" d="M4.4 19.3c4.1 1.7 10.9 1.6 15.2-.3" />
+      <circle className="icon-spark" cx="19.3" cy="18.7" r="1" />
+    </IconBase>
+  );
+}
+
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const equalizerChainRef = useRef<EqualizerAudioChain | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartRef = useRef<LongPressStart | null>(null);
@@ -301,6 +422,7 @@ function App() {
   const shouldRevealCurrentTrackRef = useRef(false);
   const loadedLibrarySessionKeyRef = useRef<string | null>(null);
   const seekPointerIdRef = useRef<number | null>(null);
+  const equalizerPointerRef = useRef<{ pointerId: number; bandId: EqualizerBandId } | null>(null);
   const bufferUpdateResumeAtRef = useRef(0);
   const isCurrentTrackFullyBufferedRef = useRef(false);
   const audioFolderInputRef = useRef<HTMLInputElement | null>(null);
@@ -363,9 +485,13 @@ function App() {
   const [seekPreviewTime, setSeekPreviewTime] = useState<number | null>(null);
   const [duration, setDuration] = useState(185);
   const [bufferedRanges, setBufferedRanges] = useState<BufferedAudioRange[]>([]);
+  const [isEqualizerOpen, setIsEqualizerOpen] = useState(false);
+  const [equalizerGains, setEqualizerGains] = useState<EqualizerGains>(() => readEqualizerGains());
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(30);
   const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(null);
   const [sleepTimerNow, setSleepTimerNow] = useState(() => Date.now());
+  const [onlineCount, setOnlineCount] = useState(0);
+  const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("main");
   const [audioFiles, setAudioFiles] = useState<Track[]>([]);
   const [serverAudioSet, setServerAudioSet] = useState<ServerAudioFile[]>([]);
@@ -404,6 +530,7 @@ function App() {
     trackContextMenu ||
       categoryContextMenu ||
       isPlaybackModeMenuOpen ||
+      isEqualizerOpen ||
       isSearchOpen ||
       isCategorySelectorOpen ||
       isCategoryDialogOpen ||
@@ -516,8 +643,14 @@ function App() {
       cancelLongPress();
       cancelCategoryLongPress();
       clearMusicListScrollSettleTimer();
+      disconnectEqualizerAudioChain();
     };
   }, []);
+
+  useEffect(() => {
+    persistEqualizerGains(equalizerGains);
+    applyEqualizerGains(equalizerGains);
+  }, [equalizerGains]);
 
   useEffect(() => {
     if (!hasTransientPopup) {
@@ -612,16 +745,20 @@ function App() {
   useEffect(() => {
     const sessionID = presenceSessionIdRef.current;
     if (!authSession || !sessionID) {
+      setOnlineCount(0);
+      setOnlineUsers([]);
       return;
     }
 
     const reportPresence = async () => {
       try {
-        await sendPresenceHeartbeat({
+        const response = await sendPresenceHeartbeat({
           session_id: sessionID,
           user_id: authSession.userId,
           phone: authSession.phone
         });
+        setOnlineCount(response.online_count);
+        setOnlineUsers(response.online_users ?? []);
       } catch {
         // Presence reporting is best effort.
       }
@@ -703,6 +840,7 @@ function App() {
       return;
     }
     if (isPlaying) {
+      prepareEqualizerForPlayback();
       void audio.play().catch(() => setIsPlaying(false));
     } else {
       audio.pause();
@@ -1052,6 +1190,7 @@ function App() {
     setActivePage("music");
     setActiveCategoryId(null);
     setIsPlaybackModeMenuOpen(false);
+    setIsEqualizerOpen(false);
     setIsCategorySelectorOpen(false);
     setCategorySelectorPosition(null);
     setIsCategoryDialogOpen(false);
@@ -1261,6 +1400,7 @@ function App() {
     setTrackContextMenu(null);
     setCategoryContextMenu(null);
     setIsPlaybackModeMenuOpen(false);
+    setIsEqualizerOpen(false);
     setIsCategorySelectorOpen(false);
     setCategorySelectorPosition(null);
     setCategoryPickerTrack(null);
@@ -1418,6 +1558,8 @@ function App() {
     setAuthMessage("");
     setShowAuthPassword(false);
     setActivePage("music");
+    setOnlineCount(0);
+    setOnlineUsers([]);
     setProfileView("main");
     setIsSearchOpen(false);
     setSearchDialogPosition(null);
@@ -2113,6 +2255,7 @@ function App() {
     const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - trackContextMenuHeight - contextMenuMargin);
     setIsPlaybackModeMenuOpen(false);
+    setIsEqualizerOpen(false);
     setCategoryContextMenu(null);
     setTrackContextMenu({
       track,
@@ -2125,6 +2268,7 @@ function App() {
     const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - categoryContextMenuHeight - contextMenuMargin);
     setIsPlaybackModeMenuOpen(false);
+    setIsEqualizerOpen(false);
     setTrackContextMenu(null);
     setCategoryContextMenu({
       category,
@@ -2261,6 +2405,9 @@ function App() {
     setPlaybackQueue(tracks.length ? tracks : [track]);
     setPlaybackQueueScope(getActivePlaybackQueueScope());
     setCurrentTrackId(track.id);
+    if (track.stream_url) {
+      prepareEqualizerForPlayback();
+    }
     setIsPlaying(Boolean(track.stream_url));
   }
 
@@ -2268,6 +2415,9 @@ function App() {
     clearPendingTrackPlay();
     setDetachedCurrentTrack(null);
     setCurrentTrackId(track.id);
+    if (track.stream_url) {
+      prepareEqualizerForPlayback();
+    }
     setIsPlaying(Boolean(track.stream_url));
   }
 
@@ -2289,6 +2439,9 @@ function App() {
     if (!trackToPlay.stream_url) {
       setIsPlaying(false);
       return;
+    }
+    if (!isPlaying) {
+      prepareEqualizerForPlayback();
     }
     setIsPlaying((value) => !value);
   }
@@ -2326,6 +2479,154 @@ function App() {
     setIsPlaybackModeMenuOpen(false);
   }
 
+  function toggleEqualizerPanel() {
+    setIsPlaybackModeMenuOpen(false);
+    setIsEqualizerOpen((value) => !value);
+  }
+
+  function ensureEqualizerAudioChain(audio = audioRef.current) {
+    if (!audio || typeof window === "undefined") {
+      return null;
+    }
+    const existingChain = equalizerChainRef.current;
+    if (existingChain?.audio === audio) {
+      return existingChain.context;
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext ?? (window as BrowserWindowWithAudioContext).webkitAudioContext;
+    if (!AudioContextConstructor) {
+      return null;
+    }
+
+    try {
+      const context = new AudioContextConstructor();
+      const source = context.createMediaElementSource(audio);
+      const filters = equalizerBands.map((band) => {
+        const filter = context.createBiquadFilter();
+        filter.type = band.filterType;
+        filter.frequency.value = band.frequency;
+        filter.Q.value = band.q;
+        filter.gain.value = equalizerGains[band.id];
+        return filter;
+      });
+
+      source.connect(filters[0]);
+      for (let index = 0; index < filters.length - 1; index += 1) {
+        filters[index].connect(filters[index + 1]);
+      }
+      filters[filters.length - 1].connect(context.destination);
+      equalizerChainRef.current = { audio, context, source, filters };
+      applyEqualizerGains(equalizerGains, true);
+      return context;
+    } catch {
+      return null;
+    }
+  }
+
+  function disconnectEqualizerAudioChain() {
+    const chain = equalizerChainRef.current;
+    if (!chain) {
+      return;
+    }
+    try {
+      chain.source.disconnect();
+      chain.filters.forEach((filter) => filter.disconnect());
+    } catch {
+      // Disconnection can throw after browser-side audio teardown.
+    }
+    void chain.context.close().catch(() => undefined);
+    equalizerChainRef.current = null;
+  }
+
+  function applyEqualizerGains(gains: EqualizerGains, immediate = false) {
+    const chain = equalizerChainRef.current;
+    if (!chain) {
+      return;
+    }
+    equalizerBands.forEach((band, index) => {
+      const filter = chain.filters[index];
+      if (!filter) {
+        return;
+      }
+      const gain = clampEqualizerGain(gains[band.id]);
+      if (immediate) {
+        filter.gain.setValueAtTime(gain, chain.context.currentTime);
+        return;
+      }
+      filter.gain.setTargetAtTime(gain, chain.context.currentTime, equalizerSmoothingTime);
+    });
+  }
+
+  function prepareEqualizerForPlayback() {
+    const context = ensureEqualizerAudioChain();
+    if (context?.state === "suspended") {
+      void context.resume().catch(() => undefined);
+    }
+  }
+
+  function setEqualizerBandGain(bandId: EqualizerBandId, gain: number) {
+    const nextGain = clampEqualizerGain(gain);
+    setEqualizerGains((previous) => {
+      if (previous[bandId] === nextGain) {
+        return previous;
+      }
+      return { ...previous, [bandId]: nextGain };
+    });
+  }
+
+  function handleEqualizerGainChange(bandId: EqualizerBandId, value: string) {
+    setEqualizerBandGain(bandId, Number(value));
+  }
+
+  function getEqualizerGainFromPointer(event: ReactPointerEvent<HTMLSpanElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.height) {
+      return 0;
+    }
+    const ratio = Math.min(1, Math.max(0, 1 - (event.clientY - rect.top) / rect.height));
+    return equalizerGainMin + ratio * (equalizerGainMax - equalizerGainMin);
+  }
+
+  function focusEqualizerInput(event: ReactPointerEvent<HTMLSpanElement>) {
+    event.currentTarget.querySelector("input")?.focus();
+  }
+
+  function handleEqualizerPointerDown(event: ReactPointerEvent<HTMLSpanElement>, bandId: EqualizerBandId) {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    equalizerPointerRef.current = { pointerId: event.pointerId, bandId };
+    focusEqualizerInput(event);
+    setEqualizerBandGain(bandId, getEqualizerGainFromPointer(event));
+  }
+
+  function handleEqualizerPointerMove(event: ReactPointerEvent<HTMLSpanElement>, bandId: EqualizerBandId) {
+    const activePointer = equalizerPointerRef.current;
+    if (!activePointer || activePointer.pointerId !== event.pointerId || activePointer.bandId !== bandId) {
+      return;
+    }
+    event.preventDefault();
+    setEqualizerBandGain(bandId, getEqualizerGainFromPointer(event));
+  }
+
+  function clearEqualizerPointer(event: ReactPointerEvent<HTMLSpanElement>) {
+    const activePointer = equalizerPointerRef.current;
+    if (!activePointer || activePointer.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    equalizerPointerRef.current = null;
+  }
+
+  function selectEqualizerPreset(gains: EqualizerGains) {
+    setEqualizerGains(gains);
+  }
+
   function handleEnded() {
     const audio = audioRef.current;
     if (!audio) {
@@ -2333,6 +2634,7 @@ function App() {
     }
     if (playbackMode === "one" && isCurrentTrackQueued()) {
       audio.currentTime = 0;
+      prepareEqualizerForPlayback();
       void audio.play();
       return;
     }
@@ -2493,6 +2795,7 @@ function App() {
   const playingTrackId = isPlaying ? currentTrack?.id ?? null : null;
   const activeMenuTrack = trackContextMenu?.track ?? null;
   const isActiveMenuTrackFavorite = activeMenuTrack ? favoriteTrackIds.has(activeMenuTrack.id) : false;
+  const activeEqualizerPresetId = getEqualizerPresetId(equalizerGains);
   const isViewingActiveCategory = activeTab === "分类" && Boolean(activeCategory);
   const lyricLines = trackLyrics?.lines ?? [];
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
@@ -2869,6 +3172,75 @@ function App() {
                     </>
                   ) : null}
                 </div>
+                <div className="equalizer-picker">
+                  <button
+                    className={`equalizer-button ${isEqualizerOpen ? "active" : ""}`}
+                    type="button"
+                    aria-label="五段均衡器"
+                    aria-haspopup="dialog"
+                    aria-expanded={isEqualizerOpen}
+                    title="五段均衡器"
+                    onClick={toggleEqualizerPanel}
+                  >
+                    <EqualizerIcon />
+                  </button>
+                  {isEqualizerOpen ? (
+                    <>
+                      <button className="equalizer-menu-scrim" type="button" aria-label="关闭均衡器" onClick={() => setIsEqualizerOpen(false)} />
+                      <div className="equalizer-panel" role="dialog" aria-label="五段均衡器" onPointerDown={(event) => event.stopPropagation()}>
+                        <div className="equalizer-panel-header">
+                          <span>五段均衡器</span>
+                          <strong>{activeEqualizerPresetId === "custom" ? "自定义" : equalizerPresets.find((preset) => preset.id === activeEqualizerPresetId)?.label}</strong>
+                        </div>
+                        <div className="equalizer-presets" role="group" aria-label="均衡器预设">
+                          {equalizerPresets.map((preset) => (
+                            <button
+                              key={preset.id}
+                              className={preset.id === activeEqualizerPresetId ? "active" : ""}
+                              type="button"
+                              aria-pressed={preset.id === activeEqualizerPresetId}
+                              onClick={() => selectEqualizerPreset(preset.gains)}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="equalizer-bands">
+                          {equalizerBands.map((band) => (
+                            <label key={band.id} className="equalizer-band">
+                              <span className="equalizer-band-value">{formatEqualizerGain(equalizerGains[band.id])}</span>
+                              <span
+                                className="equalizer-slider-wrap"
+                                style={{ "--eq-level": `${getEqualizerLevelPercent(equalizerGains[band.id])}%` } as CSSProperties}
+                                onPointerDown={(event) => handleEqualizerPointerDown(event, band.id)}
+                                onPointerMove={(event) => handleEqualizerPointerMove(event, band.id)}
+                                onPointerUp={clearEqualizerPointer}
+                                onPointerCancel={clearEqualizerPointer}
+                                onLostPointerCapture={clearEqualizerPointer}
+                              >
+                                <span className="equalizer-slider-track" aria-hidden="true" />
+                                <span className="equalizer-slider-fill" aria-hidden="true" />
+                                <span className="equalizer-slider-thumb" aria-hidden="true" />
+                                <input
+                                  className="equalizer-slider-input"
+                                  type="range"
+                                  min={equalizerGainMin}
+                                  max={equalizerGainMax}
+                                  step={equalizerGainStep}
+                                  value={equalizerGains[band.id]}
+                                  aria-label={`${band.name} ${band.label}`}
+                                  onChange={(event) => handleEqualizerGainChange(band.id, event.target.value)}
+                                />
+                              </span>
+                              <span className="equalizer-band-name">{band.name}</span>
+                              <span className="equalizer-band-frequency">{band.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
               </div>
 
               <div className="progress-group">
@@ -2924,6 +3296,8 @@ function App() {
             authSession={authSession}
             sleepTimerMinutes={sleepTimerMinutes}
             sleepTimerRemainingSeconds={sleepTimerRemainingSeconds}
+            onlineCount={onlineCount}
+            onlineUsers={onlineUsers}
             onSetSleepTimerMinutes={handleSetSleepTimerMinutes}
             onStartSleepTimer={handleStartSleepTimer}
             onStopSleepTimer={handleStopSleepTimer}
@@ -4483,11 +4857,25 @@ function formatProfilePhone(phone: string) {
   return normalized || "未绑定手机号";
 }
 
+function formatOnlinePresence(users: OnlineUser[], onlineCount: number) {
+  const count = Math.max(0, onlineCount, users.length);
+  const nicknames = users.map((user) => user.nickname.trim()).filter(Boolean);
+  if (nicknames.length > 0) {
+    return `${nicknames.join("、")}，共 ${count} 人`;
+  }
+  if (count > 0) {
+    return `共 ${count} 人`;
+  }
+  return "暂无在线用户";
+}
+
 function EmptyPage({
   page,
   authSession,
   sleepTimerMinutes,
   sleepTimerRemainingSeconds,
+  onlineCount,
+  onlineUsers,
   onSetSleepTimerMinutes,
   onStartSleepTimer,
   onStopSleepTimer,
@@ -4527,6 +4915,8 @@ function EmptyPage({
   authSession: AuthSession | null;
   sleepTimerMinutes: number | null;
   sleepTimerRemainingSeconds: number | null;
+  onlineCount: number;
+  onlineUsers: OnlineUser[];
   onSetSleepTimerMinutes: (minutes: number | null) => void;
   onStartSleepTimer: (minutes?: number) => void;
   onStopSleepTimer: () => void;
@@ -4570,6 +4960,7 @@ function EmptyPage({
   const profileDisplayName = authSession?.nickname.trim() || authSession?.phone || "未登录";
   const profilePhone = authSession ? formatProfilePhone(authSession.phone) : "";
   const profileAvatarText = authSession ? getProfileAvatarText(authSession) : "";
+  const onlineSummary = formatOnlinePresence(onlineUsers, onlineCount);
 
   return (
     <section className="simple-page" aria-label={content.title}>
@@ -4623,6 +5014,12 @@ function EmptyPage({
               onStart={onStartSleepTimer}
               onStop={onStopSleepTimer}
             />
+            <div className="profile-row online-count-row" aria-label="在线人数">
+              <span className="profile-row-title">在线人数</span>
+              <span className="profile-row-value online-count-value" aria-live="polite" title={onlineSummary}>
+                {onlineSummary}
+              </span>
+            </div>
             <div className="profile-row file-manager-row">
               <span className="profile-row-title">文件管理</span>
               <button className="profile-action-button file-manager-open-button" type="button" onClick={onOpenAudioFileManager}>
@@ -5317,14 +5714,6 @@ function AuthField({
         {trailing}
       </span>
     </label>
-  );
-}
-
-function IconBase({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      {children}
-    </svg>
   );
 }
 
