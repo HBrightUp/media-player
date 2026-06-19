@@ -1709,6 +1709,7 @@ form.search-dialog .search-actions button {
 }
 
 .audio-preflight-summary span,
+.audio-preflight-filter-button,
 .audio-preflight-total span {
   min-height: 26px;
   display: inline-flex;
@@ -1720,6 +1721,29 @@ form.search-dialog .search-actions button {
   border-radius: 9px;
   font-size: 12px;
   font-weight: 760;
+}
+
+.audio-preflight-filter-button {
+  cursor: pointer;
+  appearance: none;
+  border-style: solid;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.audio-preflight-filter-button:active {
+  transform: translateY(1px);
+}
+
+.audio-preflight-filter-button.active {
+  border-color: rgba(225, 249, 255, 0.52);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 0 0 1px rgba(148, 223, 255, 0.16),
+    0 8px 18px rgba(0, 0, 0, 0.18);
 }
 
 .audio-preflight-summary .ready {
@@ -1837,6 +1861,18 @@ form.search-dialog .search-actions button {
   box-shadow: inset 4px 0 0 rgba(177, 164, 255, 0.68);
 }
 
+.audio-preflight-empty {
+  min-height: 96px;
+  display: grid;
+  place-items: center;
+  color: rgba(226, 246, 249, 0.58);
+  background: rgba(110, 185, 238, 0.08);
+  border: 1px solid rgba(164, 224, 255, 0.14);
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 760;
+}
+
 .audio-result-item.imported {
   background: linear-gradient(135deg, rgba(41, 210, 130, 0.24), rgba(41, 210, 130, 0.08));
   border-color: rgba(103, 255, 183, 0.28);
@@ -1924,6 +1960,65 @@ form.search-dialog .search-actions button {
   display: flex;
   justify-content: center;
   gap: 8px;
+}
+
+.audio-upload-progress {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background:
+    linear-gradient(135deg, rgba(57, 174, 255, 0.18), rgba(31, 82, 145, 0.1));
+  border: 1px solid rgba(146, 222, 255, 0.22);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 18px rgba(0, 0, 0, 0.14);
+}
+
+.audio-upload-progress-bar {
+  height: 10px;
+  overflow: hidden;
+  background: rgba(6, 27, 58, 0.66);
+  border: 1px solid rgba(164, 224, 255, 0.18);
+  border-radius: 999px;
+}
+
+.audio-upload-progress-bar span {
+  height: 100%;
+  min-width: 4px;
+  display: block;
+  background: linear-gradient(90deg, rgba(104, 240, 255, 0.95), rgba(132, 255, 190, 0.95));
+  border-radius: inherit;
+  box-shadow: 0 0 14px rgba(104, 240, 255, 0.42);
+  transition: width 180ms ease;
+}
+
+.audio-upload-progress-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: rgba(226, 246, 249, 0.74);
+  font-size: 12px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-upload-progress-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-upload-progress-meta span:last-child {
+  text-align: right;
+}
+
+.audio-upload-progress-meta strong {
+  color: rgba(197, 255, 230, 0.96);
+  font-size: 13px;
+  font-weight: 860;
 }
 
 .audio-result-dialog .search-actions {

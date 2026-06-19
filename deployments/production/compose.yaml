@@ -48,8 +48,8 @@ services:
     ports:
       - "127.0.0.1:18080:8080"
     volumes:
-      - ${MUSIC_DIRECTORY:-/opt/media-player/music}:/music:ro
-      - ${LYRICS_DIRECTORY:-/opt/media-player/lyrics}:/lyrics:ro
+      - ${MUSIC_DIRECTORY:-/opt/media-player/music}:/music:rw
+      - ${LYRICS_DIRECTORY:-/opt/media-player/lyrics}:/lyrics:rw
 
 volumes:
   media_player_caddy_data:

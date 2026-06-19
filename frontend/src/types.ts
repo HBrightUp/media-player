@@ -119,8 +119,17 @@ export type AudioFileImportLimits = {
   max_lyric_file_bytes: number;
 };
 
+export type ServerAudioFile = {
+  filename: string;
+  filename_hash: string;
+  artist: string;
+  title: string;
+  extension: string;
+};
+
 export type AudioFilesResponse = {
   files: Track[];
+  server_audio_set?: ServerAudioFile[];
   limits: AudioFileImportLimits;
 };
 

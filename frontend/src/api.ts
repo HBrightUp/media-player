@@ -34,6 +34,11 @@ type FavoriteCategoriesResponse = {
 type RequestOptions = {
   timeoutMs?: number;
 };
+export type UploadProgressSnapshot = {
+  loadedBytes: number;
+  totalBytes: number | null;
+  lengthComputable: boolean;
+};
 
 export class ApiError extends Error {
   status: number;
@@ -231,7 +236,12 @@ export function getAudioFiles(userID: number, accessToken: string): Promise<Audi
   });
 }
 
-export function importAudioFolder(userID: number, files: File[], accessToken: string): Promise<AudioFileImportReport> {
+export function importAudioFolder(
+  userID: number,
+  files: File[],
+  accessToken: string,
+  onProgress?: (snapshot: UploadProgressSnapshot) => void
+): Promise<AudioFileImportReport> {
   const formData = new FormData();
   const manifest = files.map((file, index) => {
     const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
@@ -246,17 +256,73 @@ export function importAudioFolder(userID: number, files: File[], accessToken: st
     formData.append(`file_${index}`, file, file.name);
   });
 
-  return request<AudioFileImportReport>(
+  return uploadFormData<AudioFileImportReport>(
     `/api/audio-files/import?user_id=${encodeURIComponent(String(userID))}`,
-    {
-      method: "POST",
-      body: formData,
-      headers: audioAccessHeaders(accessToken)
-    },
-    {
-      timeoutMs: audioFileRequestTimeoutMs
-    }
+    formData,
+    audioAccessHeaders(accessToken),
+    onProgress,
+    audioFileRequestTimeoutMs
   );
+}
+
+function uploadFormData<T>(
+  path: string,
+  body: FormData,
+  headers: Record<string, string>,
+  onProgress: ((snapshot: UploadProgressSnapshot) => void) | undefined,
+  timeoutMs: number
+): Promise<T> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return Promise.reject(new Error("网络不可用，请检查连接后重试"));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}${path}`);
+    xhr.timeout = timeoutMs;
+    for (const [name, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(name, value);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      onProgress?.({
+        loadedBytes: event.loaded,
+        totalBytes: event.lengthComputable ? event.total : null,
+        lengthComputable: event.lengthComputable
+      });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText || "null") as T);
+        } catch {
+          reject(new Error("响应格式不正确"));
+        }
+        return;
+      }
+
+      let message = "请求失败";
+      try {
+        const payload = JSON.parse(xhr.responseText || "{}") as { error?: string };
+        message = payload.error ?? message;
+      } catch {
+        message = xhr.statusText || message;
+      }
+      reject(new ApiError(message, xhr.status, parseRetryAfterSeconds(xhr.getResponseHeader("Retry-After"))));
+    };
+
+    xhr.onerror = () => {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        reject(new Error("网络不可用，请检查连接后重试"));
+        return;
+      }
+      reject(new Error("网络连接失败，请稍后重试"));
+    };
+    xhr.ontimeout = () => reject(new Error("请求超时，请检查网络后重试"));
+    xhr.onabort = () => reject(new Error("上传已取消"));
+    xhr.send(body);
+  });
 }
 
 export function renameAudioFile(trackID: number, payload: AudioFileRenameRequest, accessToken: string): Promise<{ ok: boolean; scan: ScanResult }> {

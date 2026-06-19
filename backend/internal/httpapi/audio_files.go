@@ -108,6 +108,14 @@ type audioFilesLimitsResponse struct {
 	MaxLyricFileBytes int64 `json:"max_lyric_file_bytes"`
 }
 
+type serverAudioSetEntry struct {
+	Filename     string `json:"filename"`
+	FilenameHash string `json:"filename_hash"`
+	Artist       string `json:"artist"`
+	Title        string `json:"title"`
+	Extension    string `json:"extension"`
+}
+
 func (s *Server) handleAudioFileAuthorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
@@ -185,9 +193,45 @@ func (s *Server) handleAudioFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"files":  tracks,
-		"limits": audioFileLimits(),
+		"files":            tracks,
+		"server_audio_set": buildServerAudioSet(tracks),
+		"limits":           audioFileLimits(),
 	})
+}
+
+func buildServerAudioSet(tracks []models.Track) []serverAudioSetEntry {
+	entries := make([]serverAudioSetEntry, 0, len(tracks))
+	for _, track := range tracks {
+		filename := strings.TrimSpace(track.Filename)
+		if filename == "" {
+			filename = filepath.Base(track.RelativePath)
+		}
+		if filename == "." || filename == string(filepath.Separator) || filename == "" {
+			continue
+		}
+
+		artist, title := library.StandardAudioNamePartsFromFilename(filename)
+		if artist == "" {
+			artist = strings.TrimSpace(track.Artist)
+		}
+		if title == "" {
+			title = strings.TrimSpace(track.Title)
+		}
+		extension := strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
+		if artist == "" || title == "" || extension == "" {
+			continue
+		}
+
+		hash := sha256.Sum256([]byte(filename))
+		entries = append(entries, serverAudioSetEntry{
+			Filename:     filename,
+			FilenameHash: hex.EncodeToString(hash[:]),
+			Artist:       artist,
+			Title:        title,
+			Extension:    extension,
+		})
+	}
+	return entries
 }
 
 func (s *Server) handleAudioFileImport(w http.ResponseWriter, r *http.Request) {

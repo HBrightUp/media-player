@@ -23,7 +23,8 @@ import {
   sendPresenceOffline,
   streamURL
 } from "./api";
-import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthUser, FavoriteCategory, LyricLine, Track, TrackCategoryMembership, TrackLyrics } from "./types";
+import type { UploadProgressSnapshot } from "./api";
+import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthUser, FavoriteCategory, LyricLine, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -70,6 +71,8 @@ type AudioFileAccessDialogState = {
 };
 type AudioImportPreflightStatus = "ready" | "duplicate" | "error" | "ignored";
 type AudioImportPreflightKind = "audio" | "lyrics" | "other";
+type AudioImportPreflightFilter = "readyAudio" | "readyLyrics" | "duplicate" | "error" | "ignored";
+type AudioImportResultFilter = "importedAudio" | "importedLyrics" | "skipped" | "failed";
 type AudioImportPreflightItem = {
   relativePath: string;
   displayName: string;
@@ -90,6 +93,11 @@ type AudioImportPreflightReport = {
   totalUploadBytes: number;
   uploadFileCount: number;
   blockingMessage: string;
+};
+type AudioImportProgress = {
+  uploadedBytes: number;
+  totalBytes: number;
+  speedBytesPerSecond: number;
 };
 type UploadAudioNameParts = {
   artist: string;
@@ -296,6 +304,8 @@ function App() {
   const bufferUpdateResumeAtRef = useRef(0);
   const isCurrentTrackFullyBufferedRef = useRef(false);
   const audioFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const audioImportProgressLastPaintAtRef = useRef(0);
+  const audioImportProgressPreviousRef = useRef<{ uploadedBytes: number; capturedAt: number } | null>(null);
   if (!initialAuthRef.current) {
     initialAuthRef.current = readAuthSession();
   }
@@ -358,10 +368,12 @@ function App() {
   const [sleepTimerNow, setSleepTimerNow] = useState(() => Date.now());
   const [profileView, setProfileView] = useState<ProfileView>("main");
   const [audioFiles, setAudioFiles] = useState<Track[]>([]);
+  const [serverAudioSet, setServerAudioSet] = useState<ServerAudioFile[]>([]);
   const [audioFileLimits, setAudioFileLimits] = useState<AudioFileImportLimits>(defaultAudioFileLimits);
   const [audioFilesMessage, setAudioFilesMessage] = useState("");
   const [audioImportReport, setAudioImportReport] = useState<AudioFileImportReport | null>(null);
   const [audioImportPreflight, setAudioImportPreflight] = useState<AudioImportPreflightReport | null>(null);
+  const [audioImportProgress, setAudioImportProgress] = useState<AudioImportProgress | null>(null);
   const [audioFileAccess, setAudioFileAccess] = useState<AudioFileAccessGrant | null>(null);
   const [audioFileAccessDialog, setAudioFileAccessDialog] = useState<AudioFileAccessDialogState>(() => createClosedAudioFileAccessDialog());
   const [audioFileAccessClock, setAudioFileAccessClock] = useState(() => Date.now());
@@ -1182,6 +1194,7 @@ function App() {
   function closeAudioFileOverlays() {
     setAudioFileMenu(null);
     setAudioImportPreflight(null);
+    setAudioImportProgress(null);
     setAudioRenameDraft(null);
     setAudioDeleteTarget(null);
   }
@@ -1416,6 +1429,7 @@ function App() {
     setTrackCategoryMembershipMap(new Map());
     setFavoriteCategories([]);
     setAudioFiles([]);
+    setServerAudioSet([]);
     setAudioFilesMessage("");
     setAudioImportReport(null);
     setAudioImportPreflight(null);
@@ -1458,6 +1472,7 @@ function App() {
   } = {}) {
     if (!authSession?.userId) {
       setAudioFiles([]);
+      setServerAudioSet([]);
       setAudioFilesMessage("请先登录后管理服务器音频文件");
       return { ok: false };
     }
@@ -1475,10 +1490,12 @@ function App() {
     }
     try {
       const payload = await getAudioFiles(authSession.userId, accessToken);
+      const nextServerAudioSet = buildServerAudioSetFromTracks(payload.files, payload.server_audio_set);
       setAudioFiles(payload.files);
+      setServerAudioSet(nextServerAudioSet);
       setAudioFileLimits(payload.limits);
       setAudioFilesMessage("");
-      return { ok: true, files: payload.files, limits: payload.limits };
+      return { ok: true, files: payload.files, serverAudioSet: nextServerAudioSet, limits: payload.limits };
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取服务器音频文件失败";
       setAudioFilesMessage(message);
@@ -1567,6 +1584,7 @@ function App() {
       return;
     }
     setAudioImportPreflight(null);
+    setAudioImportProgress(null);
     audioFolderInputRef.current?.click();
   }
 
@@ -1585,15 +1603,19 @@ function App() {
     setAudioImportReport(null);
     try {
       const latest = await refreshAudioFiles({ silent: true });
-      const serverFiles = latest.ok && "files" in latest && latest.files ? latest.files : audioFiles;
+      const latestServerAudioSet = latest.ok && "serverAudioSet" in latest && latest.serverAudioSet ? latest.serverAudioSet : serverAudioSet;
       const limits = latest.ok && "limits" in latest && latest.limits ? latest.limits : audioFileLimits;
-      const report = await buildAudioImportPreflight(selectedFiles, serverFiles, limits);
+      const report = await buildAudioImportPreflight(selectedFiles, latestServerAudioSet, limits);
       if (!report.items.length) {
         setAudioFilesMessage("文件夹中没有可检查的文件");
         return;
       }
       setAudioImportPreflight(report);
-      setAudioFilesMessage(report.files.length ? "预检完成，请确认报告后上传" : "预检完成：没有可上传的音频文件");
+      setAudioFilesMessage(
+        report.readyAudioCount > 0
+          ? `预检完成：可上传 ${report.readyAudioCount} 首歌曲${report.readyLyricCount > 0 ? `，匹配歌词 ${report.readyLyricCount} 个` : ""}`
+          : "预检完成：没有可上传的音频文件"
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "生成上传报告失败";
       setAudioFilesMessage(message);
@@ -1626,10 +1648,14 @@ function App() {
     setIsAudioImporting(true);
     setAudioFilesMessage("");
     setAudioImportReport(null);
+    beginAudioImportProgress(audioImportPreflight.totalUploadBytes);
     try {
-      const report = await importAudioFolder(authSession.userId, uploadFiles, accessToken);
+      const report = await importAudioFolder(authSession.userId, uploadFiles, accessToken, (snapshot) => {
+        updateAudioImportProgress(snapshot, audioImportPreflight.totalUploadBytes);
+      });
       setAudioImportReport(report);
       setAudioImportPreflight(null);
+      setAudioImportProgress(null);
       try {
         await refreshAudioFiles({ silent: true });
         await refreshLibrary({ keepExistingOnError: true });
@@ -1643,11 +1669,42 @@ function App() {
       const message = error instanceof Error ? error.message : "上传导入失败";
       setAudioImportReport(buildAudioImportFailureReport(uploadFiles, message));
       setAudioImportPreflight(null);
+      setAudioImportProgress(null);
       setAudioFilesMessage("上传失败，请查看结果报告");
       showToast(message);
     } finally {
       setIsAudioImporting(false);
     }
+  }
+
+  function beginAudioImportProgress(totalBytes: number) {
+    const now = Date.now();
+    audioImportProgressLastPaintAtRef.current = now;
+    audioImportProgressPreviousRef.current = { uploadedBytes: 0, capturedAt: now };
+    setAudioImportProgress({
+      uploadedBytes: 0,
+      totalBytes,
+      speedBytesPerSecond: 0
+    });
+  }
+
+  function updateAudioImportProgress(snapshot: UploadProgressSnapshot, fallbackTotalBytes: number) {
+    const now = Date.now();
+    const totalBytes = Math.max(snapshot.totalBytes ?? fallbackTotalBytes, snapshot.loadedBytes, 0);
+    const isComplete = totalBytes > 0 && snapshot.loadedBytes >= totalBytes;
+    if (!isComplete && now - audioImportProgressLastPaintAtRef.current < 200) {
+      return;
+    }
+    const previous = audioImportProgressPreviousRef.current;
+    const deltaBytes = previous ? Math.max(0, snapshot.loadedBytes - previous.uploadedBytes) : 0;
+    const deltaSeconds = previous ? Math.max((now - previous.capturedAt) / 1000, 0.1) : 0.1;
+    audioImportProgressLastPaintAtRef.current = now;
+    audioImportProgressPreviousRef.current = { uploadedBytes: snapshot.loadedBytes, capturedAt: now };
+    setAudioImportProgress({
+      uploadedBytes: snapshot.loadedBytes,
+      totalBytes,
+      speedBytesPerSecond: deltaBytes / deltaSeconds
+    });
   }
 
   function openAudioFileMenu(track: Track, clientX: number, clientY: number) {
@@ -2876,6 +2933,7 @@ function App() {
             audioFilesMessage={audioFilesMessage}
             audioImportReport={audioImportReport}
             audioImportPreflight={audioImportPreflight}
+            audioImportProgress={audioImportProgress}
             isAudioFilesLoading={isAudioFilesLoading}
             isAudioImporting={isAudioImporting}
             audioFileMenu={audioFileMenu}
@@ -3666,8 +3724,7 @@ function buildAudioImportFailureReport(files: File[], reason: string): AudioFile
   };
 }
 
-async function buildAudioImportPreflight(files: File[], serverFiles: Track[], limits: AudioFileImportLimits): Promise<AudioImportPreflightReport> {
-  const serverKeys = buildServerAudioKeySet(serverFiles);
+async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAudioFile[], limits: AudioFileImportLimits): Promise<AudioImportPreflightReport> {
   const items: AudioImportPreflightItem[] = [];
   const uploadFiles: File[] = [];
   const readyAudioByBase = new Map<string, boolean>();
@@ -3732,8 +3789,8 @@ async function buildAudioImportPreflight(files: File[], serverFiles: Track[], li
 
     const targetFilename = buildServerTargetFilenameForUpload(nameParts);
     const targetBaseKey = normalizeImportBase(targetFilename);
-    const identityKey = normalizeAudioIdentity(nameParts.artist, nameParts.title);
-    if (serverKeys.has(identityKey) || serverKeys.has(targetBaseKey)) {
+    const duplicate = findServerAudioDuplicate(serverAudioSet, relativePath);
+    if (duplicate) {
       duplicateCount += 1;
       audioStatusByBase.set(baseKey, "duplicate");
       audioStatusByBase.set(targetBaseKey, "duplicate");
@@ -3742,7 +3799,7 @@ async function buildAudioImportPreflight(files: File[], serverFiles: Track[], li
         displayName,
         kind: "audio",
         status: "duplicate",
-        reason: `预处理后为 ${targetFilename}，服务器已存在`,
+        reason: `服务器已存在 ${duplicate.artist}-${duplicate.title}.${duplicate.extension}，已跳过`,
         sizeBytes: file.size,
         targetFilename
       });
@@ -3851,14 +3908,35 @@ async function buildAudioImportPreflight(files: File[], serverFiles: Track[], li
   };
 }
 
-function buildServerAudioKeySet(tracks: Track[]) {
-  const keys = new Set<string>();
-  for (const track of tracks) {
-    keys.add(normalizeAudioIdentity(track.artist, track.title));
-    keys.add(normalizeImportBase(track.filename));
-    keys.add(normalizeImportBase(track.relative_path || track.filename));
+function buildServerAudioSetFromTracks(tracks: Track[], providedSet?: ServerAudioFile[]) {
+  if (providedSet?.length) {
+    return providedSet;
   }
-  return keys;
+
+  const entries: ServerAudioFile[] = [];
+  for (const track of tracks) {
+    const filename = getDisplayFilename(track.filename || track.relative_path);
+    const extension = normalizeAudioExtension(getFileExtension(filename) || track.format);
+    if (!filename || !extension) {
+      continue;
+    }
+
+    const nameParts = tagsFromUploadFilename(filename);
+    const artist = firstUploadText(nameParts.artist, track.artist);
+    const title = firstUploadText(nameParts.title, track.title);
+    if (!artist || !title) {
+      continue;
+    }
+
+    entries.push({
+      filename,
+      filename_hash: "",
+      artist,
+      title,
+      extension
+    });
+  }
+  return entries;
 }
 
 async function readStandardUploadAudioNameParts(file: File): Promise<UploadAudioNameParts | null> {
@@ -3871,6 +3949,47 @@ async function readStandardUploadAudioNameParts(file: File): Promise<UploadAudio
     return null;
   }
   return { artist, title };
+}
+
+function findServerAudioDuplicate(serverAudioSet: ServerAudioFile[], uploadRelativePath: string) {
+  const uploadFilename = getDisplayFilename(uploadRelativePath);
+  const normalizedUploadName = normalizeAudioImportComparisonText(uploadFilename);
+  const uploadExtension = normalizeAudioExtension(getFileExtension(uploadFilename));
+  const uploadIsLossless = isLosslessAudioExtension(uploadExtension);
+
+  for (const serverAudio of serverAudioSet) {
+    const artist = normalizeAudioImportComparisonText(serverAudio.artist);
+    const title = normalizeAudioImportComparisonText(serverAudio.title);
+    if (!artist || !title) {
+      continue;
+    }
+    if (!normalizedUploadName.includes(artist) || !normalizedUploadName.includes(title)) {
+      continue;
+    }
+
+    const serverExtension = normalizeAudioExtension(serverAudio.extension);
+    if (!serverExtension || uploadExtension === serverExtension) {
+      return serverAudio;
+    }
+    if (!isLosslessAudioExtension(serverExtension) && uploadIsLossless) {
+      continue;
+    }
+    return serverAudio;
+  }
+
+  return null;
+}
+
+function normalizeAudioImportComparisonText(value: string) {
+  return value.trim().toLowerCase().replace(/[.\-—–_\s]+/g, "");
+}
+
+function normalizeAudioExtension(value: string) {
+  return value.trim().toLowerCase().replace(/^\./, "");
+}
+
+function isLosslessAudioExtension(extension: string) {
+  return supportedAudioFileExtensions.has(`.${normalizeAudioExtension(extension)}`);
 }
 
 function tagsFromUploadFilename(relativePath: string): UploadAudioTags {
@@ -4161,10 +4280,6 @@ function bytesToAscii(data: Uint8Array) {
   return Array.from(data, (value) => String.fromCharCode(value)).join("");
 }
 
-function normalizeAudioIdentity(artist: string, title: string) {
-  return normalizeAudioText(`${title}-${artist}`);
-}
-
 function normalizeImportBase(path: string) {
   return normalizeAudioText(getDisplayFilename(path).replace(/\.[^.]*$/, ""));
 }
@@ -4198,6 +4313,104 @@ function getAudioPreflightStatusLabel(status: AudioImportPreflightStatus) {
       return "错误";
     case "ignored":
       return "忽略";
+  }
+}
+
+function getAudioPreflightFilterOptions(report: AudioImportPreflightReport): Array<{ id: AudioImportPreflightFilter; label: string; count: number; className: string }> {
+  return [
+    { id: "readyAudio", label: "可上传", count: report.readyAudioCount, className: "ready" },
+    { id: "readyLyrics", label: "歌词", count: report.readyLyricCount, className: "lyrics" },
+    { id: "duplicate", label: "重叠", count: report.duplicateCount, className: "duplicate" },
+    { id: "error", label: "错误", count: report.errorCount, className: "error" },
+    { id: "ignored", label: "忽略", count: report.ignoredCount, className: "ignored" }
+  ];
+}
+
+function filterAudioPreflightItems(items: AudioImportPreflightItem[], filter: AudioImportPreflightFilter) {
+  return items.filter((item) => {
+    switch (filter) {
+      case "readyAudio":
+        return item.status === "ready" && item.kind === "audio";
+      case "readyLyrics":
+        return item.status === "ready" && item.kind === "lyrics";
+      case "duplicate":
+      case "error":
+      case "ignored":
+        return item.status === filter;
+      default:
+        return false;
+    }
+  });
+}
+
+function getAudioPreflightEmptyMessage(filter: AudioImportPreflightFilter) {
+  switch (filter) {
+    case "readyAudio":
+      return "没有可上传歌曲";
+    case "readyLyrics":
+      return "没有匹配歌词";
+    case "duplicate":
+      return "没有重叠项目";
+    case "error":
+      return "没有错误项目";
+    case "ignored":
+      return "没有忽略项目";
+    default:
+      return "没有项目";
+  }
+}
+
+function getAudioPreflightUploadSummary(report: AudioImportPreflightReport) {
+  if (report.readyAudioCount <= 0) {
+    return report.readyLyricCount > 0 ? `将上传歌词 ${report.readyLyricCount} 个` : "没有可上传歌曲";
+  }
+  if (report.readyLyricCount <= 0) {
+    return `将上传 ${report.readyAudioCount} 首歌曲`;
+  }
+  return `将上传 ${report.readyAudioCount} 首歌曲 + ${report.readyLyricCount} 个歌词`;
+}
+
+function getAudioImportResultFilterOptions(report: AudioFileImportReport): Array<{ id: AudioImportResultFilter; label: string; count: number; className: string }> {
+  const importedAudioCount = filterAudioImportResultItems(report.items, "importedAudio").length;
+  const importedLyricsCount = filterAudioImportResultItems(report.items, "importedLyrics").length;
+  const skippedCount = filterAudioImportResultItems(report.items, "skipped").length;
+  const failedCount = filterAudioImportResultItems(report.items, "failed").length;
+  return [
+    { id: "importedAudio", label: "歌曲成功", count: importedAudioCount, className: "imported" },
+    { id: "importedLyrics", label: "歌词成功", count: importedLyricsCount, className: "lyrics" },
+    { id: "skipped", label: "跳过", count: skippedCount, className: "skipped" },
+    { id: "failed", label: "失败", count: failedCount, className: "failed" }
+  ];
+}
+
+function filterAudioImportResultItems(items: AudioFileImportItemResult[], filter: AudioImportResultFilter) {
+  return items.filter((item) => {
+    switch (filter) {
+      case "importedAudio":
+        return item.status === "imported" && getAudioImportResultKindLabel(item) === "音频";
+      case "importedLyrics":
+        return item.status === "imported" && getAudioImportResultKindLabel(item) === "歌词";
+      case "skipped":
+      case "failed":
+        return item.status === filter;
+      default:
+        return false;
+    }
+  });
+}
+
+function getAudioImportResultEmptyMessage(filter: AudioImportResultFilter) {
+  switch (filter) {
+    case "importedAudio":
+      return "没有成功导入的歌曲";
+    case "importedLyrics":
+      return "没有成功导入的歌词";
+    case "skipped":
+      return "没有跳过项目";
+    case "failed":
+      return "没有失败项目";
+    default:
+      return "没有逐项明细";
   }
 }
 
@@ -4284,6 +4497,7 @@ function EmptyPage({
   audioFilesMessage,
   audioImportReport,
   audioImportPreflight,
+  audioImportProgress,
   isAudioFilesLoading,
   isAudioImporting,
   audioFileMenu,
@@ -4322,6 +4536,7 @@ function EmptyPage({
   audioFilesMessage: string;
   audioImportReport: AudioFileImportReport | null;
   audioImportPreflight: AudioImportPreflightReport | null;
+  audioImportProgress: AudioImportProgress | null;
   isAudioFilesLoading: boolean;
   isAudioImporting: boolean;
   audioFileMenu: AudioFileContextMenu | null;
@@ -4366,6 +4581,7 @@ function EmptyPage({
             message={audioFilesMessage}
             report={audioImportReport}
             preflight={audioImportPreflight}
+            progress={audioImportProgress}
             isLoading={isAudioFilesLoading}
             isImporting={isAudioImporting}
             menu={audioFileMenu}
@@ -4433,6 +4649,7 @@ function AudioFileManagerPage({
   message,
   report,
   preflight,
+  progress,
   isLoading,
   isImporting,
   menu,
@@ -4461,6 +4678,7 @@ function AudioFileManagerPage({
   message: string;
   report: AudioFileImportReport | null;
   preflight: AudioImportPreflightReport | null;
+  progress: AudioImportProgress | null;
   isLoading: boolean;
   isImporting: boolean;
   menu: AudioFileContextMenu | null;
@@ -4526,6 +4744,7 @@ function AudioFileManagerPage({
       {preflight ? (
         <AudioImportPreflightDialog
           report={preflight}
+          progress={progress}
           isImporting={isImporting}
           onCancel={onClosePreflight}
           onConfirm={onConfirmPreflight}
@@ -4647,61 +4866,97 @@ function AudioFileManagerPage({
 
 function AudioImportPreflightDialog({
   report,
+  progress,
   isImporting,
   onCancel,
   onConfirm
 }: {
   report: AudioImportPreflightReport;
+  progress: AudioImportProgress | null;
   isImporting: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const canUpload = report.files.length > 0 && !report.blockingMessage && !isImporting;
+  const activeProgress = isImporting ? progress : null;
+  const [activeFilter, setActiveFilter] = useState<AudioImportPreflightFilter>("readyAudio");
+  const filterOptions = getAudioPreflightFilterOptions(report);
+  const visibleItems = filterAudioPreflightItems(report.items, activeFilter);
 
   return (
-    <div className="search-dialog-backdrop audio-preflight-backdrop" role="presentation" onClick={onCancel}>
+    <div className="search-dialog-backdrop audio-preflight-backdrop" role="presentation" onClick={isImporting ? undefined : onCancel}>
       <div className="search-dialog audio-preflight-dialog" role="dialog" aria-modal="true" aria-label="上传前检查报告" onClick={(event) => event.stopPropagation()}>
         <h2>上传前检查</h2>
         <div className="audio-preflight-summary" role="status">
-          <span className="ready">可上传 {report.readyAudioCount} 首</span>
-          <span className="lyrics">歌词 {report.readyLyricCount}</span>
-          <span className="duplicate">重叠 {report.duplicateCount}</span>
-          <span className="error">错误 {report.errorCount}</span>
-          <span className="ignored">忽略 {report.ignoredCount}</span>
+          {filterOptions.map((option) => (
+            <button
+              key={option.id}
+              className={`audio-preflight-filter-button ${option.className}${activeFilter === option.id ? " active" : ""}`}
+              type="button"
+              aria-pressed={activeFilter === option.id}
+              onClick={() => setActiveFilter(option.id)}
+            >
+              {option.label} {option.count}
+            </button>
+          ))}
         </div>
         <p className="audio-preflight-note">
           确认后只上传可导入音频和匹配歌词；重叠、错误和忽略项不会上传。
         </p>
         {report.blockingMessage ? <div className="audio-preflight-blocking">{report.blockingMessage}</div> : null}
         <div className="audio-preflight-list" role="list">
-          {report.items.map((item, index) => (
-            <div key={`${item.relativePath}-${index}`} className={`audio-preflight-item ${item.status}`} role="listitem">
-              <div className="audio-preflight-item-main">
-                <span className="audio-preflight-item-name" title={item.relativePath}>
-                  {item.displayName}
-                </span>
-                <span className="audio-preflight-item-reason">{item.reason}</span>
+          {visibleItems.length > 0 ? (
+            visibleItems.map((item, index) => (
+              <div key={`${item.relativePath}-${index}`} className={`audio-preflight-item ${item.status}`} role="listitem">
+                <div className="audio-preflight-item-main">
+                  <span className="audio-preflight-item-name" title={item.relativePath}>
+                    {item.displayName}
+                  </span>
+                  <span className="audio-preflight-item-reason">{item.reason}</span>
+                </div>
+                <div className="audio-preflight-item-meta">
+                  <span>{getAudioPreflightKindLabel(item.kind)}</span>
+                  <span>{formatBytes(item.sizeBytes)}</span>
+                  <strong>{getAudioPreflightStatusLabel(item.status)}</strong>
+                </div>
               </div>
-              <div className="audio-preflight-item-meta">
-                <span>{getAudioPreflightKindLabel(item.kind)}</span>
-                <span>{formatBytes(item.sizeBytes)}</span>
-                <strong>{getAudioPreflightStatusLabel(item.status)}</strong>
-              </div>
+            ))
+          ) : (
+            <div className="audio-preflight-empty" role="listitem">
+              {getAudioPreflightEmptyMessage(activeFilter)}
             </div>
-          ))}
+          )}
         </div>
         <div className="audio-preflight-total">
-          <span>将上传 {report.uploadFileCount} 个文件</span>
+          <span>{getAudioPreflightUploadSummary(report)}</span>
           <span>{formatBytes(report.totalUploadBytes)}</span>
         </div>
+        {activeProgress ? <AudioUploadProgressPanel progress={activeProgress} /> : null}
         <div className="search-actions">
-          <button type="button" onClick={onCancel}>
+          <button type="button" disabled={isImporting} onClick={onCancel}>
             取消
           </button>
           <button className="primary" type="button" disabled={!canUpload} onClick={onConfirm}>
             {isImporting ? "上传中" : "确认上传"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AudioUploadProgressPanel({ progress }: { progress: AudioImportProgress }) {
+  const progressPercent = progress.totalBytes > 0 ? Math.min(100, Math.max(0, (progress.uploadedBytes / progress.totalBytes) * 100)) : 0;
+
+  return (
+    <div className="audio-upload-progress" role="status" aria-live="polite">
+      <div className="audio-upload-progress-bar" aria-hidden="true">
+        <span style={{ width: `${progressPercent}%` }} />
+      </div>
+      <div className="audio-upload-progress-meta">
+        <span>{formatBytes(progress.uploadedBytes)} / {formatBytes(progress.totalBytes)}</span>
+        <strong>{progressPercent.toFixed(progressPercent >= 10 ? 0 : 1)}%</strong>
+        <span>{formatBytes(progress.speedBytesPerSecond)}/s</span>
       </div>
     </div>
   );
@@ -4715,21 +4970,28 @@ function AudioImportResultDialog({
   onClose: () => void;
 }) {
   const totalItems = report.items.length;
-  const lyricsImported = report.lyrics_imported ?? 0;
   const lyricsSkipped = report.lyrics_skipped ?? 0;
   const lyricsFailed = report.lyrics_failed ?? 0;
+  const [activeFilter, setActiveFilter] = useState<AudioImportResultFilter>("importedAudio");
+  const filterOptions = getAudioImportResultFilterOptions(report);
+  const visibleItems = filterAudioImportResultItems(report.items, activeFilter);
 
   return (
     <div className="search-dialog-backdrop audio-result-backdrop" role="presentation" onClick={onClose}>
       <div className="search-dialog audio-preflight-dialog audio-result-dialog" role="dialog" aria-modal="true" aria-label="上传结果报告" onClick={(event) => event.stopPropagation()}>
         <h2>上传结果报告</h2>
         <div className="audio-preflight-summary audio-result-summary" role="status">
-          <span className="imported">歌曲成功 {report.imported}</span>
-          <span className="imported">歌词成功 {lyricsImported}</span>
-          <span className="converted">转码 {report.converted}</span>
-          <span className="skipped">跳过 {report.skipped}</span>
-          <span className="failed">失败 {report.failed}</span>
-          <span className="detail">明细 {totalItems}</span>
+          {filterOptions.map((option) => (
+            <button
+              key={option.id}
+              className={`audio-preflight-filter-button ${option.className}${activeFilter === option.id ? " active" : ""}`}
+              type="button"
+              aria-pressed={activeFilter === option.id}
+              onClick={() => setActiveFilter(option.id)}
+            >
+              {option.label} {option.count}
+            </button>
+          ))}
         </div>
         <p className="audio-preflight-note">
           这是服务器最终处理结果；失败和跳过项会在下方显示具体原因。
@@ -4740,8 +5002,8 @@ function AudioImportResultDialog({
           </div>
         ) : null}
         <div className="audio-preflight-list audio-result-list" role="list">
-          {report.items.length ? (
-            report.items.map((item, index) => (
+          {visibleItems.length ? (
+            visibleItems.map((item, index) => (
               <div key={`${item.relative_path}-${index}`} className={`audio-preflight-item audio-result-item ${item.status}`} role="listitem">
                 <div className="audio-preflight-item-main">
                   <span className="audio-preflight-item-name" title={item.relative_path}>
@@ -4757,11 +5019,12 @@ function AudioImportResultDialog({
               </div>
             ))
           ) : (
-            <div className="audio-result-empty">没有逐项明细</div>
+            <div className="audio-result-empty">{getAudioImportResultEmptyMessage(activeFilter)}</div>
           )}
         </div>
         <div className="audio-preflight-total audio-result-total">
           <span>处理 {totalItems} 个文件</span>
+          <span>转码 {report.converted}</span>
           <span>歌词跳过 {lyricsSkipped}</span>
           <span>{report.failed || lyricsFailed ? "存在失败项" : "无失败项"}</span>
         </div>
