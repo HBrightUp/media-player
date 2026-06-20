@@ -11,7 +11,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/media-player-server ./cmd/server
 
 FROM alpine:3.22
 
-RUN adduser -D -H app && mkdir -p /music /config && chown -R app:app /music /config
+RUN apk add --no-cache ffmpeg \
+	&& adduser -D -H app \
+	&& mkdir -p /music /config \
+	&& chown -R app:app /music /config
 
 WORKDIR /app
 
