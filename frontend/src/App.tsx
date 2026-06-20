@@ -2802,30 +2802,13 @@ function App() {
   const canSortMusicColumns = activeTab === "音乐列表";
   const canShowTrackStatus = activeTab === "音乐列表" || activeTab === "收藏" || activeTab === "分类";
   const statusCategory = activeTab === "分类" ? activeCategory : null;
-  const currentTrackLabel = currentTrack ? `${currentTrack.artist} - ${currentTrack.title}` : "";
 
   return (
     <main className="player-screen" aria-label="MediaPlayer">
       <div className="top-line" />
-      {activePage !== "music" && currentTrackLabel ? (
-        <div className="now-playing-ticker" aria-label={`当前正在播放：${currentTrackLabel}`} aria-live="polite">
-          <div className="now-playing-ticker-track">
-            <span>{currentTrackLabel}</span>
-            <span aria-hidden="true">{currentTrackLabel}</span>
-          </div>
-        </div>
-      ) : null}
       <section className="app-page-area" aria-label="当前页面">
         {activePage === "music" ? (
           <section className="music-page" aria-label="音乐">
-            {currentTrackLabel ? (
-              <div className="now-playing-ticker" aria-label={`当前正在播放：${currentTrackLabel}`} aria-live="polite">
-                <div className="now-playing-ticker-track">
-                  <span>{currentTrackLabel}</span>
-                  <span aria-hidden="true">{currentTrackLabel}</span>
-                </div>
-              </div>
-            ) : null}
             <nav className="mode-tabs" aria-label="播放器视图">
               <button
                 className={activeTab === "音乐列表" ? "active" : ""}
@@ -3632,15 +3615,29 @@ function FullLyricsPage({
   const initialSyncedLineIndexRef = useRef<number | null>(null);
   const ignoreScrollRef = useRef(false);
   const ignoreScrollTimerRef = useRef<number | null>(null);
+  const followResumeTimerRef = useRef<number | null>(null);
   const userScrollPausedUntilRef = useRef(0);
+  const [isUserBrowsingLyrics, setIsUserBrowsingLyrics] = useState(false);
 
   useEffect(() => {
     return () => {
       if (ignoreScrollTimerRef.current) {
         window.clearTimeout(ignoreScrollTimerRef.current);
       }
+      if (followResumeTimerRef.current) {
+        window.clearTimeout(followResumeTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    userScrollPausedUntilRef.current = 0;
+    setIsUserBrowsingLyrics(false);
+    if (followResumeTimerRef.current) {
+      window.clearTimeout(followResumeTimerRef.current);
+      followResumeTimerRef.current = null;
+    }
+  }, [currentTrack?.id]);
 
   useLayoutEffect(() => {
     initialSyncedLineIndexRef.current = null;
@@ -3691,6 +3688,17 @@ function FullLyricsPage({
     });
   }, [activeLineIndex, currentTrack?.id]);
 
+  function syncActiveLyricIntoView(behavior: ScrollBehavior) {
+    if (!currentTrack || activeLineIndex < 0 || !activeLineRef.current) {
+      return;
+    }
+    markProgrammaticLyricsScroll(behavior === "smooth" ? 900 : 120);
+    activeLineRef.current.scrollIntoView({
+      block: "center",
+      behavior
+    });
+  }
+
   function markProgrammaticLyricsScroll(delayMs: number) {
     ignoreScrollRef.current = true;
     if (ignoreScrollTimerRef.current) {
@@ -3708,7 +3716,17 @@ function FullLyricsPage({
     }
     onScrollPositionChange(currentTrack.id, top, activeLineIndex);
     if (!ignoreScrollRef.current) {
-      userScrollPausedUntilRef.current = Date.now() + 6000;
+      userScrollPausedUntilRef.current = Date.now() + 4800;
+      setIsUserBrowsingLyrics(true);
+      if (followResumeTimerRef.current) {
+        window.clearTimeout(followResumeTimerRef.current);
+      }
+      followResumeTimerRef.current = window.setTimeout(() => {
+        followResumeTimerRef.current = null;
+        userScrollPausedUntilRef.current = 0;
+        setIsUserBrowsingLyrics(false);
+        syncActiveLyricIntoView(shouldReduceMotion() ? "auto" : "smooth");
+      }, 4800);
     }
   }
 
@@ -3723,32 +3741,38 @@ function FullLyricsPage({
     content = <div className="full-lyrics-empty">暂无歌词</div>;
   } else {
     content = (
-      <div className="full-lyrics-list" aria-label="完整歌词" ref={lyricsListRef} onScroll={(event) => handleLyricsScroll(event.currentTarget.scrollTop)}>
-        {lines.map((line, index) => (
-          <p
-            key={`${index}-${line.text}`}
-            ref={index === activeLineIndex ? activeLineRef : undefined}
-            className={index === activeLineIndex ? "active" : ""}
-          >
-            {line.text}
-          </p>
-        ))}
+      <div
+        className={`full-lyrics-list ${isUserBrowsingLyrics ? "is-user-browsing" : ""}`}
+        aria-label="完整歌词"
+        ref={lyricsListRef}
+        onScroll={(event) => handleLyricsScroll(event.currentTarget.scrollTop)}
+      >
+        {lines.map((line, index) => {
+          const distance = activeLineIndex >= 0 ? Math.abs(index - activeLineIndex) : 0;
+          const lineClassName = [
+            index === activeLineIndex ? "active" : "",
+            distance === 1 ? "near" : "",
+            distance > 4 ? "far" : "",
+            index < activeLineIndex ? "past" : ""
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return (
+            <p
+              key={`${index}-${line.text}`}
+              ref={index === activeLineIndex ? activeLineRef : undefined}
+              className={lineClassName}
+            >
+              {line.text}
+            </p>
+          );
+        })}
       </div>
     );
   }
 
   return (
     <section className="lyrics-page" aria-label="歌词">
-      <header className="lyrics-page-header">
-        <div className="lyrics-track-meta">
-          <strong>{currentTrack?.title ?? "未选择歌曲"}</strong>
-          <span>{currentTrack ? currentTrack.artist : "--"}</span>
-        </div>
-        <div className="lyrics-page-time">
-          <span>{formatDuration(currentTime)}</span>
-          <span>{formatDuration(duration)}</span>
-        </div>
-      </header>
       <section className="lyrics-page-body" aria-live="polite">
         {content}
       </section>

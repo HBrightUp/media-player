@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -35,6 +36,7 @@ var supportedAudioFormats = map[string]bool{
 type Scanner struct {
 	store      *database.Store
 	lyricsRoot string
+	mu         sync.Mutex
 }
 
 type tags struct {
@@ -66,6 +68,9 @@ func (s *Scanner) ScanMP3(ctx context.Context, root string) (models.ScanResult, 
 }
 
 func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[string]bool) (models.ScanResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return models.ScanResult{}, fmt.Errorf("resolve music directory: %w", err)
@@ -81,10 +86,14 @@ func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[stri
 
 	result := models.ScanResult{RootPath: absRoot}
 	seenPaths := make([]string, 0)
+	traversalIncomplete := false
 
 	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			recordScanError(&result, path, walkErr)
+			if entry == nil || entry.IsDir() {
+				traversalIncomplete = true
+			}
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -120,6 +129,9 @@ func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[stri
 	})
 	if err != nil {
 		return result, err
+	}
+	if traversalIncomplete {
+		return result, nil
 	}
 	if err := s.store.DeleteTracksExceptPaths(ctx, seenPaths); err != nil {
 		return result, fmt.Errorf("remove missing tracks: %w", err)

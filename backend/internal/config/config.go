@@ -5,23 +5,30 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	Addr            string
-	DatabaseURL     string
-	CORSOrigin      string
-	MusicDirectory  string
-	LyricsDirectory string
-	ConfigPath      string
+	Addr                     string
+	DatabaseURL              string
+	CORSOrigin               string
+	MusicDirectory           string
+	LyricsDirectory          string
+	LibraryAutoScanInterval  time.Duration
+	LibraryWatchPollInterval time.Duration
+	LibraryWatchDebounce     time.Duration
+	ConfigPath               string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:        getenv("SERVER_ADDR", ":8080"),
-		DatabaseURL: getenv("DATABASE_URL", "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"),
-		CORSOrigin:  getenv("CORS_ORIGIN", "http://localhost:5173"),
+		Addr:                     getenv("SERVER_ADDR", ":8080"),
+		DatabaseURL:              getenv("DATABASE_URL", "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"),
+		CORSOrigin:               getenv("CORS_ORIGIN", "http://localhost:5173"),
+		LibraryWatchPollInterval: time.Minute,
+		LibraryWatchDebounce:     30 * time.Second,
 	}
 
 	values, path, err := loadYAMLValues()
@@ -29,13 +36,36 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.ConfigPath = path
-	applyYAML(&cfg, values)
+	if err := applyYAML(&cfg, values); err != nil {
+		return Config{}, err
+	}
 
 	cfg.Addr = getenv("SERVER_ADDR", cfg.Addr)
 	cfg.DatabaseURL = getenv("DATABASE_URL", cfg.DatabaseURL)
 	cfg.CORSOrigin = getenv("CORS_ORIGIN", cfg.CORSOrigin)
 	cfg.MusicDirectory = getenv("MUSIC_DIRECTORY", cfg.MusicDirectory)
 	cfg.LyricsDirectory = getenv("LYRICS_DIRECTORY", cfg.LyricsDirectory)
+	if value := strings.TrimSpace(os.Getenv("LIBRARY_AUTO_SCAN_INTERVAL")); value != "" {
+		interval, err := parseDurationValue(value)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.LibraryAutoScanInterval = interval
+	}
+	if value := strings.TrimSpace(os.Getenv("LIBRARY_WATCH_POLL_INTERVAL")); value != "" {
+		interval, err := parseDurationValue(value)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.LibraryWatchPollInterval = interval
+	}
+	if value := strings.TrimSpace(os.Getenv("LIBRARY_WATCH_DEBOUNCE")); value != "" {
+		interval, err := parseDurationValue(value)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.LibraryWatchDebounce = interval
+	}
 	return cfg, nil
 }
 
@@ -140,7 +170,7 @@ func normalizeKey(key string) string {
 	return key
 }
 
-func applyYAML(cfg *Config, values map[string]string) {
+func applyYAML(cfg *Config, values map[string]string) error {
 	for key, value := range values {
 		if value == "" {
 			continue
@@ -156,6 +186,46 @@ func applyYAML(cfg *Config, values map[string]string) {
 			cfg.MusicDirectory = value
 		case "lyrics_directory", "library.lyrics_directory":
 			cfg.LyricsDirectory = value
+		case "library.auto_scan_interval", "auto_scan_interval":
+			interval, err := parseDurationValue(value)
+			if err != nil {
+				return err
+			}
+			cfg.LibraryAutoScanInterval = interval
+		case "library.watch_poll_interval", "watch_poll_interval":
+			interval, err := parseDurationValue(value)
+			if err != nil {
+				return err
+			}
+			cfg.LibraryWatchPollInterval = interval
+		case "library.watch_debounce", "watch_debounce":
+			interval, err := parseDurationValue(value)
+			if err != nil {
+				return err
+			}
+			cfg.LibraryWatchDebounce = interval
 		}
 	}
+	return nil
+}
+
+func parseDurationValue(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" {
+		return 0, nil
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			return 0, errors.New("duration must not be negative")
+		}
+		return time.Duration(seconds) * time.Second, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if duration < 0 {
+		return 0, errors.New("duration must not be negative")
+	}
+	return duration, nil
 }

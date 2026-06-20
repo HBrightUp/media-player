@@ -8,6 +8,7 @@
 
 - 通过 `config.yaml` 设置服务端可访问的默认音乐文件夹目录
 - 后端启动时递归扫描目录下的常见音频文件，包括 `mp3`、`flac`、`m4a`、`wav` 等
+- 后端检测音乐/歌词目录变化，变化后防抖触发音乐库扫描
 - 保存歌曲文件信息到 Postgres
 - 读取音频文件的基础标签信息：标题、歌手、专辑
 - 支持独立 `.lrc` 歌词目录，播放时按歌曲 ID 加载并同步显示歌词
@@ -30,6 +31,8 @@ docker compose -f deployments/local/compose.yaml up -d
 library:
   music_directory: "/Users/you/Music"
   lyrics_directory: "/Users/you/MusicLyrics"
+  watch_poll_interval: "1m"
+  watch_debounce: "30s"
 ```
 
 3. 启动后端：
@@ -46,7 +49,7 @@ DATABASE_URL='postgres://media_player:media_player@127.0.0.1:15432/media_player?
 /Users/you/MusicLyrics/陈奕迅/爱情转移.lrc
 ```
 
-后端会在启动时扫描音乐目录下的音频文件，并把找到的歌词写入独立的 `track_lyrics` 表。
+后端会在启动时扫描音乐目录下的音频文件，并把找到的歌词写入独立的 `track_lyrics` 表。启动后默认每 1 分钟检测一次音乐/歌词目录变化，发现变化后等待 30 秒安静期再扫描，避免大文件复制或批量上传时反复扫描。需要关闭目录变化检测时可设置 `LIBRARY_WATCH_POLL_INTERVAL=0`；自动全量扫描是可选兜底能力，默认关闭，需要时可设置 `LIBRARY_AUTO_SCAN_INTERVAL=30m`。
 
 4. 启动前端：
 

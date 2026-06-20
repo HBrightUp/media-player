@@ -16,8 +16,6 @@ import (
 	"github.com/hml/media-player/backend/internal/library"
 )
 
-const libraryAutoScanInterval = 15 * time.Second
-
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -42,7 +40,22 @@ func main() {
 	}
 	if cfg.MusicDirectory != "" {
 		saveAndScanLibrary(ctx, store, scanner, cfg.MusicDirectory, "startup")
-		startLibraryAutoScan(ctx, store, scanner, cfg.MusicDirectory, libraryAutoScanInterval)
+		if cfg.LibraryWatchPollInterval > 0 {
+			if err := library.StartLibraryWatcher(ctx, library.WatcherOptions{
+				MusicRoot:    cfg.MusicDirectory,
+				LyricsRoot:   cfg.LyricsDirectory,
+				PollInterval: cfg.LibraryWatchPollInterval,
+				Debounce:     cfg.LibraryWatchDebounce,
+				OnChange: func(scanCtx context.Context, reason string) {
+					saveAndScanLibrary(scanCtx, store, scanner, cfg.MusicDirectory, reason)
+				},
+			}); err != nil {
+				log.Printf("library watcher disabled: %v", err)
+			}
+		}
+		if cfg.LibraryAutoScanInterval > 0 {
+			startLibraryAutoScan(ctx, store, scanner, cfg.MusicDirectory, cfg.LibraryAutoScanInterval)
+		}
 	}
 
 	api := httpapi.New(store, scanner, cfg.CORSOrigin)
@@ -102,10 +115,8 @@ func saveAndScanLibrary(ctx context.Context, store *database.Store, scanner *lib
 		}
 		return
 	}
-	if result.Skipped > 0 {
-		log.Printf("%s audio scan complete with skipped files: root=%s found=%d skipped=%d", label, result.RootPath, result.Found, result.Skipped)
-		for _, scanErr := range result.Errors {
-			log.Printf("%s audio scan skipped: %s", label, scanErr)
-		}
+	log.Printf("%s audio scan complete: root=%s found=%d imported=%d skipped=%d", label, result.RootPath, result.Found, result.Imported, result.Skipped)
+	for _, scanErr := range result.Errors {
+		log.Printf("%s audio scan skipped: %s", label, scanErr)
 	}
 }

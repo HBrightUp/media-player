@@ -4,6 +4,11 @@ library:
   music_directory: "/Users/hml/Music"
   # 可选：歌词目录。支持按音乐目录的相对路径放置同名 .lrc 文件。
   lyrics_directory: "/Users/hml/MusicLyrics"
+  # 后端会检测音乐/歌词目录变化，变化后等待防抖时间再扫描。
+  watch_poll_interval: "1m"
+  watch_debounce: "30s"
+  # 可选自动全量扫描，默认 0 表示关闭。
+  auto_scan_interval: "0"
 
 server:
   addr: ":8080"

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,6 +38,8 @@ const (
 	passwordMaxLength        = 64
 	passwordHashRounds       = 100_000
 	passwordHashLength       = 32
+	loginMaxFails            = 8
+	loginLockout             = 2 * time.Minute
 	presenceTTL              = 75 * time.Second
 	manualTrackRefreshWindow = time.Minute
 	audioFileAccessTTL       = 5 * time.Minute
@@ -52,6 +55,7 @@ type Server struct {
 	scanner             *library.Scanner
 	corsOrigin          string
 	presence            *presenceTracker
+	loginFailures       *authFailureLimiter
 	trackRefreshLimiter *manualRefreshLimiter
 	audioFileAccess     *audioFileAccessManager
 }
@@ -113,6 +117,16 @@ type presenceTracker struct {
 	sessions map[string]presenceSession
 }
 
+type authFailureLimiter struct {
+	mu       sync.Mutex
+	failures map[string]authFailure
+}
+
+type authFailure struct {
+	Count       int
+	LockedUntil time.Time
+}
+
 type manualRefreshLimiter struct {
 	mu        sync.Mutex
 	lastByKey map[string]time.Time
@@ -142,6 +156,7 @@ func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Se
 		scanner:             scanner,
 		corsOrigin:          corsOrigin,
 		presence:            newPresenceTracker(),
+		loginFailures:       newAuthFailureLimiter(),
 		trackRefreshLimiter: newManualRefreshLimiter(),
 		audioFileAccess:     newAudioFileAccessManager(audioFileAccessTokenSize, audioFileAccessTTL),
 	}
@@ -207,8 +222,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	failureKey := authFailureKey(phone, clientAddress(r))
+	now := time.Now()
+	if remaining, locked := s.loginFailures.CheckLockout(failureKey, now); locked {
+		retryAfterSeconds := int((remaining + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("登录失败次数过多，请%d秒后再试", retryAfterSeconds))
+		return
+	}
 	user, err := s.store.GetUserByPhone(r.Context(), phone)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if s.recordLoginFailure(w, failureKey, now) {
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "手机号或密码不正确")
 		return
 	}
@@ -217,9 +243,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !verifyPassword(password, user.PasswordSalt, user.PasswordHash) {
+		if s.recordLoginFailure(w, failureKey, now) {
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "手机号或密码不正确")
 		return
 	}
+	s.loginFailures.Clear(failureKey)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": publicUser(user),
 	})
@@ -795,6 +825,42 @@ func normalizePresencePhone(phone string) string {
 	return normalized
 }
 
+func authFailureKey(phone, address string) string {
+	return phone + "|" + address
+}
+
+func clientAddress(r *http.Request) string {
+	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
+		value := strings.TrimSpace(r.Header.Get(header))
+		if value == "" {
+			continue
+		}
+		if header == "X-Forwarded-For" {
+			value, _, _ = strings.Cut(value, ",")
+			value = strings.TrimSpace(value)
+		}
+		if value != "" {
+			return value
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func (s *Server) recordLoginFailure(w http.ResponseWriter, failureKey string, now time.Time) bool {
+	remaining, _, locked := s.loginFailures.RecordFailure(failureKey, now, loginMaxFails, loginLockout)
+	if !locked {
+		return false
+	}
+	retryAfterSeconds := int((remaining + time.Second - 1) / time.Second)
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+	writeError(w, http.StatusTooManyRequests, fmt.Sprintf("登录失败次数过多，请%d秒后再试", retryAfterSeconds))
+	return true
+}
+
 func hashPassword(password string) (string, string, error) {
 	saltBytes := make([]byte, 16)
 	if _, err := rand.Read(saltBytes); err != nil {
@@ -855,6 +921,57 @@ func newPresenceTracker() *presenceTracker {
 	return &presenceTracker{
 		sessions: make(map[string]presenceSession),
 	}
+}
+
+func newAuthFailureLimiter() *authFailureLimiter {
+	return &authFailureLimiter{
+		failures: make(map[string]authFailure),
+	}
+}
+
+func (l *authFailureLimiter) CheckLockout(key string, now time.Time) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	state, ok := l.failures[key]
+	if !ok || state.LockedUntil.IsZero() {
+		return 0, false
+	}
+	if now.Before(state.LockedUntil) {
+		return state.LockedUntil.Sub(now), true
+	}
+	delete(l.failures, key)
+	return 0, false
+}
+
+func (l *authFailureLimiter) RecordFailure(key string, now time.Time, maxFailures int, lockout time.Duration) (time.Duration, int, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	state := l.failures[key]
+	if !state.LockedUntil.IsZero() && now.Before(state.LockedUntil) {
+		return state.LockedUntil.Sub(now), 0, true
+	}
+	if !state.LockedUntil.IsZero() && !now.Before(state.LockedUntil) {
+		state = authFailure{}
+	}
+
+	state.Count++
+	if state.Count >= maxFailures {
+		state.Count = 0
+		state.LockedUntil = now.Add(lockout)
+		l.failures[key] = state
+		return lockout, 0, true
+	}
+
+	l.failures[key] = state
+	return 0, maxFailures - state.Count, false
+}
+
+func (l *authFailureLimiter) Clear(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.failures, key)
 }
 
 func newManualRefreshLimiter() *manualRefreshLimiter {
