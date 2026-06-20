@@ -1452,6 +1452,13 @@ form.search-dialog .search-actions button {
   box-shadow: 0 10px 22px rgba(10, 132, 255, 0.18);
 }
 
+.audio-manager-search-button.is-active {
+  color: rgba(239, 251, 255, 0.96);
+  background: rgba(10, 132, 255, 0.28);
+  border-color: rgba(132, 208, 255, 0.42);
+  box-shadow: 0 8px 18px rgba(10, 132, 255, 0.14);
+}
+
 .audio-manager-limits,
 .audio-import-report {
   width: min(680px, 100%);
@@ -1979,6 +1986,10 @@ form.search-dialog.audio-file-dialog h2,
 form.search-dialog.audio-file-dialog .search-input {
   height: 36px;
   font-size: 13px;
+}
+
+.audio-file-search-dialog .search-input {
+  text-align: left;
 }
 
 form.search-dialog.audio-file-dialog .search-actions button,

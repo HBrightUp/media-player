@@ -4060,6 +4060,41 @@ function getFileExtension(filename: string) {
   return normalized.slice(dotIndex).toLowerCase();
 }
 
+function normalizeAudioFileSearchText(value: string) {
+  return value.trim().toLowerCase().replace(/[.\-—–_\s]+/g, "");
+}
+
+function getAudioFileSearchTokens(value: string) {
+  const compact = normalizeAudioFileSearchText(value);
+  if (!compact) {
+    return [];
+  }
+  const separatedTokens = value
+    .split(/[.\-—–_\s]+/g)
+    .map((token) => normalizeAudioFileSearchText(token))
+    .filter(Boolean);
+  const tokens = separatedTokens.length > 1 ? separatedTokens : [compact];
+  return Array.from(new Set(tokens));
+}
+
+function doesTrackMatchAudioFileSearch(track: Track, compactQuery: string, queryTokens: string[]) {
+  if (!compactQuery) {
+    return true;
+  }
+  const searchableText = [
+    track.title,
+    track.artist,
+    track.album,
+    track.filename,
+    track.relative_path,
+    track.format,
+    getFileExtension(track.filename)
+  ]
+    .map((value) => normalizeAudioFileSearchText(value ?? ""))
+    .join("");
+  return searchableText.includes(compactQuery) || queryTokens.every((token) => searchableText.includes(token));
+}
+
 function getUploadRelativePath(file: File) {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
 }
@@ -5123,6 +5158,46 @@ function AudioFileManagerPage({
   onConfirmDelete: () => void;
   onCloseMenu: () => void;
 }) {
+  const [isSearchDialogOpen, setIsSearchDialogOpen] = useState(false);
+  const [audioSearchDraft, setAudioSearchDraft] = useState("");
+  const [audioSearchQuery, setAudioSearchQuery] = useState("");
+  const compactAudioSearchQuery = normalizeAudioFileSearchText(audioSearchQuery);
+  const audioSearchTokens = useMemo(() => getAudioFileSearchTokens(audioSearchQuery), [audioSearchQuery]);
+  const hasAudioSearch = compactAudioSearchQuery.length > 0;
+  const visibleFiles = useMemo(() => {
+    if (!hasAudioSearch) {
+      return files;
+    }
+    return files.filter((track) => doesTrackMatchAudioFileSearch(track, compactAudioSearchQuery, audioSearchTokens));
+  }, [audioSearchTokens, compactAudioSearchQuery, files, hasAudioSearch]);
+  const audioFileCountLabel = hasAudioSearch
+    ? `搜索“${audioSearchQuery.trim()}”：${visibleFiles.length} / ${files.length} 个音频文件`
+    : files.length
+      ? `当前 ${files.length} 个音频文件`
+      : "管理服务器音乐目录中的无损音频";
+
+  function openAudioSearchDialog() {
+    setAudioSearchDraft(audioSearchQuery);
+    setIsSearchDialogOpen(true);
+  }
+
+  function closeAudioSearchDialog() {
+    setIsSearchDialogOpen(false);
+  }
+
+  function submitAudioSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAudioSearchQuery(audioSearchDraft.trim());
+    setIsSearchDialogOpen(false);
+  }
+
+  function refreshAndClearAudioSearch() {
+    setAudioSearchDraft("");
+    setAudioSearchQuery("");
+    setIsSearchDialogOpen(false);
+    onRefresh();
+  }
+
   return (
     <div className="profile-page-content audio-manager-page">
       <header className="audio-manager-header">
@@ -5131,7 +5206,7 @@ function AudioFileManagerPage({
         </button>
         <div className="audio-manager-heading">
           <h2>服务器音频文件管理</h2>
-          <p>{files.length ? `当前 ${files.length} 个音频文件` : "管理服务器音乐目录中的无损音频"}</p>
+          <p title={audioFileCountLabel}>{audioFileCountLabel}</p>
         </div>
       </header>
 
@@ -5150,8 +5225,18 @@ function AudioFileManagerPage({
         <button className="audio-manager-primary-button" type="button" disabled={isImporting} onClick={onChooseFolder}>
           {isImporting ? "导入中" : "选择文件夹"}
         </button>
-        <button className="audio-manager-secondary-button" type="button" disabled={isLoading || isImporting} onClick={onRefresh}>
+        <button className="audio-manager-secondary-button" type="button" disabled={isLoading || isImporting} onClick={refreshAndClearAudioSearch}>
           刷新
+        </button>
+        <button
+          className={`audio-manager-secondary-button audio-manager-search-button${hasAudioSearch ? " is-active" : ""}`}
+          type="button"
+          disabled={isImporting}
+          aria-haspopup="dialog"
+          aria-expanded={isSearchDialogOpen}
+          onClick={openAudioSearchDialog}
+        >
+          搜索
         </button>
       </div>
 
@@ -5182,7 +5267,7 @@ function AudioFileManagerPage({
           <span>操作</span>
         </div>
         <div className="audio-file-list-body">
-          {files.map((track) => (
+          {visibleFiles.map((track) => (
             <div
               key={track.id}
               className="audio-file-row"
@@ -5206,13 +5291,38 @@ function AudioFileManagerPage({
               </span>
             </div>
           ))}
-          {!files.length ? (
+          {!visibleFiles.length ? (
             <div className="audio-file-empty">
-              {isLoading ? "正在读取服务器文件" : "暂无服务器音频文件"}
+              {isLoading ? "正在读取服务器文件" : hasAudioSearch ? "未找到匹配的音频文件" : "暂无服务器音频文件"}
             </div>
           ) : null}
         </div>
       </section>
+
+      {isSearchDialogOpen ? (
+        <div className="search-dialog-backdrop" role="presentation" onClick={closeAudioSearchDialog}>
+          <form className="search-dialog audio-file-dialog audio-file-search-dialog" role="dialog" aria-modal="true" aria-label="搜索服务器音频文件" onClick={(event) => event.stopPropagation()} onSubmit={submitAudioSearch}>
+            <h2>搜索音频</h2>
+            <input
+              className="search-input"
+              type="search"
+              value={audioSearchDraft}
+              placeholder="歌曲、歌手或文件名"
+              aria-label="搜索服务器音频文件"
+              autoFocus
+              onChange={(event) => setAudioSearchDraft(event.target.value)}
+            />
+            <div className="search-actions">
+              <button type="button" onClick={closeAudioSearchDialog}>
+                取消
+              </button>
+              <button className="primary" type="submit">
+                确认
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {menu ? (
         <div className="context-menu-layer" role="presentation" onPointerDown={onCloseMenu}>
