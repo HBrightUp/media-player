@@ -99,6 +99,10 @@ type AudioImportProgress = {
   totalBytes: number;
   speedBytesPerSecond: number;
 };
+type AudioImportUploadBatch = {
+  files: File[];
+  bytes: number;
+};
 type UploadAudioNameParts = {
   artist: string;
   title: string;
@@ -227,6 +231,8 @@ const defaultAudioFileLimits: AudioFileImportLimits = {
   max_file_count: 400,
   max_lyric_file_bytes: 2 * 1024 * 1024
 };
+const audioImportBatchMaxBytes = 768 * 1024 * 1024;
+const audioImportBatchMaxFiles = 80;
 const supportedAudioFileExtensions = new Set([".flac", ".wav", ".aif", ".aiff"]);
 const supportedLyricFileExtensions = new Set([".lrc", ".txt"]);
 
@@ -1792,9 +1798,8 @@ function App() {
     setAudioImportReport(null);
     beginAudioImportProgress(audioImportPreflight.totalUploadBytes);
     try {
-      const report = await importAudioFolder(authSession.userId, uploadFiles, accessToken, (snapshot) => {
-        updateAudioImportProgress(snapshot, audioImportPreflight.totalUploadBytes);
-      });
+      const uploadBatches = buildAudioImportUploadBatches(audioImportPreflight, audioFileLimits);
+      const report = await importAudioBatches(authSession.userId, uploadBatches, accessToken, audioImportPreflight.totalUploadBytes);
       setAudioImportReport(report);
       setAudioImportPreflight(null);
       setAudioImportProgress(null);
@@ -1817,6 +1822,52 @@ function App() {
     } finally {
       setIsAudioImporting(false);
     }
+  }
+
+  async function importAudioBatches(userID: number, batches: AudioImportUploadBatch[], accessToken: string, totalUploadBytes: number) {
+    if (!batches.length) {
+      throw new Error("没有可上传的音频文件");
+    }
+
+    const reports: AudioFileImportReport[] = [];
+    let uploadedBeforeBatch = 0;
+
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index];
+      if (batches.length > 1) {
+        setAudioFilesMessage(`正在上传第 ${index + 1} / ${batches.length} 批`);
+      }
+
+      try {
+        const report = await importAudioFolder(userID, batch.files, accessToken, (snapshot) => {
+          updateAudioImportProgress(
+            {
+              loadedBytes: uploadedBeforeBatch + snapshot.loadedBytes,
+              totalBytes: totalUploadBytes,
+              lengthComputable: true
+            },
+            totalUploadBytes
+          );
+        });
+        reports.push(report);
+        uploadedBeforeBatch += batch.bytes;
+        updateAudioImportProgress(
+          {
+            loadedBytes: uploadedBeforeBatch,
+            totalBytes: totalUploadBytes,
+            lengthComputable: true
+          },
+          totalUploadBytes
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "上传导入失败";
+        const remainingFiles = batches.slice(index).flatMap((remainingBatch) => remainingBatch.files);
+        reports.push(buildAudioImportFailureReport(remainingFiles, message));
+        return mergeAudioImportReports(reports);
+      }
+    }
+
+    return mergeAudioImportReports(reports);
   }
 
   function beginAudioImportProgress(totalBytes: number) {
@@ -4320,15 +4371,8 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
     });
   }
 
-  let blockingMessage = "";
-  if (uploadFiles.length > limits.max_file_count) {
-    blockingMessage = `可上传文件数量 ${uploadFiles.length} 个，超过单次 ${limits.max_file_count} 个限制`;
-  } else if (totalUploadBytes > limits.max_total_bytes) {
-    blockingMessage = `可上传文件总大小 ${formatBytes(totalUploadBytes)}，超过单次 ${formatBytes(limits.max_total_bytes)} 限制`;
-  }
-
   return {
-    files: blockingMessage ? [] : uploadFiles,
+    files: uploadFiles,
     items,
     readyAudioCount,
     readyLyricCount,
@@ -4337,8 +4381,116 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
     ignoredCount,
     totalUploadBytes,
     uploadFileCount: uploadFiles.length,
-    blockingMessage
+    blockingMessage: ""
   };
+}
+
+function buildAudioImportUploadBatches(report: AudioImportPreflightReport, limits: AudioFileImportLimits): AudioImportUploadBatch[] {
+  const maxBatchBytes = Math.max(1, Math.min(limits.max_total_bytes, audioImportBatchMaxBytes));
+  const maxBatchFiles = Math.max(1, Math.min(limits.max_file_count, audioImportBatchMaxFiles));
+  const filesByRelativePath = new Map(report.files.map((file) => [getUploadRelativePath(file), file]));
+  const lyricsByBase = new Map<string, AudioImportPreflightItem[]>();
+  const usedLyrics = new Set<string>();
+  const groups: File[][] = [];
+
+  for (const item of report.items) {
+    if (item.status !== "ready" || item.kind !== "lyrics") {
+      continue;
+    }
+    for (const key of getUploadLyricBaseKeys(item.relativePath)) {
+      const lyrics = lyricsByBase.get(key) ?? [];
+      lyrics.push(item);
+      lyricsByBase.set(key, lyrics);
+    }
+  }
+
+  for (const item of report.items) {
+    if (item.status !== "ready" || item.kind !== "audio") {
+      continue;
+    }
+    const audioFile = filesByRelativePath.get(item.relativePath);
+    if (!audioFile) {
+      continue;
+    }
+    const group = [audioFile];
+    const keys = new Set([normalizeImportBase(item.relativePath)]);
+    if (item.targetFilename) {
+      keys.add(normalizeImportBase(item.targetFilename));
+    }
+    for (const key of keys) {
+      for (const lyric of lyricsByBase.get(key) ?? []) {
+        if (usedLyrics.has(lyric.relativePath)) {
+          continue;
+        }
+        const lyricFile = filesByRelativePath.get(lyric.relativePath);
+        if (!lyricFile) {
+          continue;
+        }
+        usedLyrics.add(lyric.relativePath);
+        group.push(lyricFile);
+      }
+    }
+    groups.push(group);
+  }
+
+  for (const item of report.items) {
+    if (item.status !== "ready" || item.kind !== "lyrics" || usedLyrics.has(item.relativePath)) {
+      continue;
+    }
+    const lyricFile = filesByRelativePath.get(item.relativePath);
+    if (lyricFile) {
+      groups.push([lyricFile]);
+    }
+  }
+
+  const batches: AudioImportUploadBatch[] = [];
+  let currentFiles: File[] = [];
+  let currentBytes = 0;
+
+  for (const group of groups) {
+    const groupBytes = group.reduce((total, file) => total + file.size, 0);
+    const shouldStartNewBatch =
+      currentFiles.length > 0 && (currentBytes + groupBytes > maxBatchBytes || currentFiles.length + group.length > maxBatchFiles);
+    if (shouldStartNewBatch) {
+      batches.push({ files: currentFiles, bytes: currentBytes });
+      currentFiles = [];
+      currentBytes = 0;
+    }
+    currentFiles.push(...group);
+    currentBytes += groupBytes;
+  }
+
+  if (currentFiles.length) {
+    batches.push({ files: currentFiles, bytes: currentBytes });
+  }
+
+  return batches;
+}
+
+function mergeAudioImportReports(reports: AudioFileImportReport[]): AudioFileImportReport {
+  return reports.reduce<AudioFileImportReport>(
+    (merged, report) => ({
+      imported: merged.imported + report.imported,
+      skipped: merged.skipped + report.skipped,
+      failed: merged.failed + report.failed,
+      converted: merged.converted + report.converted,
+      lyrics_imported: (merged.lyrics_imported ?? 0) + (report.lyrics_imported ?? 0),
+      lyrics_skipped: (merged.lyrics_skipped ?? 0) + (report.lyrics_skipped ?? 0),
+      lyrics_failed: (merged.lyrics_failed ?? 0) + (report.lyrics_failed ?? 0),
+      items: [...merged.items, ...report.items],
+      scan: report.scan ?? merged.scan
+    }),
+    {
+      imported: 0,
+      skipped: 0,
+      failed: 0,
+      converted: 0,
+      lyrics_imported: 0,
+      lyrics_skipped: 0,
+      lyrics_failed: 0,
+      items: []
+    }
+  );
 }
 
 function buildServerAudioSetFromTracks(tracks: Track[], providedSet?: ServerAudioFile[]) {

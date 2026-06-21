@@ -42,7 +42,7 @@ const (
 	loginLockout             = 2 * time.Minute
 	presenceTTL              = 75 * time.Second
 	manualTrackRefreshWindow = time.Minute
-	audioFileAccessTTL       = 5 * time.Minute
+	audioFileAccessTTL       = time.Hour
 	audioFileAccessMaxFails  = 5
 	audioFileAccessLockout   = time.Minute
 	audioFileAccessTokenSize = 32

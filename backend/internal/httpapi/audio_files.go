@@ -248,9 +248,6 @@ func (s *Server) handleAudioFileImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	audioFileManagerMu.Lock()
-	defer audioFileManagerMu.Unlock()
-
 	cleanupStaleAudioImportDirs()
 
 	jobDir, err := os.MkdirTemp("", strings.TrimSuffix(audioImportTempPattern, "*"))
@@ -276,6 +273,9 @@ func (s *Server) handleAudioFileImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInsufficientStorage, err.Error())
 		return
 	}
+
+	audioFileManagerMu.Lock()
+	defer audioFileManagerMu.Unlock()
 
 	report, importedTargets, importedLyrics, err := s.importAudioFiles(r.Context(), root, uploads, report)
 	if err != nil {
