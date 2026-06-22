@@ -231,7 +231,7 @@ const defaultAudioFileLimits: AudioFileImportLimits = {
   max_file_count: 400,
   max_lyric_file_bytes: 2 * 1024 * 1024
 };
-const audioImportBatchMaxBytes = 768 * 1024 * 1024;
+const audioImportBatchMaxBytes = 160 * 1024 * 1024;
 const audioImportBatchMaxFiles = 80;
 const supportedAudioFileExtensions = new Set([".flac", ".wav", ".aif", ".aiff"]);
 const supportedLyricFileExtensions = new Set([".lrc", ".txt"]);
@@ -1861,9 +1861,19 @@ function App() {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "上传导入失败";
-        const remainingFiles = batches.slice(index).flatMap((remainingBatch) => remainingBatch.files);
-        reports.push(buildAudioImportFailureReport(remainingFiles, message));
-        return mergeAudioImportReports(reports);
+        reports.push(buildAudioImportFailureReport(batch.files, `第 ${index + 1} 批上传失败：${message}`));
+        uploadedBeforeBatch += batch.bytes;
+        updateAudioImportProgress(
+          {
+            loadedBytes: uploadedBeforeBatch,
+            totalBytes: totalUploadBytes,
+            lengthComputable: true
+          },
+          totalUploadBytes
+        );
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          break;
+        }
       }
     }
 
