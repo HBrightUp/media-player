@@ -229,12 +229,12 @@ const equalizerSmoothingTime = 0.018;
 const lyricsVisualizerPaintIntervalMs = 80;
 const emptyLyricsVisualizerState: LyricsVisualizerState = { bass: 0, mid: 0, treble: 0, energy: 0 };
 const lyricsScenePalettes: LyricsScenePalette[] = [
-  { surface: "#030814", toneA: "88, 166, 255", toneB: "81, 224, 205", toneC: "238, 185, 106", thread: "216, 244, 255" },
-  { surface: "#050611", toneA: "124, 157, 255", toneB: "79, 218, 238", toneC: "255, 177, 128", thread: "226, 236, 255" },
-  { surface: "#030b0f", toneA: "72, 202, 173", toneB: "93, 174, 255", toneC: "240, 205, 119", thread: "219, 255, 246" },
-  { surface: "#070711", toneA: "99, 146, 255", toneB: "236, 142, 168", toneC: "238, 203, 124", thread: "241, 238, 255" },
-  { surface: "#020b16", toneA: "70, 180, 255", toneB: "127, 221, 161", toneC: "255, 190, 112", thread: "218, 246, 255" },
-  { surface: "#08080d", toneA: "168, 148, 255", toneB: "93, 208, 225", toneC: "229, 186, 118", thread: "232, 242, 255" }
+  { surface: "#0b2f5c", toneA: "116, 196, 255", toneB: "102, 232, 226", toneC: "255, 207, 132", thread: "224, 250, 255" },
+  { surface: "#123668", toneA: "139, 181, 255", toneB: "86, 218, 242", toneC: "255, 190, 142", thread: "231, 246, 255" },
+  { surface: "#0c3955", toneA: "94, 218, 194", toneB: "116, 191, 255", toneC: "247, 218, 139", thread: "224, 255, 248" },
+  { surface: "#153461", toneA: "122, 170, 255", toneB: "248, 159, 188", toneC: "246, 216, 138", thread: "242, 246, 255" },
+  { surface: "#0a3a68", toneA: "86, 194, 255", toneB: "144, 232, 184", toneC: "255, 204, 130", thread: "224, 250, 255" },
+  { surface: "#163159", toneA: "183, 169, 255", toneB: "110, 224, 236", toneC: "242, 202, 134", thread: "236, 248, 255" }
 ];
 
 type MusicTab = "音乐列表" | "收藏" | "分类" | "歌曲搜索";

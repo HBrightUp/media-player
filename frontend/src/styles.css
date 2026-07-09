@@ -3394,7 +3394,7 @@ form.search-dialog .search-actions button {
 .lyrics-page {
   position: relative;
   isolation: isolate;
-  --lyrics-surface: #030814;
+  --lyrics-surface: #0b2f5c;
   --lyrics-tone-a: 88, 166, 255;
   --lyrics-tone-b: 81, 224, 205;
   --lyrics-tone-c: 238, 185, 106;
@@ -3419,7 +3419,10 @@ form.search-dialog .search-actions button {
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(255, 255, 255, 0.025) 44%, rgba(0, 0, 0, 0.3)),
+    radial-gradient(circle at 18% 0%, rgba(154, 221, 255, 0.2) 0, rgba(154, 221, 255, 0) 34%),
+    radial-gradient(circle at 82% 12%, rgba(39, 119, 178, 0.22) 0, rgba(39, 119, 178, 0) 36%),
+    linear-gradient(180deg, rgba(7, 28, 64, 0.34) 0%, rgba(9, 41, 80, 0.14) 38%, rgba(8, 36, 68, 0.34) 100%),
+    var(--app-background-image) center / cover no-repeat,
     var(--lyrics-surface);
 }
 
@@ -3430,8 +3433,8 @@ form.search-dialog .search-actions button {
   pointer-events: none;
   content: "";
   background:
-    linear-gradient(90deg, rgba(0, 0, 0, 0.42), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.38)),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.58), transparent 28%, transparent 70%, rgba(0, 0, 0, 0.54));
+    linear-gradient(90deg, rgba(0, 13, 32, 0.22), transparent 20%, transparent 80%, rgba(0, 13, 32, 0.2)),
+    linear-gradient(180deg, rgba(0, 10, 28, 0.24), transparent 30%, transparent 70%, rgba(0, 10, 28, 0.3));
 }
 
 .lyrics-cinematic-scene {
@@ -3441,7 +3444,8 @@ form.search-dialog .search-actions button {
   overflow: hidden;
   pointer-events: none;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 18%, rgba(0, 0, 0, 0.22)),
+    radial-gradient(circle at 50% 44%, rgba(255, 255, 255, 0.08), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 24%, rgba(8, 35, 70, 0.14)),
     var(--lyrics-surface);
   opacity: var(--lyrics-field-opacity);
   transition: opacity 420ms ease;
@@ -3472,7 +3476,7 @@ form.search-dialog .search-actions button {
   background-position: center;
   background-size: cover;
   opacity: 0;
-  filter: blur(34px) saturate(1.18) brightness(0.5);
+  filter: blur(34px) saturate(1.18) brightness(0.78);
   transform: scale(1.08);
   transition:
     opacity 420ms ease,
@@ -3489,8 +3493,8 @@ form.search-dialog .search-actions button {
   inset: 0;
   content: "";
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.62), rgba(2, 8, 18, 0.22) 46%, rgba(0, 0, 0, 0.66)),
-    linear-gradient(90deg, rgba(0, 0, 0, 0.42), transparent 24%, transparent 76%, rgba(0, 0, 0, 0.38));
+    linear-gradient(180deg, rgba(5, 23, 54, 0.42), rgba(6, 33, 70, 0.08) 46%, rgba(5, 23, 54, 0.46)),
+    linear-gradient(90deg, rgba(5, 23, 54, 0.26), transparent 24%, transparent 76%, rgba(5, 23, 54, 0.22));
 }
 
 .lyrics-generated-cover {
@@ -3503,17 +3507,17 @@ form.search-dialog .search-actions button {
   align-content: end;
   gap: 12px;
   padding: clamp(24px, 4vw, 44px);
-  color: rgba(248, 253, 255, 0.82);
+  color: rgba(248, 253, 255, 0.34);
   background:
-    linear-gradient(145deg, rgba(var(--lyrics-tone-a), 0.2), rgba(var(--lyrics-tone-b), 0.08) 48%, rgba(var(--lyrics-tone-c), 0.16)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
-  border: 1px solid rgba(255, 255, 255, 0.12);
+    linear-gradient(145deg, rgba(var(--lyrics-tone-a), 0.08), rgba(var(--lyrics-tone-b), 0.035) 48%, rgba(var(--lyrics-tone-c), 0.06)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   box-shadow:
-    0 28px 90px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  filter: blur(0.2px);
-  opacity: 0.62;
+    0 28px 90px rgba(20, 64, 112, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  filter: blur(0.6px);
+  opacity: 0.28;
   transform: translate(-50%, -50%) rotate(-4deg);
 }
 
@@ -3528,12 +3532,12 @@ form.search-dialog .search-actions button {
 .lyrics-generated-cover span {
   font-size: clamp(13px, 1.5vw, 18px);
   font-weight: 640;
-  opacity: 0.72;
+  opacity: 0.42;
 }
 
 .lyrics-generated-cover strong {
-  font-size: clamp(28px, 4vw, 50px);
-  font-weight: 860;
+  font-size: clamp(24px, 3.2vw, 40px);
+  font-weight: 760;
   line-height: 1.05;
 }
 
