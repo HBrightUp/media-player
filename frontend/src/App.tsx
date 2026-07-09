@@ -1,30 +1,65 @@
-import { type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type UIEvent as ReactUIEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Extension, Mark, findParentNodeClosestToPos } from "@tiptap/core";
+import Color from "@tiptap/extension-color";
+import FontFamily from "@tiptap/extension-font-family";
+import Highlight from "@tiptap/extension-highlight";
+import Image from "@tiptap/extension-image";
+import Link from "@tiptap/extension-link";
+import { Table } from "@tiptap/extension-table";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
+import TaskItem from "@tiptap/extension-task-item";
+import TaskList from "@tiptap/extension-task-list";
+import TextAlign from "@tiptap/extension-text-align";
+import { TextStyle } from "@tiptap/extension-text-style";
+import Underline from "@tiptap/extension-underline";
+import { DOMParser as ProseMirrorDOMParser, type Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import type { EditorView } from "@tiptap/pm/view";
+import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
 import {
   addFavoriteTrack,
   addFavoriteTrackToCategory,
   ApiError,
   authorizeAudioFileAccess,
   createFavoriteCategory,
+  createNote,
+  createNoteComment,
+  createNoteFolder,
+  coverURL,
   deleteAudioFile,
   deleteFavoriteCategory,
+  deleteNote,
+  deleteNoteComment,
+  deleteNoteFolder,
   getAudioFiles,
   getFavoriteCategories,
   getFavoriteTracks,
+  getNote,
+  getNoteComments,
+  getNoteFolders,
+  getNotes,
   getTrackMemberships,
   getTrackLyrics,
   getTracks,
   importAudioFolder,
   loginUser,
+  logoutUser,
   refreshTracks,
   removeFavoriteTrack,
   removeFavoriteTrackFromCategory,
   renameAudioFile,
   sendPresenceHeartbeat,
   sendPresenceOffline,
-  streamURL
+  setApiSessionToken,
+  streamURL,
+  updateNote,
+  updateNoteFolder
 } from "./api";
 import type { UploadProgressSnapshot } from "./api";
-import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthUser, FavoriteCategory, LyricLine, OnlineUser, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
+import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, NoteComment, NoteFolder, OnlineUser, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -32,6 +67,7 @@ type AuthSession = {
   userId?: number;
   phone: string;
   nickname: string;
+  token?: string;
   expiresAt: number;
   createdAt: string;
 };
@@ -132,6 +168,19 @@ type LyricsScrollState = {
   top: number;
   activeLineIndex: number;
 };
+type LyricsVisualizerState = {
+  bass: number;
+  mid: number;
+  treble: number;
+  energy: number;
+};
+type LyricsScenePalette = {
+  surface: string;
+  toneA: string;
+  toneB: string;
+  toneC: string;
+  thread: string;
+};
 type TrackSortKey = "title" | "artist";
 type ProfileView = "main" | "audioFiles";
 type PlaybackQueueScope = { kind: "library" | "favorites" | "category" | "search"; categoryId?: number | null };
@@ -144,11 +193,16 @@ type BufferedAudioRange = {
   endPercent: number;
 };
 const equalizerBands = [
-  { id: "sub", label: "60Hz", name: "低频", frequency: 60, filterType: "lowshelf", q: 0.7 },
-  { id: "bass", label: "150Hz", name: "厚度", frequency: 150, filterType: "peaking", q: 0.95 },
-  { id: "warmth", label: "400Hz", name: "中低", frequency: 400, filterType: "peaking", q: 1.05 },
-  { id: "presence", label: "2.5k", name: "人声", frequency: 2500, filterType: "peaking", q: 1 },
-  { id: "air", label: "10k", name: "空气", frequency: 10000, filterType: "highshelf", q: 0.7 }
+  { id: "hz31", label: "31Hz", name: "超低", frequency: 31, filterType: "lowshelf", q: 0.7 },
+  { id: "hz62", label: "62Hz", name: "低频", frequency: 62, filterType: "peaking", q: 0.95 },
+  { id: "hz125", label: "125Hz", name: "低音", frequency: 125, filterType: "peaking", q: 1 },
+  { id: "hz250", label: "250Hz", name: "厚度", frequency: 250, filterType: "peaking", q: 1 },
+  { id: "hz500", label: "500Hz", name: "中低", frequency: 500, filterType: "peaking", q: 1 },
+  { id: "hz1k", label: "1k", name: "中频", frequency: 1000, filterType: "peaking", q: 1 },
+  { id: "hz2k", label: "2k", name: "人声", frequency: 2000, filterType: "peaking", q: 1 },
+  { id: "hz4k", label: "4k", name: "明亮", frequency: 4000, filterType: "peaking", q: 1 },
+  { id: "hz8k", label: "8k", name: "细节", frequency: 8000, filterType: "peaking", q: 0.95 },
+  { id: "hz16k", label: "16k", name: "空气", frequency: 16000, filterType: "highshelf", q: 0.7 }
 ] as const;
 type EqualizerBandId = (typeof equalizerBands)[number]["id"];
 type EqualizerGains = Record<EqualizerBandId, number>;
@@ -157,6 +211,7 @@ type EqualizerAudioChain = {
   context: AudioContext;
   source: MediaElementAudioSourceNode;
   filters: BiquadFilterNode[];
+  analyser: AnalyserNode;
 };
 type BrowserWindowWithAudioContext = Window & typeof globalThis & {
   webkitAudioContext?: typeof AudioContext;
@@ -171,12 +226,22 @@ const equalizerGainMin = -9;
 const equalizerGainMax = 9;
 const equalizerGainStep = 0.5;
 const equalizerSmoothingTime = 0.018;
+const lyricsVisualizerPaintIntervalMs = 80;
+const emptyLyricsVisualizerState: LyricsVisualizerState = { bass: 0, mid: 0, treble: 0, energy: 0 };
+const lyricsScenePalettes: LyricsScenePalette[] = [
+  { surface: "#030814", toneA: "88, 166, 255", toneB: "81, 224, 205", toneC: "238, 185, 106", thread: "216, 244, 255" },
+  { surface: "#050611", toneA: "124, 157, 255", toneB: "79, 218, 238", toneC: "255, 177, 128", thread: "226, 236, 255" },
+  { surface: "#030b0f", toneA: "72, 202, 173", toneB: "93, 174, 255", toneC: "240, 205, 119", thread: "219, 255, 246" },
+  { surface: "#070711", toneA: "99, 146, 255", toneB: "236, 142, 168", toneC: "238, 203, 124", thread: "241, 238, 255" },
+  { surface: "#020b16", toneA: "70, 180, 255", toneB: "127, 221, 161", toneC: "255, 190, 112", thread: "218, 246, 255" },
+  { surface: "#08080d", toneA: "168, 148, 255", toneB: "93, 208, 225", toneC: "229, 186, 118", thread: "232, 242, 255" }
+];
 
 type MusicTab = "音乐列表" | "收藏" | "分类" | "歌曲搜索";
 const appPages: Array<{ id: AppPage; label: string }> = [
   { id: "music", label: "音乐" },
   { id: "lyrics", label: "歌词" },
-  { id: "discover", label: "发现" },
+  { id: "discover", label: "文档" },
   { id: "profile", label: "我" }
 ];
 const appPageIconSources: Record<AppPage, string> = {
@@ -195,9 +260,10 @@ const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
 const manualLibraryRefreshStorageKey = "media-player-manual-library-refresh-at";
-const authSessionDurationMs = 7 * 24 * 60 * 60 * 1000;
+const authSessionFallbackDurationMs = 3 * 24 * 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
 const manualLibraryRefreshCooldownMs = 60_000;
+const lyricsChromeAutoHideMs = 2800;
 const passwordMinLength = 6;
 const passwordMaxLength = 64;
 const mainlandPhonePattern = /^1[3-9]\d{9}$/;
@@ -324,12 +390,39 @@ function createEqualizerGains(overrides: Partial<EqualizerGains>): EqualizerGain
   return gains;
 }
 
+function migrateLegacyEqualizerGains(storedValue: Partial<Record<EqualizerBandId | "sub" | "bass" | "warmth" | "presence" | "air", unknown>>) {
+  const migrated: Partial<EqualizerGains> = {};
+  const assignLegacyGain = (bandId: EqualizerBandId, legacyIds: Array<"sub" | "bass" | "warmth" | "presence" | "air">) => {
+    if (storedValue[bandId] !== undefined) {
+      migrated[bandId] = Number(storedValue[bandId]);
+      return;
+    }
+    for (const legacyId of legacyIds) {
+      if (storedValue[legacyId] !== undefined) {
+        migrated[bandId] = Number(storedValue[legacyId]);
+        return;
+      }
+    }
+  };
+  assignLegacyGain("hz31", ["sub"]);
+  assignLegacyGain("hz62", ["sub"]);
+  assignLegacyGain("hz125", ["bass"]);
+  assignLegacyGain("hz250", ["bass"]);
+  assignLegacyGain("hz500", ["warmth"]);
+  assignLegacyGain("hz1k", ["warmth"]);
+  assignLegacyGain("hz2k", ["presence"]);
+  assignLegacyGain("hz4k", ["presence"]);
+  assignLegacyGain("hz8k", ["air"]);
+  assignLegacyGain("hz16k", ["air"]);
+  return migrated;
+}
+
 const equalizerPresets: Array<{ id: string; label: string; gains: EqualizerGains }> = [
   { id: "flat", label: "默认", gains: createEqualizerGains({}) },
-  { id: "bass", label: "低音", gains: createEqualizerGains({ sub: 3.5, bass: 2.5, warmth: -1, presence: 0.5, air: 0.5 }) },
-  { id: "vocal", label: "人声", gains: createEqualizerGains({ sub: -1.5, bass: -1, warmth: -2, presence: 3, air: 1.5 }) },
-  { id: "bright", label: "明亮", gains: createEqualizerGains({ sub: -0.5, bass: -0.5, warmth: -1, presence: 1.5, air: 3 }) },
-  { id: "night", label: "夜间", gains: createEqualizerGains({ sub: -2, bass: -1.5, warmth: -0.5, presence: -0.5, air: -2 }) }
+  { id: "bass", label: "低音", gains: createEqualizerGains({ hz31: 3.5, hz62: 3, hz125: 2.5, hz250: 1.2, hz500: -0.5, hz1k: -0.8, hz2k: 0, hz4k: 0.4, hz8k: 0.5, hz16k: 0.5 }) },
+  { id: "vocal", label: "人声", gains: createEqualizerGains({ hz31: -1.8, hz62: -1.5, hz125: -1, hz250: -0.5, hz500: -1.2, hz1k: 1.2, hz2k: 3, hz4k: 2.2, hz8k: 1, hz16k: 0.5 }) },
+  { id: "bright", label: "明亮", gains: createEqualizerGains({ hz31: -1, hz62: -0.8, hz125: -0.5, hz250: -0.3, hz500: 0, hz1k: 0.6, hz2k: 1.3, hz4k: 2, hz8k: 2.8, hz16k: 3 }) },
+  { id: "night", label: "夜间", gains: createEqualizerGains({ hz31: -2.5, hz62: -2, hz125: -1.6, hz250: -1, hz500: -0.6, hz1k: -0.4, hz2k: -0.6, hz4k: -1, hz8k: -1.5, hz16k: -2.2 }) }
 ];
 
 function readEqualizerGains(): EqualizerGains {
@@ -341,12 +434,8 @@ function readEqualizerGains(): EqualizerGains {
     if (!rawValue) {
       return createEqualizerGains({});
     }
-    const storedValue = JSON.parse(rawValue) as Partial<Record<EqualizerBandId, unknown>>;
-    const nextGains = {} as EqualizerGains;
-    for (const band of equalizerBands) {
-      nextGains[band.id] = clampEqualizerGain(Number(storedValue[band.id] ?? 0));
-    }
-    return nextGains;
+    const storedValue = JSON.parse(rawValue) as Partial<Record<EqualizerBandId | "sub" | "bass" | "warmth" | "presence" | "air", unknown>>;
+    return createEqualizerGains(migrateLegacyEqualizerGains(storedValue));
   } catch {
     return createEqualizerGains({});
   }
@@ -383,6 +472,49 @@ function getEqualizerLevelPercent(gain: number) {
   return ((clampedGain - equalizerGainMin) / (equalizerGainMax - equalizerGainMin)) * 100;
 }
 
+function clampVisualizerLevel(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+function getFrequencyAverage(frequencyData: Uint8Array<ArrayBuffer>, startRatio: number, endRatio: number) {
+  const startIndex = Math.max(0, Math.floor(frequencyData.length * startRatio));
+  const endIndex = Math.min(frequencyData.length, Math.max(startIndex + 1, Math.ceil(frequencyData.length * endRatio)));
+  let total = 0;
+  for (let index = startIndex; index < endIndex; index += 1) {
+    total += frequencyData[index] ?? 0;
+  }
+  return clampVisualizerLevel(total / ((endIndex - startIndex) * 255));
+}
+
+function readLyricsVisualizerState(analyser: AnalyserNode, frequencyData: Uint8Array<ArrayBuffer>): LyricsVisualizerState {
+  analyser.getByteFrequencyData(frequencyData);
+  const bass = getFrequencyAverage(frequencyData, 0, 0.12);
+  const mid = getFrequencyAverage(frequencyData, 0.12, 0.48);
+  const treble = getFrequencyAverage(frequencyData, 0.48, 1);
+  const energy = clampVisualizerLevel((bass * 1.12 + mid + treble * 0.82) / 2.94);
+  return { bass, mid, treble, energy };
+}
+
+function hashLyricsSceneKey(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
+function getLyricsScenePalette(track: Track | null) {
+  if (!track) {
+    return lyricsScenePalettes[0];
+  }
+  const key = [track.artist, track.title, track.album, track.id].join("|");
+  return lyricsScenePalettes[hashLyricsSceneKey(key) % lyricsScenePalettes.length];
+}
+
 function IconBase({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -406,9 +538,41 @@ function EqualizerIcon() {
   );
 }
 
+function FolderRailIcon() {
+  return (
+    <IconBase className="growth-rail-icon">
+      <path d="M3.5 7.2h6.2l1.8 2h9v8.5a2.1 2.1 0 0 1-2.1 2.1H5.6a2.1 2.1 0 0 1-2.1-2.1V7.2Z" />
+      <path d="M3.5 7.2V5.8a1.6 1.6 0 0 1 1.6-1.6h4.1l1.8 2h5.4a1.7 1.7 0 0 1 1.7 1.7v1.3" />
+    </IconBase>
+  );
+}
+
+function FolderTreeIcon() {
+  return (
+    <IconBase className="growth-tree-svg folder">
+      <path className="folder-back" d="M3.1 6.7c0-.9.7-1.6 1.6-1.6h4.1c.5 0 .9.2 1.2.5l1.1 1.1h8.2c.9 0 1.6.7 1.6 1.6v1.1H3.1V6.7Z" />
+      <path className="folder-front" d="M3.1 8.4h17.8v8.3c0 1.2-.8 2.1-2 2.1H5.1c-1.2 0-2-.9-2-2.1V8.4Z" />
+    </IconBase>
+  );
+}
+
+function DocumentTreeIcon() {
+  return (
+    <IconBase className="growth-tree-svg document">
+      <path className="document-body" d="M6.2 3.4h8.1l3.5 3.6v13.6H6.2V3.4Z" />
+      <path className="document-fold" d="M14.1 3.5V7h3.5" />
+      <path className="document-line" d="M9.1 11.3h5.7" />
+      <path className="document-line" d="M9.1 14.2h4.4" />
+    </IconBase>
+  );
+}
+
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const equalizerChainRef = useRef<EqualizerAudioChain | null>(null);
+  const lyricsVisualizerFrameRef = useRef<number | null>(null);
+  const lyricsVisualizerDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const lyricsVisualizerLastPaintAtRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartRef = useRef<LongPressStart | null>(null);
@@ -423,6 +587,7 @@ function App() {
   const initialAuthProfileRef = useRef<AuthFormState | null>(null);
   const presenceSessionIdRef = useRef<string | null>(null);
   const lyricsScrollStateRef = useRef<LyricsScrollState>({ trackID: null, top: 0, activeLineIndex: -1 });
+  const lyricsChromeTimerRef = useRef<number | null>(null);
   const musicListRef = useRef<HTMLDivElement | null>(null);
   const musicListScrollSettleTimerRef = useRef<number | null>(null);
   const shouldRevealCurrentTrackRef = useRef(false);
@@ -463,6 +628,8 @@ function App() {
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(() => new Set());
   const [trackCategoryMembershipMap, setTrackCategoryMembershipMap] = useState<Map<number, TrackCategoryMembership[]>>(() => new Map());
   const [favoriteCategories, setFavoriteCategories] = useState<FavoriteCategory[]>([]);
+  const [favoriteTracksCache, setFavoriteTracksCache] = useState<Track[] | null>(null);
+  const [categoryTracksCache, setCategoryTracksCache] = useState<Map<number, Track[]>>(() => new Map());
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
   const [categoryContextMenu, setCategoryContextMenu] = useState<CategoryContextMenu | null>(null);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("all");
@@ -472,6 +639,9 @@ function App() {
   const [manualLibraryRefreshClock, setManualLibraryRefreshClock] = useState(() => Date.now());
   const [isManualLibraryRefreshing, setIsManualLibraryRefreshing] = useState(false);
   const [isLibraryFiltered, setIsLibraryFiltered] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(() => (typeof document === "undefined" ? false : Boolean(document.fullscreenElement)));
+  const [isFullscreenSupported, setIsFullscreenSupported] = useState(() => (typeof document === "undefined" ? false : Boolean(document.fullscreenEnabled)));
+  const [isLyricsChromeVisible, setIsLyricsChromeVisible] = useState(true);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchDialogPosition, setSearchDialogPosition] = useState<FloatingPanelPosition | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -493,6 +663,7 @@ function App() {
   const [bufferedRanges, setBufferedRanges] = useState<BufferedAudioRange[]>([]);
   const [isEqualizerOpen, setIsEqualizerOpen] = useState(false);
   const [equalizerGains, setEqualizerGains] = useState<EqualizerGains>(() => readEqualizerGains());
+  const [lyricsVisualizer, setLyricsVisualizer] = useState<LyricsVisualizerState>(emptyLyricsVisualizerState);
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(30);
   const [sleepTimerEndsAt, setSleepTimerEndsAt] = useState<number | null>(null);
   const [sleepTimerNow, setSleepTimerNow] = useState(() => Date.now());
@@ -565,6 +736,10 @@ function App() {
   }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
 
   useEffect(() => {
+    setApiSessionToken(authSession?.token ?? "");
+  }, [authSession?.token]);
+
+  useEffect(() => {
     if (!authSession) {
       loadedLibrarySessionKeyRef.current = null;
       setAudioFileAccess(null);
@@ -587,6 +762,8 @@ function App() {
       setFavoriteTrackIds(new Set());
       setTrackCategoryMembershipMap(new Map());
       setFavoriteCategories([]);
+      setFavoriteTracksCache(null);
+      setCategoryTracksCache(new Map());
       setActiveCategoryId(null);
       return;
     }
@@ -611,6 +788,45 @@ function App() {
       window.clearTimeout(timeoutID);
     };
   }, [manualLibraryRefreshRemainingMs]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    function syncFullscreenState() {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+      setIsFullscreenSupported(Boolean(document.fullscreenEnabled));
+    }
+
+    syncFullscreenState();
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreenState);
+    };
+  }, []);
+
+  useEffect(() => {
+    clearLyricsChromeTimer();
+    if (activePage !== "lyrics") {
+      setIsLyricsChromeVisible(true);
+      return;
+    }
+    setIsLyricsChromeVisible(true);
+    scheduleLyricsChromeHide();
+    return clearLyricsChromeTimer;
+  }, [activePage]);
+
+  useEffect(() => {
+    if (activePage !== "lyrics") {
+      return;
+    }
+    const revealOnKeyDown = () => revealLyricsChrome();
+    window.addEventListener("keydown", revealOnKeyDown);
+    return () => {
+      window.removeEventListener("keydown", revealOnKeyDown);
+    };
+  }, [activePage]);
 
   useEffect(() => {
     if (!audioFileAccessDialog.isOpen || !audioFileAccessDialog.lockoutUntil) {
@@ -649,6 +865,8 @@ function App() {
       cancelLongPress();
       cancelCategoryLongPress();
       clearMusicListScrollSettleTimer();
+      clearLyricsChromeTimer();
+      stopLyricsVisualizer(false);
       disconnectEqualizerAudioChain();
     };
   }, []);
@@ -657,6 +875,49 @@ function App() {
     persistEqualizerGains(equalizerGains);
     applyEqualizerGains(equalizerGains);
   }, [equalizerGains]);
+
+  useEffect(() => {
+    if (activePage !== "lyrics" || !isPlaying || !currentTrack?.stream_url) {
+      stopLyricsVisualizer();
+      return;
+    }
+
+    const context = ensureEqualizerAudioChain();
+    const chain = equalizerChainRef.current;
+    if (!context || !chain?.analyser) {
+      stopLyricsVisualizer();
+      return;
+    }
+
+    if (context.state === "suspended") {
+      void context.resume().catch(() => undefined);
+    }
+
+    const analyser = chain.analyser;
+    let frequencyData = lyricsVisualizerDataRef.current;
+    if (!frequencyData || frequencyData.length !== analyser.frequencyBinCount) {
+      frequencyData = new Uint8Array(analyser.frequencyBinCount);
+      lyricsVisualizerDataRef.current = frequencyData;
+    }
+
+    let isCancelled = false;
+    const paintVisualizer = (timestamp: number) => {
+      if (isCancelled) {
+        return;
+      }
+      if (timestamp - lyricsVisualizerLastPaintAtRef.current >= lyricsVisualizerPaintIntervalMs) {
+        lyricsVisualizerLastPaintAtRef.current = timestamp;
+        setLyricsVisualizer(readLyricsVisualizerState(analyser, frequencyData));
+      }
+      lyricsVisualizerFrameRef.current = window.requestAnimationFrame(paintVisualizer);
+    };
+
+    lyricsVisualizerFrameRef.current = window.requestAnimationFrame(paintVisualizer);
+    return () => {
+      isCancelled = true;
+      stopLyricsVisualizer();
+    };
+  }, [activePage, isPlaying, currentTrack?.id, currentTrack?.stream_url]);
 
   useEffect(() => {
     if (!hasTransientPopup) {
@@ -1138,24 +1399,101 @@ function App() {
     });
   }
 
-  async function refreshFavoriteTracks({ showList = false, categoryId }: { showList?: boolean; categoryId?: number | null } = {}) {
+  function getCachedFavoriteTracks(categoryId?: number | null) {
+    const normalizedCategoryId = categoryId ?? null;
+    return normalizedCategoryId === null ? favoriteTracksCache : categoryTracksCache.get(normalizedCategoryId) ?? null;
+  }
+
+  function cacheFavoriteTracks(nextTracks: Track[], categoryId?: number | null) {
+    const normalizedCategoryId = categoryId ?? null;
+    if (normalizedCategoryId === null) {
+      setFavoriteTracksCache(nextTracks);
+      return;
+    }
+    setCategoryTracksCache((previous) => {
+      const cachedTracks = previous.get(normalizedCategoryId);
+      if (cachedTracks && areTrackListsEqual(cachedTracks, nextTracks)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.set(normalizedCategoryId, nextTracks);
+      return next;
+    });
+  }
+
+  function invalidateFavoriteTrackCache({
+    favorites = false,
+    categoryId,
+    allCategories = false
+  }: {
+    favorites?: boolean;
+    categoryId?: number | null;
+    allCategories?: boolean;
+  } = {}) {
+    if (favorites) {
+      setFavoriteTracksCache(null);
+    }
+    if (allCategories) {
+      setCategoryTracksCache(new Map());
+      return;
+    }
+    if (categoryId == null) {
+      return;
+    }
+    setCategoryTracksCache((previous) => {
+      if (!previous.has(categoryId)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.delete(categoryId);
+      return next;
+    });
+  }
+
+  async function refreshFavoriteTracks({
+    showList = false,
+    categoryId,
+    force = false
+  }: {
+    showList?: boolean;
+    categoryId?: number | null;
+    force?: boolean;
+  } = {}) {
     if (!authSession?.userId) {
       setFavoriteTrackIds(new Set());
+      setFavoriteTracksCache(null);
+      setCategoryTracksCache(new Map());
       if (showList) {
         setTracks([]);
-        setLoadMessage(categoryId ? "请先登录后查看分类" : "请先登录后查看收藏");
+        setLoadMessage(categoryId != null ? "请先登录后查看分类" : "请先登录后查看收藏");
       }
       return;
     }
 
+    const cachedTracks = force ? null : getCachedFavoriteTracks(categoryId);
+    if (cachedTracks && !force) {
+      if (showList) {
+        setTracks(cachedTracks);
+        setLoadMessage("");
+        setIsLoading(false);
+      }
+      syncFavoritePlaybackQueue(cachedTracks, categoryId);
+      return;
+    }
+
     if (showList) {
-      setIsLoading(true);
+      setIsLoading(!cachedTracks);
       setLoadMessage("");
+      if (cachedTracks) {
+        setTracks(cachedTracks);
+      }
     }
     try {
       const payload = await getFavoriteTracks(authSession.userId, categoryId ?? undefined);
-      if (categoryId) {
+      cacheFavoriteTracks(payload.tracks, categoryId);
+      if (categoryId != null) {
         const favoritesPayload = await getFavoriteTracks(authSession.userId);
+        setFavoriteTracksCache(favoritesPayload.tracks);
         setFavoriteTrackIds(new Set(favoritesPayload.tracks.map((track) => track.id)));
       } else {
         setFavoriteTrackIds(new Set(payload.tracks.map((track) => track.id)));
@@ -1166,8 +1504,12 @@ function App() {
       syncFavoritePlaybackQueue(payload.tracks, categoryId);
     } catch (error) {
       if (showList) {
-        setTracks([]);
-        setLoadMessage(error instanceof Error ? error.message : categoryId ? "分类歌曲加载失败" : "收藏列表加载失败");
+        if (cachedTracks) {
+          showToast(error instanceof Error ? error.message : categoryId ? "分类歌曲加载失败" : "收藏列表加载失败");
+        } else {
+          setTracks([]);
+          setLoadMessage(error instanceof Error ? error.message : categoryId ? "分类歌曲加载失败" : "收藏列表加载失败");
+        }
       }
     } finally {
       if (showList) {
@@ -1227,8 +1569,12 @@ function App() {
   }
 
   async function handleLibraryTabClick() {
+    const shouldRefreshLibrary = activePage === "music" && activeTab === "音乐列表" && !isLibraryFiltered;
     handleTabClick("音乐列表");
 
+    if (!shouldRefreshLibrary) {
+      return;
+    }
     if (isManualLibraryRefreshing) {
       return;
     }
@@ -1478,6 +1824,23 @@ function App() {
     }
   }
 
+  async function toggleFullscreen() {
+    if (typeof document === "undefined" || !document.fullscreenEnabled) {
+      showToast("当前浏览器不支持全屏");
+      return;
+    }
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await document.documentElement.requestFullscreen();
+    } catch {
+      showToast("全屏切换失败");
+    }
+  }
+
   function handlePageClick(page: AppPage) {
     if (page === "music" && activePage !== "music") {
       shouldRevealCurrentTrackRef.current = true;
@@ -1534,9 +1897,12 @@ function App() {
         phone,
         password: authForm.password
       });
-      const nextSession = createAuthSession(response.user);
+      const nextSession = createAuthSession(response);
       persistAuthSession(nextSession);
       persistAuthProfile(response.user);
+      setApiSessionToken(nextSession.token);
+      setFavoriteTracksCache(null);
+      setCategoryTracksCache(new Map());
       setAuthSession(nextSession);
       setAuthForm((previous) => ({
         ...previous,
@@ -1557,6 +1923,10 @@ function App() {
   }
 
   function handleLogout() {
+    if (authSession?.token) {
+      void logoutUser().catch(() => undefined);
+    }
+    setApiSessionToken("");
     removeLocalStorage(authSessionStorageKey);
     loadedLibrarySessionKeyRef.current = null;
     setAuthSession(null);
@@ -1576,6 +1946,8 @@ function App() {
     setFavoriteTrackIds(new Set());
     setTrackCategoryMembershipMap(new Map());
     setFavoriteCategories([]);
+    setFavoriteTracksCache(null);
+    setCategoryTracksCache(new Map());
     setAudioFiles([]);
     setServerAudioSet([]);
     setAudioFilesMessage("");
@@ -2097,6 +2469,7 @@ function App() {
       setIsSearchOpen(false);
       setSearchDialogPosition(null);
       setTracks([]);
+      cacheFavoriteTracks([], payload.category.id);
       setLoadMessage("暂无分类歌曲");
       showToast("分类已创建");
     } catch (error) {
@@ -2126,6 +2499,7 @@ function App() {
       await deleteFavoriteCategory(authSession.userId, category.id);
       setFavoriteCategories((previous) => previous.filter((item) => item.id !== category.id));
       removeCategoryMemberships(category.id);
+      invalidateFavoriteTrackCache({ categoryId: category.id });
       if (activeTab === "分类" && activeCategoryId === category.id) {
         setActiveTab("收藏");
         setActiveCategoryId(null);
@@ -2365,16 +2739,19 @@ function App() {
         await removeFavoriteTrack(authSession.userId, track.id);
         removeTrackFromFavoritePlaybackQueues(track);
         clearTrackMemberships(track.id);
+        invalidateFavoriteTrackCache({ favorites: true, allCategories: true });
         showToast("已取消收藏");
       } else {
         await addFavoriteTrack({ user_id: authSession.userId, track_id: track.id });
         appendTrackToFavoritePlaybackQueue(track);
+        invalidateFavoriteTrackCache({ favorites: true });
         showToast("已收藏");
       }
       if (activeTab === "收藏" || activeTab === "分类" || playbackQueueScope.kind === "favorites") {
         void refreshFavoriteTracks({
           showList: activeTab === "收藏" || activeTab === "分类",
-          categoryId: activeTab === "分类" ? activeCategoryId : undefined
+          categoryId: activeTab === "分类" ? activeCategoryId : undefined,
+          force: true
         });
       }
       void refreshTrackMemberships();
@@ -2383,7 +2760,8 @@ function App() {
       void refreshTrackMemberships();
       void refreshFavoriteTracks({
         showList: activeTab === "收藏" || activeTab === "分类",
-        categoryId: activeTab === "分类" ? activeCategoryId : undefined
+        categoryId: activeTab === "分类" ? activeCategoryId : undefined,
+        force: true
       });
     }
   }
@@ -2421,20 +2799,25 @@ function App() {
         next.add(track.id);
         return next;
       });
+      invalidateFavoriteTrackCache({ favorites: true, categoryId: category.id });
       upsertTrackCategoryMembership(track.id, category);
       appendTrackToCategoryPlaybackQueue(track, category.id);
       if (
         (activeTab === "分类" && activeCategoryId === category.id) ||
         (playbackQueueScope.kind === "category" && playbackQueueScope.categoryId === category.id)
       ) {
-        void refreshFavoriteTracks({ showList: activeTab === "分类" && activeCategoryId === category.id, categoryId: category.id });
+        void refreshFavoriteTracks({ showList: activeTab === "分类" && activeCategoryId === category.id, categoryId: category.id, force: true });
       }
       showToast(`已加入${category.name}`);
       void refreshTrackMemberships();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "加入分类失败");
       void refreshTrackMemberships();
-      void refreshFavoriteTracks({ showList: activeTab === "收藏" || activeTab === "分类", categoryId: activeTab === "分类" ? activeCategoryId : undefined });
+      void refreshFavoriteTracks({
+        showList: activeTab === "收藏" || activeTab === "分类",
+        categoryId: activeTab === "分类" ? activeCategoryId : undefined,
+        force: true
+      });
     }
   }
 
@@ -2450,13 +2833,14 @@ function App() {
       await removeFavoriteTrackFromCategory(authSession.userId, activeCategoryId, track.id);
       removeTrackFromActiveCategoryPlaybackQueue(track);
       removeTrackCategoryMembership(track.id, activeCategoryId);
+      invalidateFavoriteTrackCache({ categoryId: activeCategoryId });
       showToast("已移出分类");
-      void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId });
+      void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId, force: true });
       void refreshTrackMemberships();
     } catch (error) {
       showToast(error instanceof Error ? error.message : "移出分类失败");
       void refreshTrackMemberships();
-      void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId });
+      void refreshFavoriteTracks({ showList: true, categoryId: activeCategoryId, force: true });
     }
   }
 
@@ -2571,13 +2955,17 @@ function App() {
         filter.gain.value = equalizerGains[band.id];
         return filter;
       });
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.82;
 
       source.connect(filters[0]);
       for (let index = 0; index < filters.length - 1; index += 1) {
         filters[index].connect(filters[index + 1]);
       }
-      filters[filters.length - 1].connect(context.destination);
-      equalizerChainRef.current = { audio, context, source, filters };
+      filters[filters.length - 1].connect(analyser);
+      analyser.connect(context.destination);
+      equalizerChainRef.current = { audio, context, source, filters, analyser };
       applyEqualizerGains(equalizerGains, true);
       return context;
     } catch {
@@ -2593,11 +2981,23 @@ function App() {
     try {
       chain.source.disconnect();
       chain.filters.forEach((filter) => filter.disconnect());
+      chain.analyser.disconnect();
     } catch {
       // Disconnection can throw after browser-side audio teardown.
     }
     void chain.context.close().catch(() => undefined);
     equalizerChainRef.current = null;
+  }
+
+  function stopLyricsVisualizer(reset = true) {
+    if (lyricsVisualizerFrameRef.current !== null) {
+      window.cancelAnimationFrame(lyricsVisualizerFrameRef.current);
+      lyricsVisualizerFrameRef.current = null;
+    }
+    lyricsVisualizerLastPaintAtRef.current = 0;
+    if (reset) {
+      setLyricsVisualizer(emptyLyricsVisualizerState);
+    }
   }
 
   function applyEqualizerGains(gains: EqualizerGains, immediate = false) {
@@ -2849,6 +3249,33 @@ function App() {
     lyricsScrollStateRef.current = { trackID, top, activeLineIndex };
   }
 
+  function clearLyricsChromeTimer() {
+    if (!lyricsChromeTimerRef.current) {
+      return;
+    }
+    window.clearTimeout(lyricsChromeTimerRef.current);
+    lyricsChromeTimerRef.current = null;
+  }
+
+  function scheduleLyricsChromeHide() {
+    if (activePage !== "lyrics") {
+      return;
+    }
+    clearLyricsChromeTimer();
+    lyricsChromeTimerRef.current = window.setTimeout(() => {
+      setIsLyricsChromeVisible(false);
+      lyricsChromeTimerRef.current = null;
+    }, lyricsChromeAutoHideMs);
+  }
+
+  function revealLyricsChrome() {
+    if (activePage !== "lyrics") {
+      return;
+    }
+    setIsLyricsChromeVisible(true);
+    scheduleLyricsChromeHide();
+  }
+
   const activeCategory = favoriteCategories.find((category) => category.id === activeCategoryId) ?? null;
   const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : activeTab === "分类" ? "暂无分类歌曲" : "暂无本地音乐");
   const isAuthVisible = !authSession;
@@ -2863,9 +3290,24 @@ function App() {
   const canSortMusicColumns = activeTab === "音乐列表";
   const canShowTrackStatus = activeTab === "音乐列表" || activeTab === "收藏" || activeTab === "分类";
   const statusCategory = activeTab === "分类" ? activeCategory : null;
+  const isLyricsPageActive = activePage === "lyrics";
+  const playerScreenClassName = [
+    "player-screen",
+    isLyricsPageActive ? "lyrics-page-active" : "",
+    isLyricsPageActive && isLyricsChromeVisible ? "lyrics-chrome-visible" : "",
+    isLyricsPageActive && !isLyricsChromeVisible ? "lyrics-chrome-hidden" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <main className="player-screen" aria-label="MediaPlayer">
+    <main
+      className={playerScreenClassName}
+      aria-label="MediaPlayer"
+      onPointerMove={revealLyricsChrome}
+      onPointerDown={revealLyricsChrome}
+      onWheel={revealLyricsChrome}
+    >
       <div className="top-line" />
       <section className="app-page-area" aria-label="当前页面">
         {activePage === "music" ? (
@@ -2904,6 +3346,17 @@ function App() {
               </button>
               <button className={activeTab === "歌曲搜索" ? "active search-tab" : "search-tab"} type="button" aria-current={activeTab === "歌曲搜索" ? "page" : undefined} onClick={(event) => handleTabClick("歌曲搜索", event.currentTarget)}>
                 歌曲搜索
+              </button>
+              <button
+                className={`fullscreen-toggle ${isFullscreen ? "active" : ""}`}
+                type="button"
+                aria-label={isFullscreen ? "退出全屏" : "进入全屏"}
+                aria-pressed={isFullscreen}
+                title={isFullscreen ? "退出全屏" : "进入全屏"}
+                disabled={!isFullscreenSupported}
+                onClick={() => void toggleFullscreen()}
+              >
+                <FullscreenIcon active={isFullscreen} />
               </button>
             </nav>
 
@@ -3220,10 +3673,10 @@ function App() {
                   <button
                     className={`equalizer-button ${isEqualizerOpen ? "active" : ""}`}
                     type="button"
-                    aria-label="五段均衡器"
+                    aria-label="音乐均衡器"
                     aria-haspopup="dialog"
                     aria-expanded={isEqualizerOpen}
-                    title="五段均衡器"
+                    title="音乐均衡器"
                     onClick={toggleEqualizerPanel}
                   >
                     <EqualizerIcon />
@@ -3231,9 +3684,9 @@ function App() {
                   {isEqualizerOpen ? (
                     <>
                       <button className="equalizer-menu-scrim" type="button" aria-label="关闭均衡器" onClick={() => setIsEqualizerOpen(false)} />
-                      <div className="equalizer-panel" role="dialog" aria-label="五段均衡器" onPointerDown={(event) => event.stopPropagation()}>
+                      <div className="equalizer-panel" role="dialog" aria-label="音乐均衡器" onPointerDown={(event) => event.stopPropagation()}>
                         <div className="equalizer-panel-header">
-                          <span>五段均衡器</span>
+                          <span>音乐均衡器</span>
                           <strong>{activeEqualizerPresetId === "custom" ? "自定义" : equalizerPresets.find((preset) => preset.id === activeEqualizerPresetId)?.label}</strong>
                         </div>
                         <div className="equalizer-presets" role="group" aria-label="均衡器预设">
@@ -3331,9 +3784,14 @@ function App() {
             activeLineIndex={activeLyricIndex}
             currentTime={currentTime}
             duration={activeDuration}
+            visualizer={lyricsVisualizer}
+            isPlaying={isPlaying}
             savedScroll={lyricsScrollStateRef.current}
             onScrollPositionChange={updateLyricsScrollPosition}
+            onToggleFullscreen={toggleFullscreen}
           />
+        ) : activePage === "discover" ? (
+          <GrowthNotesPage authSession={authSession} />
         ) : (
           <EmptyPage
             page={activePage}
@@ -3571,6 +4029,24 @@ function areTrackListsEqual(previous: Track[], next: Track[]) {
   });
 }
 
+function areNoteCommentsEqual(previous: NoteComment[], next: NoteComment[]) {
+  if (previous.length !== next.length) {
+    return false;
+  }
+  return previous.every((comment, index) => {
+    const nextComment = next[index];
+    return (
+      comment.id === nextComment.id &&
+      comment.note_id === nextComment.note_id &&
+      comment.user_id === nextComment.user_id &&
+      comment.author_nickname === nextComment.author_nickname &&
+      comment.content === nextComment.content &&
+      comment.can_delete === nextComment.can_delete &&
+      comment.updated_at === nextComment.updated_at
+    );
+  });
+}
+
 function mergePlaybackQueue(previousQueue: Track[], nextTracks: Track[]) {
   if (!nextTracks.length) {
     return [];
@@ -3659,8 +4135,11 @@ function FullLyricsPage({
   activeLineIndex,
   currentTime,
   duration,
+  visualizer,
+  isPlaying,
   savedScroll,
-  onScrollPositionChange
+  onScrollPositionChange,
+  onToggleFullscreen
 }: {
   status: LyricsStatus;
   currentTrack: Track | null;
@@ -3668,8 +4147,11 @@ function FullLyricsPage({
   activeLineIndex: number;
   currentTime: number;
   duration: number;
+  visualizer: LyricsVisualizerState;
+  isPlaying: boolean;
   savedScroll: LyricsScrollState;
   onScrollPositionChange: (trackID: number, top: number, activeLineIndex: number) => void;
+  onToggleFullscreen: () => void | Promise<void>;
 }) {
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
   const lyricsListRef = useRef<HTMLDivElement | null>(null);
@@ -3679,6 +4161,40 @@ function FullLyricsPage({
   const followResumeTimerRef = useRef<number | null>(null);
   const userScrollPausedUntilRef = useRef(0);
   const [isUserBrowsingLyrics, setIsUserBrowsingLyrics] = useState(false);
+  const scenePalette = useMemo(() => getLyricsScenePalette(currentTrack), [currentTrack?.album, currentTrack?.artist, currentTrack?.id, currentTrack?.title]);
+  const coverImageURL = currentTrack?.cover_url ? coverURL(currentTrack) : "";
+  const coverImageStyle = useMemo(
+    () =>
+      ({
+        backgroundImage: coverImageURL ? `url("${coverImageURL.replace(/"/g, '\\"')}")` : undefined
+      }) as CSSProperties,
+    [coverImageURL]
+  );
+  const sceneStyle = useMemo(
+    () =>
+      ({
+        "--lyrics-surface": scenePalette.surface,
+        "--lyrics-tone-a": scenePalette.toneA,
+        "--lyrics-tone-b": scenePalette.toneB,
+        "--lyrics-tone-c": scenePalette.toneC,
+        "--lyrics-thread": scenePalette.thread,
+        "--lyrics-bass": visualizer.bass.toFixed(3),
+        "--lyrics-mid": visualizer.mid.toFixed(3),
+        "--lyrics-treble": visualizer.treble.toFixed(3),
+        "--lyrics-energy": visualizer.energy.toFixed(3),
+        "--lyrics-field-opacity": (0.54 + visualizer.energy * 0.2).toFixed(3),
+        "--lyrics-field-breath": (1 + visualizer.bass * 0.05).toFixed(3),
+        "--lyrics-thread-opacity": (0.14 + visualizer.mid * 0.24).toFixed(3),
+        "--lyrics-glint-opacity": (0.08 + visualizer.treble * 0.22).toFixed(3),
+        "--lyrics-horizon-opacity": (0.2 + visualizer.bass * 0.26).toFixed(3),
+        "--lyrics-depth-opacity": (0.26 + visualizer.energy * 0.18).toFixed(3),
+        "--lyrics-thread-drift": `${-((currentTime * 6) % 96).toFixed(1)}px`,
+        "--lyrics-active-glow": `${18 + visualizer.energy * 18}px`,
+        "--lyrics-active-halo": `${48 + visualizer.mid * 32}px`,
+        "--lyrics-active-warmth": (0.1 + visualizer.treble * 0.18).toFixed(3)
+      }) as CSSProperties,
+    [currentTime, scenePalette, visualizer]
+  );
 
   useEffect(() => {
     return () => {
@@ -3791,15 +4307,20 @@ function FullLyricsPage({
     }
   }
 
+  function handleLyricsDoubleClick(event: ReactMouseEvent<HTMLElement>) {
+    event.preventDefault();
+    void onToggleFullscreen();
+  }
+
   let content: ReactNode;
   if (!currentTrack) {
-    content = <div className="full-lyrics-empty">请选择歌曲</div>;
+    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>请选择歌曲</div>;
   } else if (status === "loading") {
-    content = <div className="full-lyrics-empty">正在加载歌词</div>;
+    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>正在加载歌词</div>;
   } else if (status === "error") {
-    content = <div className="full-lyrics-empty">歌词加载失败</div>;
+    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>歌词加载失败</div>;
   } else if (!lines.length) {
-    content = <div className="full-lyrics-empty">暂无歌词</div>;
+    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>暂无歌词</div>;
   } else {
     content = (
       <div
@@ -3807,6 +4328,7 @@ function FullLyricsPage({
         aria-label="完整歌词"
         ref={lyricsListRef}
         onScroll={(event) => handleLyricsScroll(event.currentTarget.scrollTop)}
+        onDoubleClick={handleLyricsDoubleClick}
       >
         {lines.map((line, index) => {
           const distance = activeLineIndex >= 0 ? Math.abs(index - activeLineIndex) : 0;
@@ -3834,7 +4356,26 @@ function FullLyricsPage({
 
   return (
     <section className="lyrics-page" aria-label="歌词">
-      <section className="lyrics-page-body" aria-live="polite">
+      <div className={`lyrics-cinematic-scene ${isPlaying ? "is-playing" : "is-paused"} ${coverImageURL ? "has-cover" : "no-cover"}`} style={sceneStyle} aria-hidden="true">
+        <span className="lyrics-cover-art" style={coverImageStyle} />
+        {!coverImageURL && currentTrack ? (
+          <div className="lyrics-generated-cover">
+            <span>{currentTrack.artist}</span>
+            <strong>{currentTrack.title}</strong>
+          </div>
+        ) : null}
+        <span className="lyrics-color-field base" />
+        <span className="lyrics-color-field lift" />
+        <svg className="lyrics-light-threads" viewBox="0 0 1440 420" preserveAspectRatio="none">
+          <path className="thread thread-one" d="M-80 236 C 180 156, 318 318, 536 220 S 896 120, 1164 222 S 1432 292, 1520 186" />
+          <path className="thread thread-two" d="M-80 182 C 172 256, 344 118, 568 196 S 902 292, 1118 178 S 1392 112, 1520 236" />
+          <path className="thread thread-three" d="M-80 286 C 150 220, 336 262, 514 288 S 806 246, 998 286 S 1308 340, 1520 252" />
+        </svg>
+        <span className="lyrics-stage-light" />
+        <span className="lyrics-glass-depth" />
+        <span className="lyrics-film-texture" />
+      </div>
+      <section className="lyrics-page-body" style={sceneStyle} aria-live="polite">
         {content}
       </section>
     </section>
@@ -3889,6 +4430,7 @@ function readAuthSession(): AuthReadResult {
     const userId = typeof parsed.userId === "number" ? parsed.userId : undefined;
     const phone = typeof parsed.phone === "string" ? parsed.phone : "";
     const nickname = typeof parsed.nickname === "string" ? parsed.nickname : "";
+    const token = typeof parsed.token === "string" ? parsed.token : "";
     const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
 
     if (!phone || !nickname || !createdAt || expiresAt <= Date.now()) {
@@ -3896,7 +4438,7 @@ function readAuthSession(): AuthReadResult {
       return { session: null, expired: Boolean(expiresAt) };
     }
 
-    return { session: { userId, phone, nickname, expiresAt, createdAt }, expired: false };
+    return { session: { userId, phone, nickname, token, expiresAt, createdAt }, expired: false };
   } catch {
     removeLocalStorage(authSessionStorageKey);
     return { session: null, expired: false };
@@ -3993,13 +4535,15 @@ function getAuthValidationMessage(form: AuthFormState) {
   return "";
 }
 
-function createAuthSession(user: AuthUser): AuthSession {
+function createAuthSession(response: AuthResponse): AuthSession {
+  const expiresAt = response.expires_at ? Date.parse(response.expires_at) : Date.now() + authSessionFallbackDurationMs;
   return {
-    userId: user.id,
-    phone: user.phone,
-    nickname: user.nickname,
+    userId: response.user.id,
+    phone: response.user.phone,
+    nickname: response.user.nickname,
+    token: response.token?.trim() || "",
     createdAt: new Date().toISOString(),
-    expiresAt: Date.now() + authSessionDurationMs
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + authSessionFallbackDurationMs
   };
 }
 
@@ -5090,6 +5634,3745 @@ function formatOnlinePresence(users: OnlineUser[], onlineCount: number) {
   return "暂无在线用户";
 }
 
+type NoteFolderSelection = number | "all" | "unfiled";
+type NoteEditorMode = "edit" | "preview";
+type NoteSaveStatus = "idle" | "saving" | "saved" | "error";
+type RichEditorActions = {
+  exportHtml: () => void;
+  exportPdf: () => void;
+  print: () => void;
+};
+type NoteContextMenu =
+  | { kind: "scope"; scope: NoteFolderSelection; x: number; y: number }
+  | { kind: "folder"; folder: NoteFolder; x: number; y: number }
+  | { kind: "note"; note: GrowthNote; x: number; y: number };
+type NoteContextMenuDraft =
+  | { kind: "scope"; scope: NoteFolderSelection }
+  | { kind: "folder"; folder: NoteFolder }
+  | { kind: "note"; note: GrowthNote };
+type NoteMoveDialog = { kind: "folder"; folder: NoteFolder } | { kind: "note"; note: GrowthNote };
+type NoteInfoDialog = { kind: "folder"; folder: NoteFolder } | { kind: "note"; note: GrowthNote };
+type NoteCreateFolderDialog = { parentID: number | null };
+type NoteCreateNoteDialog = { folderID: number | null };
+type NoteRenameDialog = { kind: "folder"; folder: NoteFolder } | { kind: "note"; note: GrowthNote };
+type NoteDeleteDialog = { kind: "folder"; folder: NoteFolder } | { kind: "note"; note: GrowthNote };
+const noteTreeMinWidth = 190;
+const noteTreeMaxWidth = 420;
+
+const FontSize = Extension.create({
+  name: "fontSize",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["textStyle"],
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: (element) => element.style.fontSize || null,
+            renderHTML: (attributes) => {
+              if (!attributes.fontSize) {
+                return {};
+              }
+              return { style: `font-size: ${attributes.fontSize}` };
+            }
+          }
+        }
+      }
+    ];
+  }
+});
+
+const RichBlockStyle = Extension.create({
+  name: "richBlockStyle",
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["paragraph", "heading"],
+        attributes: {
+          lineHeight: {
+            default: null,
+            parseHTML: (element) => element.style.lineHeight || null,
+            renderHTML: (attributes) => {
+              if (!attributes.lineHeight) {
+                return {};
+              }
+              return { style: `line-height: ${attributes.lineHeight}` };
+            }
+          },
+          textIndent: {
+            default: null,
+            parseHTML: (element) => element.style.textIndent || null,
+            renderHTML: (attributes) => {
+              if (!attributes.textIndent) {
+                return {};
+              }
+              return { style: `text-indent: ${attributes.textIndent}` };
+            }
+          },
+          marginTop: {
+            default: null,
+            parseHTML: (element) => element.style.marginTop || null,
+            renderHTML: (attributes) => {
+              if (!attributes.marginTop) {
+                return {};
+              }
+              return { style: `margin-top: ${attributes.marginTop}` };
+            }
+          },
+          marginBottom: {
+            default: null,
+            parseHTML: (element) => element.style.marginBottom || null,
+            renderHTML: (attributes) => {
+              if (!attributes.marginBottom) {
+                return {};
+              }
+              return { style: `margin-bottom: ${attributes.marginBottom}` };
+            }
+          }
+        }
+      }
+    ];
+  }
+});
+
+const Superscript = Mark.create({
+  name: "superscript",
+  excludes: "subscript",
+  parseHTML() {
+    return [{ tag: "sup" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["sup", HTMLAttributes, 0];
+  }
+});
+
+const Subscript = Mark.create({
+  name: "subscript",
+  excludes: "superscript",
+  parseHTML() {
+    return [{ tag: "sub" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["sub", HTMLAttributes, 0];
+  }
+});
+
+const RichImage = Image.extend({
+  addAttributes() {
+    const parentAttributes = this.parent?.() ?? {};
+    return {
+      ...parentAttributes,
+      width: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-width") || element.style.width || null,
+        renderHTML: (attributes) => {
+          if (!attributes.width) {
+            return {};
+          }
+          return { "data-width": attributes.width, style: `width: ${attributes.width}` };
+        }
+      },
+      align: {
+        default: "center",
+        parseHTML: (element) => element.getAttribute("data-align") || "center",
+        renderHTML: (attributes) => ({ "data-align": attributes.align || "center" })
+      }
+    };
+  }
+});
+
+function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
+  const userID = authSession?.userId;
+  const [folders, setFolders] = useState<NoteFolder[]>([]);
+  const [notes, setNotes] = useState<GrowthNote[]>([]);
+  const [selectedFolder, setSelectedFolder] = useState<NoteFolderSelection>("all");
+  const [selectedNoteID, setSelectedNoteID] = useState<number | null>(null);
+  const [selectedNote, setSelectedNote] = useState<GrowthNote | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftContent, setDraftContent] = useState("");
+  const [commentDraft, setCommentDraft] = useState("");
+  const [selectedNoteComments, setSelectedNoteComments] = useState<NoteComment[]>([]);
+  const [noteCommentsCache, setNoteCommentsCache] = useState<Map<number, NoteComment[]>>(() => new Map());
+  const [saveStatus, setSaveStatus] = useState<NoteSaveStatus>("idle");
+  const [richEditorActions, setRichEditorActions] = useState<RichEditorActions | null>(null);
+  const [isOutlineVisible, setIsOutlineVisible] = useState(false);
+  const [outlineItems, setOutlineItems] = useState<RichOutlineItem[]>([]);
+  const [isDocumentMenuOpen, setIsDocumentMenuOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isCommentsLoading, setIsCommentsLoading] = useState(false);
+  const [isCommentSubmitting, setIsCommentSubmitting] = useState(false);
+  const [isTreeVisible, setIsTreeVisible] = useState(true);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState<"dark" | "light">("light");
+  const [contextMenu, setContextMenu] = useState<NoteContextMenu | null>(null);
+  const [moveDialog, setMoveDialog] = useState<NoteMoveDialog | null>(null);
+  const [infoDialog, setInfoDialog] = useState<NoteInfoDialog | null>(null);
+  const [createFolderDialog, setCreateFolderDialog] = useState<NoteCreateFolderDialog | null>(null);
+  const [createFolderName, setCreateFolderName] = useState("新的文件夹");
+  const [createNoteDialog, setCreateNoteDialog] = useState<NoteCreateNoteDialog | null>(null);
+  const [createNoteTitle, setCreateNoteTitle] = useState("未命名文档");
+  const [renameDialog, setRenameDialog] = useState<NoteRenameDialog | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteDialog, setDeleteDialog] = useState<NoteDeleteDialog | null>(null);
+  const [moveTarget, setMoveTarget] = useState("root");
+  const [treeWidth, setTreeWidth] = useState(230);
+  const [hasManualTreeWidth, setHasManualTreeWidth] = useState(false);
+  const [isTreeResizing, setIsTreeResizing] = useState(false);
+  const outlineJumpRef = useRef<RichOutlineJumpHandler | null>(null);
+  const selectedNoteIDRef = useRef<number | null>(selectedNoteID);
+
+  const folderChildren = useMemo(() => {
+    const map = new Map<number | null, NoteFolder[]>();
+    for (const folder of folders) {
+      const parentID = folder.parent_id ?? null;
+      const siblings = map.get(parentID) ?? [];
+      siblings.push(folder);
+      map.set(parentID, siblings);
+    }
+    for (const siblings of map.values()) {
+      siblings.sort((first, second) => first.sort_order - second.sort_order || first.name.localeCompare(second.name, "zh-Hans-CN") || first.id - second.id);
+    }
+    return map;
+  }, [folders]);
+
+  const notesByFolder = useMemo(() => {
+    const map = new Map<number | null, GrowthNote[]>();
+    for (const note of notes) {
+      const folderID = note.folder_id ?? null;
+      const siblings = map.get(folderID) ?? [];
+      siblings.push(note);
+      map.set(folderID, siblings);
+    }
+    return map;
+  }, [notes]);
+
+  const suggestedTreeWidth = useMemo(() => {
+    let maxWidth = 0;
+    const measureName = (name: string, depth: number) => {
+      const textWidth = Array.from(name).reduce((total, char) => total + (char.charCodeAt(0) > 255 ? 14 : 8), 0);
+      maxWidth = Math.max(maxWidth, 56 + depth * 15 + textWidth);
+    };
+    const visitFolder = (parentID: number | null, depth: number) => {
+      for (const folder of folderChildren.get(parentID) ?? []) {
+        measureName(folder.name, depth);
+        for (const note of notesByFolder.get(folder.id) ?? []) {
+          measureName(note.title, depth + 1);
+        }
+        visitFolder(folder.id, depth + 1);
+      }
+    };
+    for (const note of notesByFolder.get(null) ?? []) {
+      measureName(note.title, 0);
+    }
+    visitFolder(null, 0);
+    return Math.min(noteTreeMaxWidth, Math.max(noteTreeMinWidth, maxWidth || 218));
+  }, [folderChildren, notesByFolder]);
+
+  const folderParentByID = useMemo(() => new Map(folders.map((folder) => [folder.id, folder.parent_id ?? null])), [folders]);
+  const selectedFolderRecord = typeof selectedFolder === "number" ? folders.find((folder) => folder.id === selectedFolder) ?? null : null;
+  const canCreateInSelectedFolder = Boolean(userID) && canCreateInFolder(typeof selectedFolder === "number" ? selectedFolder : null);
+  const canEditSelectedNote = Boolean(selectedNote?.can_edit);
+  const ownedMoveFolders = folders.filter((folder) => {
+    if (!folder.can_edit) {
+      return false;
+    }
+    if (moveDialog?.kind !== "folder") {
+      return true;
+    }
+    return folder.id !== moveDialog.folder.id && !isFolderDescendant(moveDialog.folder.id, folder.id);
+  });
+
+  useEffect(() => {
+    selectedNoteIDRef.current = selectedNoteID;
+  }, [selectedNoteID]);
+
+  useEffect(() => {
+    setNoteCommentsCache(new Map());
+    setSelectedNoteComments([]);
+    setCommentDraft("");
+    void loadFolders();
+  }, [userID]);
+
+  useEffect(() => {
+    if (!hasManualTreeWidth) {
+      setTreeWidth(suggestedTreeWidth);
+    }
+  }, [hasManualTreeWidth, suggestedTreeWidth]);
+
+  useEffect(() => {
+    const timeoutID = window.setTimeout(() => {
+      void loadNotes();
+    }, 220);
+    return () => window.clearTimeout(timeoutID);
+  }, [selectedFolder, searchQuery, userID]);
+
+  useEffect(() => {
+    if (!selectedNoteID) {
+      setSelectedNote(null);
+      setDraftTitle("");
+      setDraftContent("");
+      setSelectedNoteComments([]);
+      setCommentDraft("");
+      setIsCommentsLoading(false);
+      setSaveStatus("idle");
+      setOutlineItems([]);
+      outlineJumpRef.current = null;
+      return;
+    }
+    void loadSelectedNote(selectedNoteID);
+    void loadNoteComments(selectedNoteID);
+  }, [selectedNoteID, userID]);
+
+  useEffect(() => {
+    if (selectedNote) {
+      return;
+    }
+    setOutlineItems([]);
+    outlineJumpRef.current = null;
+  }, [selectedNote]);
+
+  useEffect(() => {
+    if (!selectedNote || !selectedNote.can_edit) {
+      return;
+    }
+    if (draftTitle === selectedNote.title && draftContent === selectedNote.content) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => {
+      void saveSelectedNote();
+    }, 1000);
+    return () => window.clearTimeout(timeoutID);
+  }, [draftTitle, draftContent, selectedNote?.id, selectedNote?.updated_at, selectedNote?.can_edit]);
+
+  useEffect(() => {
+    const closeFloatingMenus = () => {
+      setContextMenu(null);
+      setIsDocumentMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+        setIsProfileMenuOpen(false);
+        setIsDocumentMenuOpen(false);
+      }
+    };
+    window.addEventListener("click", closeFloatingMenus);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeFloatingMenus, true);
+    return () => {
+      window.removeEventListener("click", closeFloatingMenus);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeFloatingMenus, true);
+    };
+  }, []);
+
+  const handleOutlineItemsChange = useCallback((items: RichOutlineItem[]) => {
+    setOutlineItems((current) => (areRichOutlineItemsEqual(current, items) ? current : items));
+  }, []);
+
+  const handleOutlineJumpReady = useCallback((jump: RichOutlineJumpHandler | null) => {
+    outlineJumpRef.current = jump;
+  }, []);
+
+  const handleOutlineItemClick = useCallback((pos: number) => {
+    outlineJumpRef.current?.(pos);
+  }, []);
+
+  async function loadFolders() {
+    try {
+      const payload = await getNoteFolders(userID);
+      setFolders(payload.folders);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "文件夹加载失败");
+    }
+  }
+
+  async function loadNotes() {
+    setIsLoading(true);
+    try {
+      const payload = await getNotes({ userID, folderID: "all", query: searchQuery.trim() });
+      setNotes(payload.notes);
+      setMessage("");
+      if (selectedNoteID && !payload.notes.some((note) => note.id === selectedNoteID)) {
+        setSelectedNoteID(payload.notes[0]?.id ?? null);
+      } else if (!selectedNoteID && payload.notes.length) {
+        setSelectedNoteID(payload.notes[0].id);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "文档加载失败");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function loadSelectedNote(noteID: number) {
+    try {
+      const notePayload = await getNote(noteID, userID);
+      setSelectedNote(notePayload.note);
+      setDraftTitle(notePayload.note.title);
+      setDraftContent(notePayload.note.content);
+      setSaveStatus("idle");
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "文档详情加载失败");
+    }
+  }
+
+  function cacheNoteComments(noteID: number, comments: NoteComment[]) {
+    setNoteCommentsCache((previous) => {
+      const cachedComments = previous.get(noteID);
+      if (cachedComments && areNoteCommentsEqual(cachedComments, comments)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.set(noteID, comments);
+      return next;
+    });
+  }
+
+  function removeNoteCommentsCache(noteID: number) {
+    setNoteCommentsCache((previous) => {
+      if (!previous.has(noteID)) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.delete(noteID);
+      return next;
+    });
+  }
+
+  function updateNoteCommentCount(noteID: number, commentCount: number) {
+    setNotes((previous) => previous.map((note) => (note.id === noteID ? { ...note, comment_count: commentCount } : note)));
+    setSelectedNote((previous) => (previous?.id === noteID ? { ...previous, comment_count: commentCount } : previous));
+  }
+
+  async function loadNoteComments(noteID: number, { force = false }: { force?: boolean } = {}) {
+    const cachedComments = force ? null : noteCommentsCache.get(noteID) ?? null;
+    if (cachedComments) {
+      setSelectedNoteComments(cachedComments);
+      setIsCommentsLoading(false);
+      return;
+    }
+
+    const existingComments = noteCommentsCache.get(noteID) ?? null;
+    if (existingComments) {
+      setSelectedNoteComments(existingComments);
+    }
+    setIsCommentsLoading(!existingComments);
+    try {
+      const payload = await getNoteComments(noteID, userID);
+      cacheNoteComments(noteID, payload.comments);
+      updateNoteCommentCount(noteID, payload.comments.length);
+      if (selectedNoteIDRef.current === noteID) {
+        setSelectedNoteComments(payload.comments);
+        setMessage("");
+      }
+    } catch (error) {
+      if (selectedNoteIDRef.current === noteID) {
+        setMessage(error instanceof Error ? error.message : "留言加载失败");
+      }
+    } finally {
+      if (selectedNoteIDRef.current === noteID) {
+        setIsCommentsLoading(false);
+      }
+    }
+  }
+
+  async function handleSubmitNoteComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userID || !selectedNote) {
+      setMessage("请先登录后留言");
+      return;
+    }
+    const content = commentDraft.trim();
+    if (!content) {
+      setMessage("留言不能为空");
+      return;
+    }
+    setIsCommentSubmitting(true);
+    try {
+      const comment = await createNoteComment(selectedNote.id, { user_id: userID, content });
+      const nextComments = [...selectedNoteComments, comment];
+      cacheNoteComments(selectedNote.id, nextComments);
+      setSelectedNoteComments(nextComments);
+      updateNoteCommentCount(selectedNote.id, nextComments.length);
+      setCommentDraft("");
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "发送留言失败");
+    } finally {
+      setIsCommentSubmitting(false);
+    }
+  }
+
+  async function handleDeleteNoteComment(comment: NoteComment) {
+    if (!userID || !selectedNote) {
+      setMessage("请先登录后删除留言");
+      return;
+    }
+    try {
+      await deleteNoteComment(selectedNote.id, comment.id, userID);
+      const nextComments = selectedNoteComments.filter((item) => item.id !== comment.id);
+      cacheNoteComments(selectedNote.id, nextComments);
+      setSelectedNoteComments(nextComments);
+      updateNoteCommentCount(selectedNote.id, nextComments.length);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除留言失败");
+      void loadNoteComments(selectedNote.id, { force: true });
+    }
+  }
+
+  function canCreateInFolder(folderID: number | null) {
+    if (!userID) {
+      return false;
+    }
+    if (folderID === null) {
+      return true;
+    }
+    return Boolean(folders.find((folder) => folder.id === folderID)?.can_edit);
+  }
+
+  function isFolderDescendant(folderID: number, candidateID: number) {
+    let parentID = folderParentByID.get(candidateID) ?? null;
+    while (parentID !== null) {
+      if (parentID === folderID) {
+        return true;
+      }
+      parentID = folderParentByID.get(parentID) ?? null;
+    }
+    return false;
+  }
+
+  function selectFolder(folder: NoteFolderSelection) {
+    setSelectedFolder(folder);
+  }
+
+  function selectNote(noteID: number) {
+    setSelectedNoteID(noteID);
+    const note = notes.find((item) => item.id === noteID);
+    if (note) {
+      setSelectedFolder(note.folder_id ?? "unfiled");
+    }
+  }
+
+  function handleCreateFolder(parentID?: number | null) {
+    if (!userID) {
+      setMessage("请先登录后创建文件夹");
+      return;
+    }
+    if (!canCreateInFolder(parentID ?? null)) {
+      setMessage("只能在自己创建的文件夹里新建子文件夹");
+      return;
+    }
+    setCreateFolderName("新的文件夹");
+    setCreateFolderDialog({ parentID: parentID ?? null });
+    setContextMenu(null);
+    setMessage("");
+  }
+
+  async function handleConfirmCreateFolder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userID || !createFolderDialog) {
+      return;
+    }
+    const parentID = createFolderDialog.parentID;
+    if (!canCreateInFolder(parentID)) {
+      setMessage("只能在自己创建的文件夹里新建子文件夹");
+      return;
+    }
+    const name = createFolderName.trim();
+    if (!name) {
+      setMessage("文件夹名称不能为空");
+      return;
+    }
+    try {
+      const folder = await createNoteFolder({ user_id: userID, parent_id: parentID, name });
+      setFolders((previous) => [...previous, folder]);
+      setSelectedFolder(folder.id);
+      setCreateFolderDialog(null);
+      setCreateFolderName("新的文件夹");
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "创建文件夹失败");
+    }
+  }
+
+  async function handleCopyFolder(folder: NoteFolder) {
+    if (!userID) {
+      setMessage("请先登录后复制文件夹");
+      return;
+    }
+    const parentID = folder.parent_id ?? null;
+    if (!canCreateInFolder(parentID)) {
+      setMessage("只能复制到自己可编辑的位置");
+      return;
+    }
+    try {
+      const copiedFolder = await createNoteFolder({ user_id: userID, parent_id: parentID, name: `${folder.name} 副本` });
+      setFolders((previous) => [...previous, copiedFolder]);
+      setSelectedFolder(copiedFolder.id);
+      setMessage("已复制文件夹结构，文档内容可单独复制");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "复制文件夹失败");
+    }
+  }
+
+  function handleRenameFolder(folder: NoteFolder) {
+    if (!userID || !folder.can_edit) {
+      return;
+    }
+    setRenameDialog({ kind: "folder", folder });
+    setRenameValue(folder.name);
+    setContextMenu(null);
+    setMessage("");
+  }
+
+  async function handleConfirmRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userID || !renameDialog) {
+      return;
+    }
+    const name = renameValue.trim();
+    if (!name) {
+      setMessage("名称不能为空");
+      return;
+    }
+    try {
+      if (renameDialog.kind === "folder") {
+        const folder = renameDialog.folder;
+        if (!folder.can_edit || name === folder.name) {
+          setRenameDialog(null);
+          return;
+        }
+        const nextFolder = await updateNoteFolder(folder.id, { user_id: userID, parent_id: folder.parent_id, name });
+        setFolders((previous) => previous.map((item) => (item.id === nextFolder.id ? nextFolder : item)));
+      } else {
+        const note = renameDialog.note;
+        if (!note.can_edit || name === note.title) {
+          setRenameDialog(null);
+          return;
+        }
+        const nextNote = await updateNote(note.id, { user_id: userID, folder_id: note.folder_id, title: name, content: note.content });
+        setNotes((previous) => previous.map((item) => (item.id === nextNote.id ? nextNote : item)));
+        if (selectedNoteID === nextNote.id) {
+          setSelectedNote(nextNote);
+          setDraftTitle(nextNote.title);
+          setDraftContent(nextNote.content);
+        }
+      }
+      setRenameDialog(null);
+      setRenameValue("");
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "重命名失败");
+    }
+  }
+
+  async function handleDeleteFolder(folder: NoteFolder) {
+    if (!userID || !folder.can_edit) {
+      return;
+    }
+    try {
+      await deleteNoteFolder(folder.id, userID);
+      await loadFolders();
+      setDeleteDialog(null);
+      if (selectedFolder === folder.id) {
+        setSelectedFolder("all");
+      }
+      void loadNotes();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除文件夹失败");
+    }
+  }
+
+  function handleCreateNote(folderID?: number | null) {
+    if (!userID) {
+      setMessage("请先登录后创建文档");
+      return;
+    }
+    const targetFolderID = folderID !== undefined ? folderID : typeof selectedFolder === "number" ? selectedFolder : null;
+    if (!canCreateInFolder(targetFolderID)) {
+      setMessage("只能在自己创建的文件夹里写文档");
+      return;
+    }
+    setCreateNoteTitle("未命名文档");
+    setCreateNoteDialog({ folderID: targetFolderID });
+    setContextMenu(null);
+    setMessage("");
+  }
+
+  async function handleConfirmCreateNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userID || !createNoteDialog) {
+      return;
+    }
+    const targetFolderID = createNoteDialog.folderID;
+    if (!canCreateInFolder(targetFolderID)) {
+      setMessage("只能在自己创建的文件夹里写文档");
+      return;
+    }
+    const title = createNoteTitle.trim();
+    if (!title) {
+      setMessage("文档标题不能为空");
+      return;
+    }
+    try {
+      const note = await createNote({
+        user_id: userID,
+        folder_id: targetFolderID,
+        title,
+        content: ""
+      });
+      setNotes((previous) => [note, ...previous]);
+      setSelectedNoteID(note.id);
+      setSelectedFolder(note.folder_id ?? "unfiled");
+      setCreateNoteDialog(null);
+      setCreateNoteTitle("未命名文档");
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "创建文档失败");
+    }
+  }
+
+  async function saveSelectedNote() {
+    if (!userID || !selectedNote?.can_edit) {
+      return;
+    }
+    const title = draftTitle.trim();
+    if (!title) {
+      setSaveStatus("error");
+      setMessage("标题不能为空");
+      return;
+    }
+    setSaveStatus("saving");
+    try {
+      const note = await updateNote(selectedNote.id, { user_id: userID, folder_id: selectedNote.folder_id, title, content: draftContent });
+      setSelectedNote(note);
+      setNotes((previous) => previous.map((item) => (item.id === note.id ? note : item)));
+      setSaveStatus("saved");
+      setMessage("");
+    } catch (error) {
+      setSaveStatus("error");
+      setMessage(error instanceof Error ? error.message : "自动保存失败");
+    }
+  }
+
+  function handleEditorKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat || !selectedNote?.can_edit) {
+      return;
+    }
+    void saveSelectedNote();
+  }
+
+  function handleRenameNote(note: GrowthNote) {
+    if (!userID || !note.can_edit) {
+      return;
+    }
+    setRenameDialog({ kind: "note", note });
+    setRenameValue(note.title);
+    setContextMenu(null);
+    setMessage("");
+  }
+
+  async function handleCopyNote(note: GrowthNote) {
+    if (!userID) {
+      setMessage("请先登录后复制文档");
+      return;
+    }
+    const targetFolderID = typeof selectedFolder === "number" && canCreateInFolder(selectedFolder) ? selectedFolder : null;
+    try {
+      const copiedNote = await createNote({
+        user_id: userID,
+        folder_id: targetFolderID,
+        title: `${note.title} 副本`,
+        content: note.content
+      });
+      setNotes((previous) => [copiedNote, ...previous]);
+      setSelectedNoteID(copiedNote.id);
+      setSelectedFolder(copiedNote.folder_id ?? "unfiled");
+      setMessage("已复制为你的文档副本");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "复制文档失败");
+    }
+  }
+
+  async function handleDeleteNote(note = selectedNote) {
+    if (!userID || !note?.can_edit) {
+      return;
+    }
+    try {
+      await deleteNote(note.id, userID);
+      setNotes((previous) => previous.filter((item) => item.id !== note.id));
+      removeNoteCommentsCache(note.id);
+      setDeleteDialog(null);
+      if (selectedNoteID === note.id) {
+        setSelectedNoteID(notes.find((item) => item.id !== note.id)?.id ?? null);
+      }
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除文档失败");
+    }
+  }
+
+  function openContextMenu(event: ReactMouseEvent, menu: NoteContextMenuDraft) {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ ...menu, x: event.clientX, y: event.clientY } as NoteContextMenu);
+  }
+
+  function openMoveDialog(target: NoteMoveDialog) {
+    setMoveDialog(target);
+    const currentParent = target.kind === "folder" ? target.folder.parent_id : target.note.folder_id;
+    setMoveTarget(currentParent ? String(currentParent) : "root");
+    setContextMenu(null);
+  }
+
+  function openInfoDialog(target: NoteInfoDialog) {
+    setInfoDialog(target);
+    setContextMenu(null);
+  }
+
+  function openDeleteDialog(target: NoteDeleteDialog) {
+    setDeleteDialog(target);
+    setContextMenu(null);
+  }
+
+  function getTreeWidthFromPointer(clientX: number) {
+    const railWidth = 68;
+    const availableMax = Math.max(noteTreeMinWidth, Math.min(noteTreeMaxWidth, window.innerWidth - railWidth - 420));
+    return Math.min(availableMax, Math.max(noteTreeMinWidth, clientX - railWidth));
+  }
+
+  function handleTreeResizePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setHasManualTreeWidth(true);
+    setIsTreeResizing(true);
+    setTreeWidth(getTreeWidthFromPointer(event.clientX));
+  }
+
+  function handleTreeResizePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isTreeResizing) {
+      return;
+    }
+    setTreeWidth(getTreeWidthFromPointer(event.clientX));
+  }
+
+  function stopTreeResize(event: ReactPointerEvent<HTMLDivElement>) {
+    setIsTreeResizing(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  async function handleConfirmMove() {
+    if (!userID || !moveDialog) {
+      return;
+    }
+    const targetFolderID = moveTarget === "root" ? null : Number(moveTarget);
+    if (!Number.isFinite(targetFolderID ?? 0)) {
+      setMessage("目标文件夹不正确");
+      return;
+    }
+    try {
+      if (moveDialog.kind === "folder") {
+        const folder = moveDialog.folder;
+        const movedFolder = await updateNoteFolder(folder.id, { user_id: userID, parent_id: targetFolderID, name: folder.name });
+        setFolders((previous) => previous.map((item) => (item.id === movedFolder.id ? movedFolder : item)));
+        setSelectedFolder(movedFolder.id);
+      } else {
+        const note = moveDialog.note;
+        const movedNote = await updateNote(note.id, { user_id: userID, folder_id: targetFolderID, title: note.title, content: note.content });
+        setNotes((previous) => previous.map((item) => (item.id === movedNote.id ? movedNote : item)));
+        setSelectedNoteID(movedNote.id);
+        setSelectedFolder(movedNote.folder_id ?? "unfiled");
+        if (selectedNoteID === movedNote.id) {
+          setSelectedNote(movedNote);
+        }
+      }
+      setMoveDialog(null);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "移动失败");
+    }
+  }
+
+  function renderNoteNode(note: GrowthNote, depth: number) {
+    return (
+      <button
+        key={note.id}
+        className={`growth-tree-row note ${selectedNoteID === note.id ? "active" : ""}`}
+        type="button"
+        title={note.title}
+        style={{ "--tree-depth": depth } as CSSProperties}
+        onClick={() => selectNote(note.id)}
+        onContextMenu={(event) => openContextMenu(event, { kind: "note", note })}
+      >
+        <span className="growth-tree-icon">
+          <DocumentTreeIcon />
+        </span>
+        <span className="growth-tree-main">
+          <span>{note.title}</span>
+        </span>
+      </button>
+    );
+  }
+
+  function renderFolderTree(parentID: number | null, depth = 0): ReactNode {
+    const items = folderChildren.get(parentID) ?? [];
+    return items.map((folder) => (
+      <div key={folder.id} className="growth-folder-branch">
+        <button
+          type="button"
+          className={`growth-tree-row folder ${selectedFolder === folder.id ? "active" : ""}`}
+          title={folder.name}
+          style={{ "--tree-depth": depth } as CSSProperties}
+          onClick={() => selectFolder(folder.id)}
+          onDoubleClick={() => void handleCreateNote(folder.id)}
+          onContextMenu={(event) => openContextMenu(event, { kind: "folder", folder })}
+        >
+          <span className="growth-tree-icon">
+            <FolderTreeIcon />
+          </span>
+          <span className="growth-tree-main">
+            <span>{folder.name}</span>
+          </span>
+        </button>
+        {(notesByFolder.get(folder.id) ?? []).map((note) => renderNoteNode(note, depth + 1))}
+        {renderFolderTree(folder.id, depth + 1)}
+      </div>
+    ));
+  }
+
+  const saveStatusText: Record<NoteSaveStatus, string> = {
+    idle: selectedNote?.can_edit ? "自动保存" : "只读",
+    saving: "保存中",
+    saved: "已保存",
+    error: "保存失败"
+  };
+  const currentUserName = authSession?.nickname?.trim() || authSession?.phone || "未登录";
+  const createFolderParent = createFolderDialog?.parentID ? folders.find((folder) => folder.id === createFolderDialog.parentID) ?? null : null;
+  const createNoteParent = createNoteDialog?.folderID ? folders.find((folder) => folder.id === createNoteDialog.folderID) ?? null : null;
+
+  const isOutlinePanelVisible = isOutlineVisible && Boolean(selectedNote);
+  const growthPageStyle = { "--growth-tree-width": `${Math.round(treeWidth)}px` } as CSSProperties;
+
+  return (
+    <section className={`growth-page ${themeMode === "light" ? "light" : ""} ${isTreeVisible ? "" : "tree-hidden"} ${isTreeResizing ? "tree-resizing" : ""} ${isOutlinePanelVisible ? "outline-visible" : ""}`} style={growthPageStyle} aria-label="个人成长养成记">
+      <aside className="growth-sidebar" aria-label="笔记侧边栏">
+        <div className="growth-user-area">
+          <button className="growth-avatar" type="button" aria-label="用户功能" onClick={(event) => { event.stopPropagation(); setIsProfileMenuOpen((open) => !open); }}>
+            {authSession ? getProfileAvatarText(authSession) : "客"}
+          </button>
+          {isProfileMenuOpen ? (
+            <div className="growth-profile-menu" onClick={(event) => event.stopPropagation()}>
+              <strong>{currentUserName}</strong>
+              <button type="button">个人信息</button>
+              <button type="button" onClick={() => setThemeMode((mode) => (mode === "dark" ? "light" : "dark"))}>
+                {themeMode === "dark" ? "浅色主题" : "深色主题"}
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <nav className="growth-rail-actions" aria-label="笔记功能">
+          <button className={isTreeVisible ? "active" : ""} type="button" title="我的文件夹" aria-label="我的文件夹" onClick={() => setIsTreeVisible((visible) => !visible)}>
+            <FolderRailIcon />
+          </button>
+        </nav>
+      </aside>
+
+      {isTreeVisible ? (
+        <section className="growth-tree-panel" aria-label="文件夹树目录" aria-busy={isLoading}>
+          <div className="growth-search">
+            <input type="search" value={searchQuery} placeholder="搜索笔记 Ctrl+Shift+F" aria-label="搜索文档" onChange={(event) => setSearchQuery(event.target.value)} />
+          </div>
+          <div className="growth-message" role="status">
+            {message}
+          </div>
+          <div className="growth-tree" onContextMenu={(event) => openContextMenu(event, { kind: "scope", scope: selectedFolder })}>
+            {(notesByFolder.get(null) ?? []).map((note) => renderNoteNode(note, 0))}
+            {renderFolderTree(null)}
+            {!notes.length && !folders.length ? <div className="growth-empty">{isLoading ? "正在加载文档" : "暂无文件夹和文档"}</div> : null}
+          </div>
+        </section>
+      ) : null}
+
+      {isTreeVisible ? (
+        <div
+          className="growth-tree-resizer"
+          role="separator"
+          aria-label="调整文件夹区域宽度"
+          aria-orientation="vertical"
+          aria-valuemin={noteTreeMinWidth}
+          aria-valuemax={noteTreeMaxWidth}
+          aria-valuenow={Math.round(treeWidth)}
+          onPointerDown={handleTreeResizePointerDown}
+          onPointerMove={handleTreeResizePointerMove}
+          onPointerUp={stopTreeResize}
+          onPointerCancel={stopTreeResize}
+          onLostPointerCapture={() => setIsTreeResizing(false)}
+        />
+      ) : null}
+
+      {isOutlinePanelVisible ? (
+        <section className="growth-outline-panel" aria-label="文档大纲">
+          <header className="growth-outline-header">
+            <strong>文档大纲</strong>
+            <button type="button" aria-label="关闭文档大纲" onClick={() => setIsOutlineVisible(false)}>
+              x
+            </button>
+          </header>
+          <div className="growth-outline-list">
+            {outlineItems.length ? (
+              outlineItems.map((item) => (
+                <button key={`${item.pos}-${item.title}`} className="growth-outline-item" type="button" style={{ "--outline-indent": `${(item.level - 1) * 14}px` } as CSSProperties} onClick={() => handleOutlineItemClick(item.pos)}>
+                  <span>{item.title}</span>
+                  <small>H{item.level}</small>
+                </button>
+              ))
+            ) : (
+              <div className="growth-outline-empty">暂无标题</div>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="growth-editor" aria-label="文档内容" onKeyDownCapture={handleEditorKeyDown}>
+        {selectedNote ? (
+          <>
+            <header className="growth-editor-titlebar">
+              <div className="growth-editor-titlemeta">
+                <span className="growth-title-input" title={draftTitle} aria-label="文档标题">
+                  {draftTitle}
+                </span>
+              </div>
+              <div className="growth-editor-title-actions" onClick={(event) => event.stopPropagation()}>
+                <button type="button" disabled={!selectedNote.can_edit} onClick={() => void saveSelectedNote()}>
+                  保存
+                </button>
+                <div className="growth-document-more">
+                  <button type="button" className="growth-document-more-button" aria-label="更多文档操作" aria-expanded={isDocumentMenuOpen} onClick={() => setIsDocumentMenuOpen((open) => !open)}>
+                    ...
+                  </button>
+                  {isDocumentMenuOpen ? (
+                    <div className="growth-document-menu" role="menu" aria-label="文档操作">
+                      <button type="button" role="menuitem" disabled={!richEditorActions} onClick={() => { richEditorActions?.exportHtml(); setIsDocumentMenuOpen(false); }}>导出 HTML</button>
+                      <button type="button" role="menuitem" disabled={!richEditorActions} onClick={() => { richEditorActions?.exportPdf(); setIsDocumentMenuOpen(false); }}>导出 PDF</button>
+                      <button type="button" role="menuitem" disabled={!richEditorActions} onClick={() => { richEditorActions?.print(); setIsDocumentMenuOpen(false); }}>打印</button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </header>
+            <RichTextEditor
+              content={draftContent}
+              editable={canEditSelectedNote}
+              onChange={setDraftContent}
+              onActionsChange={setRichEditorActions}
+              isOutlineOpen={isOutlineVisible}
+              onToggleOutline={() => setIsOutlineVisible((visible) => !visible)}
+              onOutlineItemsChange={handleOutlineItemsChange}
+              onOutlineJumpReady={handleOutlineJumpReady}
+            />
+            <section className="growth-comments" aria-label="文档留言">
+              <header>
+                <strong>留言</strong>
+                <span>{isCommentsLoading ? "正在加载" : `${selectedNoteComments.length} 条`}</span>
+              </header>
+              <div className="growth-comment-list">
+                {selectedNoteComments.length ? (
+                  selectedNoteComments.map((comment) => (
+                    <article key={comment.id} className="growth-comment-item">
+                      <div>
+                        <strong>{comment.author_nickname || "朋友"}</strong>
+                        <time dateTime={comment.created_at}>{formatDateTime(comment.created_at)}</time>
+                      </div>
+                      <p>{comment.content}</p>
+                      {comment.can_delete ? (
+                        <button type="button" onClick={() => void handleDeleteNoteComment(comment)}>
+                          删除
+                        </button>
+                      ) : null}
+                    </article>
+                  ))
+                ) : (
+                  <div className="growth-comment-empty">{isCommentsLoading ? "留言加载中" : "还没有留言"}</div>
+                )}
+              </div>
+              <form className="growth-comment-form" onSubmit={(event) => void handleSubmitNoteComment(event)}>
+                <textarea
+                  value={commentDraft}
+                  maxLength={1000}
+                  rows={2}
+                  placeholder={userID ? "写下你的留言" : "登录后可以留言"}
+                  aria-label="留言内容"
+                  disabled={!userID || isCommentSubmitting}
+                  onChange={(event) => setCommentDraft(event.target.value)}
+                />
+                <button type="submit" disabled={!userID || isCommentSubmitting || !commentDraft.trim()}>
+                  {isCommentSubmitting ? "发送中" : "发送"}
+                </button>
+              </form>
+            </section>
+          </>
+        ) : (
+          <div className="growth-empty growth-editor-empty">选择一篇文档查看内容。</div>
+        )}
+      </section>
+
+      {contextMenu ? (
+        <div className="growth-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
+          {contextMenu.kind === "folder" ? (
+            <>
+              <button type="button" onClick={() => { setContextMenu(null); void handleCreateFolder(contextMenu.folder.id); }}>新建文件夹</button>
+              <button type="button" onClick={() => { setContextMenu(null); void handleCreateNote(contextMenu.folder.id); }}>新建文档</button>
+              <button type="button" onClick={() => openInfoDialog({ kind: "folder", folder: contextMenu.folder })}>文件信息</button>
+              <button type="button" disabled={!contextMenu.folder.can_edit} onClick={() => { setContextMenu(null); void handleRenameFolder(contextMenu.folder); }}>重命名</button>
+              <button type="button" disabled={!contextMenu.folder.can_edit} onClick={() => openMoveDialog({ kind: "folder", folder: contextMenu.folder })}>移动到</button>
+              <button type="button" onClick={() => { setContextMenu(null); void handleCopyFolder(contextMenu.folder); }}>复制</button>
+              <button className="danger" type="button" disabled={!contextMenu.folder.can_edit} onClick={() => openDeleteDialog({ kind: "folder", folder: contextMenu.folder })}>删除</button>
+            </>
+          ) : contextMenu.kind === "note" ? (
+            <>
+              <button type="button" onClick={() => { selectNote(contextMenu.note.id); setContextMenu(null); }}>打开</button>
+              <button type="button" onClick={() => openInfoDialog({ kind: "note", note: contextMenu.note })}>文件信息</button>
+              <button type="button" disabled={!contextMenu.note.can_edit} onClick={() => { setContextMenu(null); void handleRenameNote(contextMenu.note); }}>重命名</button>
+              <button type="button" disabled={!contextMenu.note.can_edit} onClick={() => openMoveDialog({ kind: "note", note: contextMenu.note })}>移动到</button>
+              <button type="button" onClick={() => { setContextMenu(null); void handleCopyNote(contextMenu.note); }}>复制</button>
+              <button className="danger" type="button" disabled={!contextMenu.note.can_edit} onClick={() => openDeleteDialog({ kind: "note", note: contextMenu.note })}>删除</button>
+            </>
+          ) : (
+            <>
+              <button type="button" disabled={!canCreateInSelectedFolder} onClick={() => { setContextMenu(null); void handleCreateNote(); }}>新建文档</button>
+              <button type="button" disabled={!userID} onClick={() => { setContextMenu(null); void handleCreateFolder(typeof contextMenu.scope === "number" ? contextMenu.scope : null); }}>新建文件夹</button>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {moveDialog ? (
+        <div className="growth-dialog-backdrop" role="presentation" onClick={() => setMoveDialog(null)}>
+          <div className="growth-dialog" role="dialog" aria-modal="true" aria-label="移动到" onClick={(event) => event.stopPropagation()}>
+            <strong>移动到</strong>
+            <span>{moveDialog.kind === "folder" ? moveDialog.folder.name : moveDialog.note.title}</span>
+            <select value={moveTarget} onChange={(event) => setMoveTarget(event.target.value)}>
+              <option value="root">{moveDialog.kind === "folder" ? "根目录" : "未归档"}</option>
+              {ownedMoveFolders.map((folder) => (
+                <option key={folder.id} value={folder.id}>
+                  {folder.name}
+                </option>
+              ))}
+            </select>
+            <div>
+              <button type="button" onClick={() => setMoveDialog(null)}>取消</button>
+              <button type="button" onClick={() => void handleConfirmMove()}>移动</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {createFolderDialog ? (
+        <div className="growth-dialog-backdrop" role="presentation" onClick={() => setCreateFolderDialog(null)}>
+          <form className="growth-dialog growth-folder-dialog" role="dialog" aria-modal="true" aria-label="新建文件夹" onClick={(event) => event.stopPropagation()} onSubmit={(event) => void handleConfirmCreateFolder(event)}>
+            <strong>新建文件夹</strong>
+            <span>{createFolderParent ? `在“${createFolderParent.name}”中新建子文件夹` : "在根目录中新建文件夹"}</span>
+            <input value={createFolderName} autoFocus maxLength={80} aria-label="文件夹名称" onChange={(event) => setCreateFolderName(event.target.value)} />
+            <div>
+              <button type="button" onClick={() => setCreateFolderDialog(null)}>取消</button>
+              <button type="submit">创建</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {createNoteDialog ? (
+        <div className="growth-dialog-backdrop" role="presentation" onClick={() => setCreateNoteDialog(null)}>
+          <form className="growth-dialog growth-folder-dialog" role="dialog" aria-modal="true" aria-label="新建文档" onClick={(event) => event.stopPropagation()} onSubmit={(event) => void handleConfirmCreateNote(event)}>
+            <strong>新建文档</strong>
+            <span>{createNoteParent ? `在“${createNoteParent.name}”中新建文档` : "在根目录中新建文档"}</span>
+            <input value={createNoteTitle} autoFocus maxLength={120} aria-label="文档标题" onChange={(event) => setCreateNoteTitle(event.target.value)} />
+            <div>
+              <button type="button" onClick={() => setCreateNoteDialog(null)}>取消</button>
+              <button type="submit">创建</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {renameDialog ? (
+        <div className="growth-dialog-backdrop" role="presentation" onClick={() => setRenameDialog(null)}>
+          <form className="growth-dialog growth-folder-dialog" role="dialog" aria-modal="true" aria-label={renameDialog.kind === "folder" ? "重命名文件夹" : "重命名文档"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => void handleConfirmRename(event)}>
+            <strong>{renameDialog.kind === "folder" ? "重命名文件夹" : "重命名文档"}</strong>
+            <span>{renameDialog.kind === "folder" ? "请输入新的文件夹名称" : "请输入新的文档标题"}</span>
+            <input value={renameValue} autoFocus maxLength={renameDialog.kind === "folder" ? 80 : 120} aria-label={renameDialog.kind === "folder" ? "文件夹名称" : "文档标题"} onChange={(event) => setRenameValue(event.target.value)} />
+            <div>
+              <button type="button" onClick={() => setRenameDialog(null)}>取消</button>
+              <button type="submit">保存</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {deleteDialog ? (
+        <div className="growth-dialog-backdrop" role="presentation" onClick={() => setDeleteDialog(null)}>
+          <div className="growth-dialog growth-delete-dialog" role="dialog" aria-modal="true" aria-label={deleteDialog.kind === "folder" ? "删除文件夹" : "删除文档"} onClick={(event) => event.stopPropagation()}>
+            <strong>{deleteDialog.kind === "folder" ? "删除文件夹" : "删除文档"}</strong>
+            <span>
+              {deleteDialog.kind === "folder"
+                ? `确定删除“${deleteDialog.folder.name}”吗？子文件夹会一起删除，里面的文档会移动到未归档。`
+                : `确定删除“${deleteDialog.note.title}”吗？删除后这篇文档会消失。`}
+            </span>
+            <div>
+              <button type="button" onClick={() => setDeleteDialog(null)}>取消</button>
+              <button className="danger" type="button" onClick={() => void (deleteDialog.kind === "folder" ? handleDeleteFolder(deleteDialog.folder) : handleDeleteNote(deleteDialog.note))}>删除</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {infoDialog ? (
+        <div className="growth-dialog-backdrop" role="presentation" onClick={() => setInfoDialog(null)}>
+          <div className="growth-dialog growth-info-dialog" role="dialog" aria-modal="true" aria-label="文件信息" onClick={(event) => event.stopPropagation()}>
+            <strong>文件信息</strong>
+            {infoDialog.kind === "folder" ? (
+              <dl>
+                <div>
+                  <dt>类型</dt>
+                  <dd>文件夹</dd>
+                </div>
+                <div>
+                  <dt>名称</dt>
+                  <dd>{infoDialog.folder.name}</dd>
+                </div>
+                <div>
+                  <dt>创建者</dt>
+                  <dd>{infoDialog.folder.owner_nickname}</dd>
+                </div>
+                <div>
+                  <dt>文档数量</dt>
+                  <dd>{infoDialog.folder.note_count} 篇</dd>
+                </div>
+                <div>
+                  <dt>创建时间</dt>
+                  <dd>{formatDateTime(infoDialog.folder.created_at)}</dd>
+                </div>
+                <div>
+                  <dt>更新时间</dt>
+                  <dd>{formatDateTime(infoDialog.folder.updated_at)}</dd>
+                </div>
+              </dl>
+            ) : (
+              <dl>
+                <div>
+                  <dt>类型</dt>
+                  <dd>文档</dd>
+                </div>
+                <div>
+                  <dt>名称</dt>
+                  <dd>{infoDialog.note.title}</dd>
+                </div>
+                <div>
+                  <dt>创建者</dt>
+                  <dd>{infoDialog.note.owner_nickname}</dd>
+                </div>
+                <div>
+                  <dt>创建时间</dt>
+                  <dd>{formatDateTime(infoDialog.note.created_at)}</dd>
+                </div>
+                <div>
+                  <dt>更新时间</dt>
+                  <dd>{formatDateTime(infoDialog.note.updated_at)}</dd>
+                </div>
+              </dl>
+            )}
+            <div>
+              <button type="button" onClick={() => setInfoDialog(null)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+const richTextExtensions = [
+  StarterKit.configure({
+    codeBlock: {
+      HTMLAttributes: {
+        class: "rich-code-block"
+      }
+    }
+  }),
+  RichBlockStyle,
+  Underline,
+  Superscript,
+  Subscript,
+  TextStyle,
+  FontSize,
+  FontFamily.configure({
+    types: ["textStyle"]
+  }),
+  Color.configure({
+    types: ["textStyle"]
+  }),
+  Highlight.configure({
+    multicolor: true
+  }),
+  TextAlign.configure({
+    types: ["heading", "paragraph"]
+  }),
+  Link.configure({
+    openOnClick: false,
+    autolink: true,
+    defaultProtocol: "https"
+  }),
+  RichImage.configure({
+    allowBase64: true,
+    HTMLAttributes: {
+      class: "growth-rich-image"
+    }
+  }),
+  TaskList,
+  TaskItem.configure({
+    nested: true
+  }),
+  Table.configure({
+    resizable: true,
+    allowTableNodeSelection: true
+  }),
+  TableRow,
+  TableHeader,
+  TableCell
+];
+
+const richDeletableNodeNames = new Set(["horizontalRule", "image", "table"]);
+
+const richFontFamilies = [
+  { label: "默认字体", value: "" },
+  { label: "思源黑体", value: "\"Noto Sans SC\", \"Source Han Sans SC\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif" },
+  { label: "霞鹜文楷", value: "\"LXGW WenKai Screen\", \"Noto Sans SC\", sans-serif" },
+  { label: "微软雅黑", value: "\"Microsoft YaHei\", \"Noto Sans SC\", sans-serif" },
+  { label: "苹方", value: "\"PingFang SC\", \"Noto Sans SC\", sans-serif" },
+  { label: "黑体", value: "SimHei, \"Microsoft YaHei\", sans-serif" },
+  { label: "宋体", value: "SimSun, \"Songti SC\", serif" },
+  { label: "仿宋", value: "FangSong, \"FangSong_GB2312\", serif" },
+  { label: "楷体", value: "KaiTi, \"Kaiti SC\", serif" },
+  { label: "等线", value: "DengXian, \"Microsoft YaHei\", sans-serif" },
+  { label: "Arial", value: "Arial, sans-serif" },
+  { label: "Helvetica", value: "Helvetica, Arial, sans-serif" },
+  { label: "Verdana", value: "Verdana, Geneva, sans-serif" },
+  { label: "Tahoma", value: "Tahoma, Geneva, sans-serif" },
+  { label: "Times New Roman", value: "\"Times New Roman\", Times, serif" },
+  { label: "Georgia", value: "Georgia, \"Times New Roman\", serif" },
+  { label: "Consolas", value: "Consolas, \"Courier New\", monospace" },
+  { label: "Courier New", value: "\"Courier New\", Courier, monospace" }
+];
+
+function getRichFontSelectWidth(label: string) {
+  const visualUnits = Array.from(label).reduce((total, char) => {
+    if (char === " ") {
+      return total + 0.35;
+    }
+    return total + (/^[\x00-\x7F]$/.test(char) ? 0.62 : 1);
+  }, 0);
+  return `${Math.round(Math.min(132, Math.max(74, visualUnits * 13 + 28)))}px`;
+}
+
+const richFontSizes = ["12", "14", "16", "18", "22", "28", "36"];
+type RichHeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+const richHeadingLevels: RichHeadingLevel[] = [1, 2, 3, 4, 5, 6];
+const richLineHeightOptions = [
+  { label: "默认行距", value: "" },
+  { label: "1.0", value: "1" },
+  { label: "1.15", value: "1.15" },
+  { label: "1.5", value: "1.5" },
+  { label: "2.0", value: "2" }
+];
+const richParagraphSpacingOptions = [
+  { label: "默认段距", value: "" },
+  { label: "紧凑", value: "compact", marginTop: null, marginBottom: "0.35em" },
+  { label: "标准", value: "normal", marginTop: null, marginBottom: "0.85em" },
+  { label: "宽松", value: "loose", marginTop: "0.45em", marginBottom: "1.25em" },
+  { label: "无段距", value: "none", marginTop: "0", marginBottom: "0" }
+];
+const richPalettePrimary = ["transparent", "#000000", "#ff120d", "#ff9800", "#ffdb00", "#75f000", "#65cdea", "#4038c9", "#df39f2"];
+const richPaletteRows = [
+  ["#dedede", "#8a8a8a", "#ffc7b8", "#ffdca4", "#ffefbc", "#d9edd1", "#d8f3fb", "#d4c9f4", "#f6d9f6"],
+  ["#cfcfcf", "#656565", "#f4a29d", "#ffbc62", "#ffe082", "#b9df99", "#83d6e3", "#9d85e8", "#e778eb"],
+  ["#b8b8b8", "#3e3e3e", "#e35d5b", "#ff8a00", "#ffd13a", "#76bc24", "#10b7d4", "#4244b5", "#c33cdf"],
+  ["#9b9b9b", "#202020", "#d91109", "#e85e00", "#ffae00", "#5f9800", "#1387ee", "#29369e", "#a91bd2"]
+];
+const richRecentColors = ["#000000", "transparent", "transparent", "transparent", "transparent", "transparent", "transparent", "transparent", "transparent"];
+type RichSelectionBox = { left: number; top: number; width: number; height: number };
+type RichContextMenuPosition = { x: number; y: number; imagePos?: number; tablePos?: number; tableClickPos?: number; dividerPos?: number };
+type RichDragState = {
+  active: boolean;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+};
+type RichTableAction = "addColumnBefore" | "addColumnAfter" | "deleteColumn" | "addRowBefore" | "addRowAfter" | "deleteRow" | "toggleHeaderRow" | "mergeCells" | "splitCell" | "deleteTable";
+type RichTextMatch = { from: number; to: number };
+type RichOutlineItem = { level: number; title: string; pos: number };
+type RichOutlineJumpHandler = (pos: number) => void;
+type RichFindDialogMode = "find" | "replace";
+type RichFindDialogState = { mode: RichFindDialogMode; seed: number };
+
+function readImageFileAsDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("请选择图片文件"));
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const src = typeof reader.result === "string" ? reader.result : "";
+      if (!src) {
+        reject(new Error("图片读取失败"));
+        return;
+      }
+      resolve(src);
+    });
+    reader.addEventListener("error", () => reject(new Error("图片读取失败")));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function insertRichImageFilesIntoView(view: EditorView, files: File[]) {
+  const imageType = view.state.schema.nodes.image;
+  if (!imageType || !files.length) {
+    return;
+  }
+  for (const file of files) {
+    const src = await readImageFileAsDataURL(file);
+    const node = imageType.create({ src, alt: file.name, align: "center" });
+    view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
+  }
+  view.focus();
+}
+
+function getImageFilesFromList(files: FileList | File[]) {
+  return Array.from(files).filter((file) => file.type.startsWith("image/"));
+}
+
+function getImageFilesFromClipboard(dataTransfer: DataTransfer | null) {
+  if (!dataTransfer) {
+    return [];
+  }
+  const files = getImageFilesFromList(dataTransfer.files);
+  if (files.length) {
+    return files;
+  }
+  return Array.from(dataTransfer.items)
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+}
+
+function escapeRichPasteHtml(text: string) {
+  const element = document.createElement("div");
+  element.textContent = text;
+  return element.innerHTML;
+}
+
+function isSafeRichPasteUrl(value: string, allowImageData = false) {
+  const url = value.trim();
+  if (!url) {
+    return false;
+  }
+  if (allowImageData && /^data:image\/(?:png|gif|jpe?g|webp|svg\+xml);/i.test(url)) {
+    return true;
+  }
+  if (allowImageData && url.startsWith("blob:")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return ["http:", "https:", "mailto:", "tel:"].includes(parsed.protocol);
+  } catch {
+    return url.startsWith("#") || url.startsWith("/");
+  }
+}
+
+function isSafeRichPasteLength(value: string) {
+  return /^\d+(?:\.\d+)?(?:px|%|em|rem|vw|vh)?$/i.test(value.trim());
+}
+
+function hasRichPasteBlockChild(element: Element) {
+  return Array.from(element.children).some((child) => {
+    const tagName = child.tagName.toLowerCase();
+    return ["address", "article", "aside", "blockquote", "div", "figure", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "ol", "p", "pre", "section", "table", "ul"].includes(tagName);
+  });
+}
+
+function appendRichPasteChildren(parent: HTMLElement | DocumentFragment, source: Element) {
+  for (const child of Array.from(source.childNodes)) {
+    appendSanitizedRichPasteNode(parent, child);
+  }
+}
+
+function appendStyledRichPasteChildren(parent: HTMLElement | DocumentFragment, source: HTMLElement) {
+  const style = source.style;
+  const wrappers: string[] = [];
+  const fontWeight = Number.parseInt(style.fontWeight, 10);
+  const textDecoration = style.textDecorationLine || style.textDecoration || "";
+  if (style.fontWeight === "bold" || Number.isFinite(fontWeight) && fontWeight >= 600) {
+    wrappers.push("strong");
+  }
+  if (style.fontStyle === "italic" || style.fontStyle === "oblique") {
+    wrappers.push("em");
+  }
+  if (textDecoration.includes("underline")) {
+    wrappers.push("u");
+  }
+  if (textDecoration.includes("line-through")) {
+    wrappers.push("s");
+  }
+  let target: HTMLElement | DocumentFragment = parent;
+  for (const wrapper of wrappers) {
+    const element = document.createElement(wrapper);
+    target.append(element);
+    target = element;
+  }
+  appendRichPasteChildren(target, source);
+}
+
+function appendSanitizedRichPasteNode(parent: HTMLElement | DocumentFragment, source: Node) {
+  if (source.nodeType === Node.TEXT_NODE) {
+    const text = (source.textContent ?? "").replace(/\u00a0/g, " ");
+    if (text) {
+      parent.append(document.createTextNode(text));
+    }
+    return;
+  }
+  if (!(source instanceof HTMLElement)) {
+    return;
+  }
+  const sourceTag = source.tagName.toLowerCase();
+  if (["base", "head", "iframe", "input", "link", "meta", "noscript", "object", "script", "style", "svg", "title"].includes(sourceTag)) {
+    return;
+  }
+  const tag = sourceTag === "b" ? "strong" : sourceTag === "i" ? "em" : ["del", "strike"].includes(sourceTag) ? "s" : sourceTag;
+  if (["br", "hr"].includes(tag)) {
+    parent.append(document.createElement(tag));
+    return;
+  }
+  if (tag === "img") {
+    const src = source.getAttribute("src") ?? "";
+    if (!isSafeRichPasteUrl(src, true)) {
+      return;
+    }
+    const image = document.createElement("img");
+    image.setAttribute("src", src);
+    const alt = source.getAttribute("alt")?.trim();
+    if (alt) {
+      image.setAttribute("alt", alt);
+    }
+    const width = source.getAttribute("data-width") || source.style.width || source.getAttribute("width") || "";
+    if (width && isSafeRichPasteLength(width)) {
+      const normalizedWidth = /^\d+(?:\.\d+)?$/.test(width) ? `${width}px` : width;
+      image.setAttribute("data-width", normalizedWidth);
+      image.style.width = normalizedWidth;
+    }
+    const align = source.getAttribute("data-align");
+    if (align && ["left", "center", "right"].includes(align)) {
+      image.setAttribute("data-align", align);
+    }
+    parent.append(image);
+    return;
+  }
+  if (tag === "a") {
+    const href = source.getAttribute("href") ?? "";
+    if (!isSafeRichPasteUrl(href)) {
+      appendRichPasteChildren(parent, source);
+      return;
+    }
+    const link = document.createElement("a");
+    link.setAttribute("href", href.trim());
+    appendRichPasteChildren(link, source);
+    parent.append(link);
+    return;
+  }
+  if (tag === "pre") {
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.textContent = (source.textContent ?? "").replace(/\n{3,}/g, "\n\n").trimEnd();
+    pre.append(code);
+    parent.append(pre);
+    return;
+  }
+  const allowedTags = new Set(["blockquote", "code", "em", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ol", "p", "s", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul"]);
+  const normalizedTag = tag === "div" && !hasRichPasteBlockChild(source) ? "p" : tag;
+  if (!allowedTags.has(normalizedTag)) {
+    appendStyledRichPasteChildren(parent, source);
+    return;
+  }
+  const element = document.createElement(normalizedTag);
+  if (normalizedTag === "ul" && source.getAttribute("data-type") === "taskList") {
+    element.setAttribute("data-type", "taskList");
+  }
+  if (normalizedTag === "li" && source.hasAttribute("data-checked")) {
+    element.setAttribute("data-checked", source.getAttribute("data-checked") === "true" ? "true" : "false");
+  }
+  if (["td", "th"].includes(normalizedTag)) {
+    for (const attribute of ["colspan", "rowspan"]) {
+      const value = source.getAttribute(attribute);
+      if (value && /^\d+$/.test(value)) {
+        element.setAttribute(attribute, value);
+      }
+    }
+  }
+  appendStyledRichPasteChildren(element, source);
+  if (normalizedTag === "p" && !element.textContent?.trim() && !element.querySelector("br,img")) {
+    return;
+  }
+  parent.append(element);
+}
+
+function sanitizeRichPastedHtml(html: string) {
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const fragment = document.createDocumentFragment();
+  for (const child of Array.from(parsed.body.childNodes)) {
+    appendSanitizedRichPasteNode(fragment, child);
+  }
+  const container = document.createElement("div");
+  container.append(fragment);
+  container.querySelectorAll("p,li,blockquote").forEach((element) => {
+    element.innerHTML = element.innerHTML.replace(/(?:\s*<br\s*\/?>\s*){3,}/gi, "<br><br>");
+  });
+  return container.innerHTML.trim();
+}
+
+function joinRichPasteParagraphLines(lines: string[]) {
+  return lines.reduce((result, line) => {
+    const text = line.trim();
+    if (!result) {
+      return text;
+    }
+    const shouldJoinDirectly = /[\u4e00-\u9fff，。！？；：、“”（）《》]$/.test(result) && /^[\u4e00-\u9fff，。！？；：、“”（）《》]/.test(text);
+    return `${result}${shouldJoinDirectly ? "" : " "}${text}`;
+  }, "");
+}
+
+function createRichPasteHtmlFromPlainText(text: string) {
+  const normalizedText = text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u200b-\u200f\u202a-\u202e]/g, "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\t/g, "  ")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/g, ""))
+    .join("\n")
+    .trim();
+  if (!normalizedText) {
+    return "";
+  }
+  const singleLineBlockStarter = /^(#{1,6}\s+|>\s+|[-*]\s+\[[ xX]\]\s+|[-*•]\s+|\d+[.)、]\s+|`{3,}|-{3,}$|\*{3,}$|_{3,}$)/.test(normalizedText.trim());
+  if (!normalizedText.includes("\n") && !singleLineBlockStarter) {
+    return escapeRichPasteHtml(normalizedText);
+  }
+  const lines = normalizedText.split("\n");
+  const blocks: string[] = [];
+  let index = 0;
+  const isBlank = (line: string) => !line.trim();
+  const isBlockStarter = (line: string) => /^(#{1,6}\s+|>\s+|[-*]\s+\[[ xX]\]\s+|[-*•]\s+|\d+[.)、]\s+|`{3,}|-{3,}$|\*{3,}$|_{3,}$)/.test(line.trim());
+  while (index < lines.length) {
+    while (index < lines.length && isBlank(lines[index])) {
+      index += 1;
+    }
+    if (index >= lines.length) {
+      break;
+    }
+    const trimmed = lines[index].trim();
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      blocks.push(`<h${heading[1].length}>${escapeRichPasteHtml(heading[2].trim())}</h${heading[1].length}>`);
+      index += 1;
+      continue;
+    }
+    if (/^(`{3,}|~~~)/.test(trimmed)) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^(`{3,}|~~~)/.test(lines[index].trim())) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      blocks.push(`<pre><code>${escapeRichPasteHtml(codeLines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd())}</code></pre>`);
+      continue;
+    }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      blocks.push("<hr>");
+      index += 1;
+      continue;
+    }
+    if (trimmed.startsWith(">")) {
+      const quoteLines: string[] = [];
+      while (index < lines.length && lines[index].trim().startsWith(">")) {
+        quoteLines.push(lines[index].trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(`<blockquote><p>${escapeRichPasteHtml(joinRichPasteParagraphLines(quoteLines))}</p></blockquote>`);
+      continue;
+    }
+    const taskMatch = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
+    if (taskMatch) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const match = lines[index].trim().match(/^[-*]\s+\[([ xX])\]\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li data-checked="${match[1].toLowerCase() === "x" ? "true" : "false"}"><p>${escapeRichPasteHtml(match[2].trim())}</p></li>`);
+        index += 1;
+      }
+      blocks.push(`<ul data-type="taskList">${items.join("")}</ul>`);
+      continue;
+    }
+    const unorderedMatch = trimmed.match(/^[-*•]\s+(.+)$/);
+    if (unorderedMatch) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const match = lines[index].trim().match(/^[-*•]\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li><p>${escapeRichPasteHtml(match[1].trim())}</p></li>`);
+        index += 1;
+      }
+      blocks.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+    const orderedMatch = trimmed.match(/^(\d+)[.)、]\s+(.+)$/);
+    if (orderedMatch) {
+      const items: string[] = [];
+      const start = Number(orderedMatch[1]);
+      while (index < lines.length) {
+        const match = lines[index].trim().match(/^\d+[.)、]\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li><p>${escapeRichPasteHtml(match[1].trim())}</p></li>`);
+        index += 1;
+      }
+      blocks.push(`<ol${start > 1 ? ` start="${start}"` : ""}>${items.join("")}</ol>`);
+      continue;
+    }
+    const paragraphLines: string[] = [];
+    while (index < lines.length && !isBlank(lines[index]) && (paragraphLines.length === 0 || !isBlockStarter(lines[index]))) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    blocks.push(`<p>${escapeRichPasteHtml(joinRichPasteParagraphLines(paragraphLines))}</p>`);
+  }
+  return blocks.join("");
+}
+
+function createOptimizedRichPasteHtml(html: string, text: string) {
+  const cleanedHtml = html.trim() ? sanitizeRichPastedHtml(html) : "";
+  if (cleanedHtml) {
+    return cleanedHtml;
+  }
+  return createRichPasteHtmlFromPlainText(text);
+}
+
+function insertRichPasteHtmlIntoView(view: EditorView, html: string) {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  const slice = ProseMirrorDOMParser.fromSchema(view.state.schema).parseSlice(container);
+  view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
+  view.focus();
+}
+
+function findRichTextMatches(editor: Editor, query: string): RichTextMatch[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) {
+    return [];
+  }
+  const chars: Array<{ char: string; pos: number }> = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) {
+      return;
+    }
+    Array.from(node.text).forEach((char, index) => {
+      chars.push({ char: char.toLocaleLowerCase(), pos: pos + index });
+    });
+  });
+  const haystack = chars.map((item) => item.char).join("");
+  const matches: RichTextMatch[] = [];
+  let index = haystack.indexOf(needle);
+  while (index >= 0) {
+    const endIndex = index + needle.length - 1;
+    if (chars[index] && chars[endIndex]) {
+      matches.push({ from: chars[index].pos, to: chars[endIndex].pos + 1 });
+    }
+    index = haystack.indexOf(needle, index + Math.max(1, needle.length));
+  }
+  return matches;
+}
+
+function selectRichTextMatch(editor: Editor, match: RichTextMatch) {
+  const doc = editor.state.doc;
+  const from = Math.max(0, Math.min(match.from, doc.content.size));
+  const to = Math.max(from, Math.min(match.to, doc.content.size));
+  editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(doc, from, to)).scrollIntoView());
+  editor.view.focus();
+}
+
+function getRichOutlineItems(editor: Editor): RichOutlineItem[] {
+  const items: RichOutlineItem[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== "heading") {
+      return;
+    }
+    const title = node.textContent.trim();
+    if (!title) {
+      return;
+    }
+    items.push({ level: Number(node.attrs.level) || 1, title, pos });
+  });
+  return items;
+}
+
+function areRichOutlineItemsEqual(first: RichOutlineItem[], second: RichOutlineItem[]) {
+  if (first.length !== second.length) {
+    return false;
+  }
+  return first.every((item, index) => {
+    const candidate = second[index];
+    return item.level === candidate.level && item.title === candidate.title && item.pos === candidate.pos;
+  });
+}
+
+function RichTextEditor({
+  content,
+  editable,
+  onChange,
+  onActionsChange,
+  isOutlineOpen,
+  onToggleOutline,
+  onOutlineItemsChange,
+  onOutlineJumpReady
+}: {
+  content: string;
+  editable: boolean;
+  onChange: (content: string) => void;
+  onActionsChange?: (actions: RichEditorActions | null) => void;
+  isOutlineOpen: boolean;
+  onToggleOutline: () => void;
+  onOutlineItemsChange?: (items: RichOutlineItem[]) => void;
+  onOutlineJumpReady?: (jump: RichOutlineJumpHandler | null) => void;
+}) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const replaceImageInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceImagePosRef = useRef<number | null>(null);
+  const dragStateRef = useRef<RichDragState | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const suppressContextMenuUntilRef = useRef(0);
+  const selectedBlocksRef = useRef<HTMLElement[]>([]);
+  const [selectionBox, setSelectionBox] = useState<RichSelectionBox | null>(null);
+  const [selectionToolbar, setSelectionToolbar] = useState<{ x: number; y: number } | null>(null);
+  const [selectedBlockCount, setSelectedBlockCount] = useState(0);
+  const [editorContextMenu, setEditorContextMenu] = useState<RichContextMenuPosition | null>(null);
+  const [findDialog, setFindDialog] = useState<RichFindDialogState | null>(null);
+  function openRichFindDialog(mode: RichFindDialogMode) {
+    setEditorContextMenu(null);
+    clearRichBlockSelection();
+    setFindDialog((current) => ({ mode, seed: (current?.seed ?? 0) + 1 }));
+  }
+  const editor = useEditor({
+    extensions: richTextExtensions,
+    content: content || "",
+    editable,
+    immediatelyRender: false,
+    onUpdate: ({ editor }) => {
+      onChange(editor.getHTML());
+    },
+    editorProps: {
+      attributes: {
+        class: "growth-rich-editor-content"
+      },
+      handleClickOn(view, pos, node, nodePos, event, direct) {
+        if (!direct || !richDeletableNodeNames.has(node.type.name)) {
+          return false;
+        }
+        event.preventDefault();
+        return selectRichNodeInView(view, nodePos);
+      },
+      handleClick(view, pos, event) {
+        if (!(event.target instanceof HTMLElement) || event.target.closest("hr") === null) {
+          return false;
+        }
+        const dividerContext = findRichDeletableNodeNearViewPos(view, pos, "horizontalRule");
+        if (!dividerContext) {
+          return false;
+        }
+        event.preventDefault();
+        return selectRichNodeInView(view, dividerContext.pos);
+      },
+      handleDoubleClickOn(view, pos, node, nodePos, event) {
+        if (!richDeletableNodeNames.has(node.type.name)) {
+          return false;
+        }
+        event.preventDefault();
+        return selectRichNodeInView(view, nodePos);
+      },
+      handleKeyDown(view, event) {
+        if (event.key !== "Backspace" && event.key !== "Delete") {
+          return false;
+        }
+        const { selection } = view.state;
+        if (!(selection instanceof NodeSelection) || !richDeletableNodeNames.has(selection.node.type.name)) {
+          return false;
+        }
+        event.preventDefault();
+        clearRichBlockSelection();
+        setEditorContextMenu(null);
+        view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+        return true;
+      },
+      handlePaste(view, event) {
+        if (!editable) {
+          return false;
+        }
+        const imageFiles = getImageFilesFromClipboard(event.clipboardData);
+        if (imageFiles.length) {
+          event.preventDefault();
+          void insertRichImageFilesIntoView(view, imageFiles).catch((error) => window.alert(error instanceof Error ? error.message : "图片读取失败"));
+          return true;
+        }
+        const pasteHtml = createOptimizedRichPasteHtml(event.clipboardData?.getData("text/html") ?? "", event.clipboardData?.getData("text/plain") ?? "");
+        if (!pasteHtml) {
+          return false;
+        }
+        event.preventDefault();
+        clearRichBlockSelection();
+        setEditorContextMenu(null);
+        insertRichPasteHtmlIntoView(view, pasteHtml);
+        return true;
+      },
+      handleDrop(view, event) {
+        if (!editable) {
+          return false;
+        }
+        const imageFiles = getImageFilesFromList(event.dataTransfer?.files ?? []);
+        if (!imageFiles.length) {
+          return false;
+        }
+        event.preventDefault();
+        void insertRichImageFilesIntoView(view, imageFiles).catch((error) => window.alert(error instanceof Error ? error.message : "图片读取失败"));
+        return true;
+      }
+    }
+  });
+
+  const jumpToOutlineItem = useCallback((pos: number) => {
+    if (!editor) {
+      return;
+    }
+    const doc = editor.state.doc;
+    const safePos = Math.max(0, Math.min(pos + 1, doc.content.size));
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(doc.resolve(safePos))).scrollIntoView());
+    editor.view.focus();
+  }, [editor]);
+
+  useEffect(() => {
+    if (!editor || !onActionsChange) {
+      onActionsChange?.(null);
+      return;
+    }
+    const createDocumentHtml = (title: string) =>
+      `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:Arial,'Noto Sans SC',sans-serif;line-height:1.7;padding:32px;color:#172033}img{max-width:100%;height:auto}table{width:100%;border-collapse:collapse}td,th{border:1px solid #d7dde7;padding:8px}</style></head><body>${editor.getHTML()}</body></html>`;
+    const printDocument = (title: string) => {
+      const iframe = document.createElement("iframe");
+      iframe.setAttribute("title", title);
+      iframe.style.position = "fixed";
+      iframe.style.right = "0";
+      iframe.style.bottom = "0";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.style.border = "0";
+      iframe.style.opacity = "0";
+      iframe.style.pointerEvents = "none";
+      document.body.appendChild(iframe);
+
+      const cleanup = () => {
+        window.setTimeout(() => iframe.remove(), 0);
+      };
+      const printWindow = iframe.contentWindow;
+      const frameDocument = iframe.contentDocument ?? printWindow?.document;
+      if (!printWindow || !frameDocument) {
+        cleanup();
+        window.alert("无法创建打印内容");
+        return;
+      }
+
+      printWindow.addEventListener("afterprint", cleanup, { once: true });
+      window.setTimeout(cleanup, 60_000);
+      frameDocument.open();
+      frameDocument.write(createDocumentHtml(title));
+      frameDocument.close();
+
+      try {
+        printWindow.focus();
+        printWindow.print();
+      } catch {
+        cleanup();
+        window.alert("浏览器未能打开打印面板");
+      }
+    };
+    onActionsChange({
+      exportHtml: () => {
+        const html = createDocumentHtml("文档导出");
+        const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `document-${new Date().toISOString().slice(0, 10)}.html`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      },
+      exportPdf: () => printDocument("导出 PDF"),
+      print: () => printDocument("打印文档")
+    });
+    return () => onActionsChange(null);
+  }, [editor, onActionsChange]);
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+    editor.setEditable(editable);
+  }, [editable, editor]);
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+    const nextContent = content || "";
+    if (editor.getHTML() !== nextContent) {
+      editor.commands.setContent(nextContent, { emitUpdate: false });
+    }
+    onOutlineItemsChange?.(getRichOutlineItems(editor));
+  }, [content, editor, onOutlineItemsChange]);
+
+  useEffect(() => {
+    if (!editor || !onOutlineItemsChange) {
+      return;
+    }
+    const syncOutlineItems = () => onOutlineItemsChange(getRichOutlineItems(editor));
+    syncOutlineItems();
+    editor.on("update", syncOutlineItems);
+    return () => {
+      editor.off("update", syncOutlineItems);
+    };
+  }, [editor, onOutlineItemsChange]);
+
+  useEffect(() => {
+    onOutlineJumpReady?.(editor ? jumpToOutlineItem : null);
+    return () => onOutlineJumpReady?.(null);
+  }, [editor, jumpToOutlineItem, onOutlineJumpReady]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current !== null) {
+        window.clearTimeout(longPressTimerRef.current);
+      }
+      clearRichBlockSelection();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setEditorContextMenu(null);
+      }
+      if (!selectedBlocksRef.current.length) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        clearRichBlockSelection();
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        deleteSelectedRichBlocks();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        void copySelectedRichBlocks(false);
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "x") {
+        event.preventDefault();
+        void copySelectedRichBlocks(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [editor]);
+
+  useEffect(() => {
+    const closeContextMenu = () => setEditorContextMenu(null);
+    window.addEventListener("click", closeContextMenu);
+    window.addEventListener("scroll", closeContextMenu, true);
+    window.addEventListener("resize", closeContextMenu);
+    return () => {
+      window.removeEventListener("click", closeContextMenu);
+      window.removeEventListener("scroll", closeContextMenu, true);
+      window.removeEventListener("resize", closeContextMenu);
+    };
+  }, []);
+
+  function getRichEditorRoot() {
+    return shellRef.current?.querySelector(".growth-rich-editor-content") as HTMLElement | null;
+  }
+
+  function getRichSelectableBlocks() {
+    const root = getRichEditorRoot();
+    if (!root) {
+      return [];
+    }
+    return Array.from(root.children).filter((element): element is HTMLElement => element instanceof HTMLElement);
+  }
+
+  function isExpectedRichDeletableNode(node: ProseMirrorNode, expectedName?: string) {
+    return richDeletableNodeNames.has(node.type.name) && (!expectedName || node.type.name === expectedName);
+  }
+
+  function findRichDeletableNodeNearViewPos(view: EditorView, pos: number, expectedName?: string) {
+    const doc = view.state.doc;
+    const safePos = Math.min(Math.max(pos, 0), doc.content.size);
+    const candidatePositions = [safePos, safePos - 1, safePos + 1].filter((candidate) => candidate >= 0 && candidate <= doc.content.size);
+    const seenPositions = new Set<number>();
+    for (const candidate of candidatePositions) {
+      if (seenPositions.has(candidate)) {
+        continue;
+      }
+      seenPositions.add(candidate);
+      const node = doc.nodeAt(candidate);
+      if (node && isExpectedRichDeletableNode(node, expectedName)) {
+        return { pos: candidate, node };
+      }
+    }
+    const parent = findParentNodeClosestToPos(doc.resolve(safePos), (node) => isExpectedRichDeletableNode(node, expectedName));
+    return parent ? { pos: parent.pos, node: parent.node } : null;
+  }
+
+  function findRichDeletableNodeAtClientPoint(clientX: number, clientY: number, expectedName?: string) {
+    if (!editor) {
+      return null;
+    }
+    const position = editor.view.posAtCoords({ left: clientX, top: clientY });
+    return position ? findRichDeletableNodeNearViewPos(editor.view, position.pos, expectedName) : null;
+  }
+
+  function selectRichNodeInView(view: EditorView, nodePos: number) {
+    const node = view.state.doc.nodeAt(nodePos);
+    if (!node || !richDeletableNodeNames.has(node.type.name)) {
+      return false;
+    }
+    clearRichBlockSelection();
+    setEditorContextMenu(null);
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)).scrollIntoView());
+    view.focus();
+    return true;
+  }
+
+  function selectRichNodeAtPos(nodePos: number | undefined, expectedName?: string) {
+    if (!editor) {
+      return false;
+    }
+    if (nodePos === undefined) {
+      return false;
+    }
+    const node = editor.state.doc.nodeAt(nodePos);
+    if (!node || !isExpectedRichDeletableNode(node, expectedName)) {
+      return false;
+    }
+    return selectRichNodeInView(editor.view, nodePos);
+  }
+
+  function deleteRichNodeAtPos(nodePos: number | undefined, expectedName?: string) {
+    setEditorContextMenu(null);
+    if (!editable || !editor || nodePos === undefined) {
+      return;
+    }
+    const node = editor.state.doc.nodeAt(nodePos);
+    if (!node || !isExpectedRichDeletableNode(node, expectedName)) {
+      return;
+    }
+    clearRichBlockSelection();
+    editor.view.dispatch(editor.state.tr.delete(nodePos, nodePos + node.nodeSize).scrollIntoView());
+    editor.view.focus();
+  }
+
+  function updateRichImageAtPos(nodePos: number | undefined, attributes: Record<string, string | null>) {
+    setEditorContextMenu(null);
+    if (!editable || !editor || nodePos === undefined) {
+      return;
+    }
+    const node = editor.state.doc.nodeAt(nodePos);
+    if (!node || node.type.name !== "image") {
+      return;
+    }
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(nodePos, undefined, { ...node.attrs, ...attributes }).scrollIntoView());
+    editor.view.focus();
+  }
+
+  function openReplaceRichImage(nodePos: number | undefined) {
+    setEditorContextMenu(null);
+    if (!editable || nodePos === undefined) {
+      return;
+    }
+    replaceImagePosRef.current = nodePos;
+    replaceImageInputRef.current?.click();
+  }
+
+  function handleReplaceRichImageChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    const nodePos = replaceImagePosRef.current;
+    replaceImagePosRef.current = null;
+    if (!file || !editor || nodePos === null) {
+      return;
+    }
+    void readImageFileAsDataURL(file)
+      .then((src) => updateRichImageAtPos(nodePos, { src, alt: file.name }))
+      .catch((error) => window.alert(error instanceof Error ? error.message : "图片读取失败"));
+  }
+
+  function focusRichTableAtPos(clickPos: number | undefined) {
+    if (!editor || clickPos === undefined) {
+      return;
+    }
+    const doc = editor.state.doc;
+    const safePos = Math.min(Math.max(clickPos, 0), doc.content.size);
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(doc.resolve(safePos))).scrollIntoView());
+  }
+
+  function runRichTableCommand(action: RichTableAction, clickPos: number | undefined) {
+    setEditorContextMenu(null);
+    if (!editable || !editor) {
+      return;
+    }
+    focusRichTableAtPos(clickPos);
+    const chain = editor.chain().focus();
+    switch (action) {
+      case "addColumnBefore":
+        chain.addColumnBefore().run();
+        break;
+      case "addColumnAfter":
+        chain.addColumnAfter().run();
+        break;
+      case "deleteColumn":
+        chain.deleteColumn().run();
+        break;
+      case "addRowBefore":
+        chain.addRowBefore().run();
+        break;
+      case "addRowAfter":
+        chain.addRowAfter().run();
+        break;
+      case "deleteRow":
+        chain.deleteRow().run();
+        break;
+      case "toggleHeaderRow":
+        chain.toggleHeaderRow().run();
+        break;
+      case "mergeCells":
+        chain.mergeCells().run();
+        break;
+      case "splitCell":
+        chain.splitCell().run();
+        break;
+      case "deleteTable":
+        chain.deleteTable().run();
+        break;
+    }
+  }
+
+  function clearRichBlockSelection() {
+    for (const block of selectedBlocksRef.current) {
+      block.classList.remove("rich-block-selected");
+    }
+    selectedBlocksRef.current = [];
+    setSelectedBlockCount(0);
+    setSelectionBox(null);
+    setSelectionToolbar(null);
+  }
+
+  function syncContentFromDom() {
+    const root = getRichEditorRoot();
+    if (!editor || !root) {
+      return;
+    }
+    const html = root.innerHTML.trim() || "<p></p>";
+    editor.commands.setContent(html);
+  }
+
+  async function writeRichClipboard(html: string, text: string) {
+    const fallbackText = text || html;
+    try {
+      const ClipboardItemConstructor = window.ClipboardItem;
+      if (ClipboardItemConstructor && navigator.clipboard?.write) {
+        await navigator.clipboard.write([
+          new ClipboardItemConstructor({
+            "text/html": new Blob([html], { type: "text/html" }),
+            "text/plain": new Blob([fallbackText], { type: "text/plain" })
+          })
+        ]);
+        return;
+      }
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(fallbackText);
+      }
+    } catch {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(fallbackText);
+      }
+    }
+  }
+
+  async function copySelectedRichBlocks(shouldDelete: boolean) {
+    const blocks = selectedBlocksRef.current;
+    if (!blocks.length) {
+      return;
+    }
+    const html = blocks.map((block) => block.outerHTML).join("");
+    const text = blocks.map((block) => block.innerText || block.getAttribute("alt") || "").join("\n").trim();
+    await writeRichClipboard(html, text);
+    if (shouldDelete) {
+      deleteSelectedRichBlocks();
+    } else {
+      clearRichBlockSelection();
+    }
+  }
+
+  function deleteSelectedRichBlocks() {
+    const blocks = [...selectedBlocksRef.current];
+    if (!blocks.length) {
+      return;
+    }
+    for (const block of blocks) {
+      block.remove();
+    }
+    syncContentFromDom();
+    clearRichBlockSelection();
+  }
+
+  function clearSelectedRichBlockFormats() {
+    const blocks = [...selectedBlocksRef.current];
+    if (!blocks.length) {
+      return;
+    }
+    for (const block of blocks) {
+      const text = (block.innerText || block.textContent || "").trim();
+      const paragraph = document.createElement("p");
+      paragraph.textContent = text;
+      block.replaceWith(paragraph);
+    }
+    syncContentFromDom();
+    clearRichBlockSelection();
+  }
+
+  function getRichSelectionPayload() {
+    const root = getRichEditorRoot();
+    const selection = window.getSelection();
+    if (!root || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return null;
+    }
+    if (!selection.anchorNode || !selection.focusNode || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) {
+      return null;
+    }
+    const container = document.createElement("div");
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+      const range = selection.getRangeAt(index);
+      const commonNode = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentNode;
+      if (!commonNode || !root.contains(commonNode)) {
+        continue;
+      }
+      container.append(range.cloneContents());
+    }
+    const text = selection.toString();
+    const html = container.innerHTML || text;
+    return { html, text };
+  }
+
+  async function copyRichSelection() {
+    setEditorContextMenu(null);
+    if (selectedBlocksRef.current.length) {
+      await copySelectedRichBlocks(false);
+      return;
+    }
+    const payload = getRichSelectionPayload();
+    if (payload) {
+      await writeRichClipboard(payload.html, payload.text);
+    }
+  }
+
+  async function cutRichSelection() {
+    setEditorContextMenu(null);
+    if (!editable || !editor) {
+      return;
+    }
+    if (selectedBlocksRef.current.length) {
+      await copySelectedRichBlocks(true);
+      return;
+    }
+    const payload = getRichSelectionPayload();
+    if (!payload) {
+      return;
+    }
+    await writeRichClipboard(payload.html, payload.text);
+    editor.chain().focus().deleteSelection().run();
+  }
+
+  async function pasteRichContent(asPlainText: boolean) {
+    setEditorContextMenu(null);
+    if (!editable || !editor) {
+      return;
+    }
+    clearRichBlockSelection();
+    try {
+      if (!asPlainText && navigator.clipboard?.read) {
+        const clipboardItems = await navigator.clipboard.read();
+        for (const item of clipboardItems) {
+          if (item.types.includes("text/html")) {
+            const html = await (await item.getType("text/html")).text();
+            const optimizedHtml = createOptimizedRichPasteHtml(html, "");
+            if (optimizedHtml) {
+              insertRichPasteHtmlIntoView(editor.view, optimizedHtml);
+              return;
+            }
+          }
+        }
+      }
+      const text = await navigator.clipboard?.readText();
+      if (text) {
+        const optimizedHtml = createRichPasteHtmlFromPlainText(text);
+        if (optimizedHtml) {
+          insertRichPasteHtmlIntoView(editor.view, optimizedHtml);
+        }
+      }
+    } catch {
+      window.alert("浏览器未允许读取剪贴板，请使用 Ctrl+V 粘贴。");
+    }
+  }
+
+  function selectAllRichContent() {
+    setEditorContextMenu(null);
+    clearRichBlockSelection();
+    editor?.chain().focus().selectAll().run();
+  }
+
+  function insertCurrentTime() {
+    setEditorContextMenu(null);
+    if (!editable || !editor) {
+      return;
+    }
+    clearRichBlockSelection();
+    const currentTime = new Date().toLocaleString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    });
+    editor.chain().focus().insertContent(currentTime).run();
+  }
+
+  function showRichWordCount() {
+    setEditorContextMenu(null);
+    const selectionText = getRichSelectionPayload()?.text.trim() ?? "";
+    const targetText = selectionText || editor?.getText() || "";
+    const compactText = targetText.replace(/\s+/g, "");
+    const charCount = Array.from(compactText).length;
+    const chineseCount = Array.from(compactText).filter((char) => /[\u4e00-\u9fff]/.test(char)).length;
+    const wordCount = targetText.match(/[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*/g)?.length ?? 0;
+    window.alert(`${selectionText ? "选区" : "全文"}字数统计\n\n字符数：${charCount}\n中文字符：${chineseCount}\n英文/数字词：${wordCount}`);
+  }
+
+  function updateRichDragSelection(clientX: number, clientY: number) {
+    const dragState = dragStateRef.current;
+    const shell = shellRef.current;
+    if (!dragState || !shell) {
+      return;
+    }
+    dragState.currentX = clientX;
+    dragState.currentY = clientY;
+    const shellRect = shell.getBoundingClientRect();
+    const viewportSelection = {
+      left: Math.min(dragState.startX, clientX),
+      right: Math.max(dragState.startX, clientX),
+      top: Math.min(dragState.startY, clientY),
+      bottom: Math.max(dragState.startY, clientY)
+    };
+    setSelectionBox({
+      left: viewportSelection.left - shellRect.left,
+      top: viewportSelection.top - shellRect.top,
+      width: Math.max(1, viewportSelection.right - viewportSelection.left),
+      height: Math.max(1, viewportSelection.bottom - viewportSelection.top)
+    });
+
+    const selectedBlocks: HTMLElement[] = [];
+    for (const block of getRichSelectableBlocks()) {
+      const blockRect = block.getBoundingClientRect();
+      const isIntersecting = blockRect.bottom >= viewportSelection.top && blockRect.top <= viewportSelection.bottom && blockRect.right >= viewportSelection.left && blockRect.left <= viewportSelection.right;
+      block.classList.toggle("rich-block-selected", isIntersecting);
+      if (isIntersecting) {
+        selectedBlocks.push(block);
+      }
+    }
+    selectedBlocksRef.current = selectedBlocks;
+    setSelectedBlockCount(selectedBlocks.length);
+  }
+
+  function handleRichPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!editable || event.button !== 2) {
+      return;
+    }
+    const root = getRichEditorRoot();
+    if (!root || !(event.target instanceof Node) || !root.contains(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    clearRichBlockSelection();
+    dragStateRef.current = {
+      active: false,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      currentX: event.clientX,
+      currentY: event.clientY
+    };
+    longPressTimerRef.current = window.setTimeout(() => {
+      if (!dragStateRef.current) {
+        return;
+      }
+      dragStateRef.current.active = true;
+      suppressContextMenuUntilRef.current = Date.now() + 900;
+      updateRichDragSelection(dragStateRef.current.currentX, dragStateRef.current.currentY);
+    }, 220);
+  }
+
+  function handleRichPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+    dragState.currentX = event.clientX;
+    dragState.currentY = event.clientY;
+    if (!dragState.active) {
+      return;
+    }
+    event.preventDefault();
+    updateRichDragSelection(event.clientX, event.clientY);
+  }
+
+  function finishRichPointerSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    const dragState = dragStateRef.current;
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (dragState.active && selectedBlocksRef.current.length) {
+      const shellRect = event.currentTarget.getBoundingClientRect();
+      setSelectionToolbar({
+        x: Math.min(Math.max(12, event.clientX - shellRect.left), shellRect.width - 260),
+        y: Math.max(56, event.clientY - shellRect.top + 10)
+      });
+    } else {
+      clearRichBlockSelection();
+    }
+    setSelectionBox(null);
+    dragStateRef.current = null;
+  }
+
+  function handleRichContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    const root = getRichEditorRoot();
+    const shell = shellRef.current;
+    if (!root || !shell || !(event.target instanceof Node) || !root.contains(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    if (Date.now() < suppressContextMenuUntilRef.current) {
+      setEditorContextMenu(null);
+      return;
+    }
+    const imageContext = findRichDeletableNodeAtClientPoint(event.clientX, event.clientY, "image");
+    const tableContext = findRichDeletableNodeAtClientPoint(event.clientX, event.clientY, "table");
+    const dividerContext = findRichDeletableNodeAtClientPoint(event.clientX, event.clientY, "horizontalRule");
+    const viewPosition = editor?.view.posAtCoords({ left: event.clientX, top: event.clientY });
+    const shellRect = shell.getBoundingClientRect();
+    const menuWidth = 124;
+    const menuHeight = imageContext ? 390 : tableContext ? 432 : dividerContext ? 282 : 224;
+    setEditorContextMenu({
+      x: Math.min(Math.max(8, event.clientX - shellRect.left), Math.max(8, shellRect.width - menuWidth - 8)),
+      y: Math.min(Math.max(8, event.clientY - shellRect.top), Math.max(8, shellRect.height - menuHeight - 8)),
+      imagePos: imageContext?.pos,
+      tablePos: tableContext?.pos,
+      tableClickPos: tableContext ? viewPosition?.pos : undefined,
+      dividerPos: dividerContext?.pos
+    });
+  }
+
+  function handleRichWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    const root = getRichEditorRoot();
+    if (!root || !(event.target instanceof Node) || !root.contains(event.target)) {
+      return;
+    }
+    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+    if (maxScrollTop <= 0 || event.deltaY === 0) {
+      return;
+    }
+    const deltaUnit = event.deltaMode === 1 ? 18 : event.deltaMode === 2 ? root.clientHeight : 1;
+    const previousScrollTop = root.scrollTop;
+    const nextScrollTop = Math.min(maxScrollTop, Math.max(0, previousScrollTop + event.deltaY * deltaUnit));
+    if (nextScrollTop === previousScrollTop) {
+      return;
+    }
+    root.scrollTop = nextScrollTop;
+    setEditorContextMenu(null);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleRichEditorKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key !== "f" && key !== "r") {
+      return;
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(".rich-find-dialog")) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    openRichFindDialog(key === "f" ? "find" : "replace");
+  }
+
+  if (!editor) {
+    return <div className="growth-rich-editor-shell" />;
+  }
+
+  return (
+    <div
+      ref={shellRef}
+      className="growth-rich-editor-shell"
+      onPointerDown={handleRichPointerDown}
+      onPointerMove={handleRichPointerMove}
+      onPointerUp={finishRichPointerSelection}
+      onPointerCancel={finishRichPointerSelection}
+      onContextMenu={handleRichContextMenu}
+      onKeyDownCapture={handleRichEditorKeyDown}
+      onWheelCapture={handleRichWheel}
+    >
+      <RichTextToolbar editor={editor} editable={editable} isOutlineOpen={isOutlineOpen} onToggleOutline={onToggleOutline} />
+      <EditorContent className="growth-rich-editor-content-frame" editor={editor} />
+      {findDialog ? (
+        <RichFindReplaceDialog
+          editor={editor}
+          editable={editable}
+          mode={findDialog.mode}
+          openSeed={findDialog.seed}
+          onClose={() => {
+            setFindDialog(null);
+            editor.view.focus();
+          }}
+        />
+      ) : null}
+      {selectionBox ? <div className="rich-block-selection-box" style={selectionBox} /> : null}
+      {editorContextMenu ? (
+        <div className="rich-editor-context-menu" style={{ left: editorContextMenu.x, top: editorContextMenu.y }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <button type="button" disabled={!editable} onClick={() => void cutRichSelection()}>剪切</button>
+          <button type="button" onClick={() => void copyRichSelection()}>复制</button>
+          <button type="button" disabled={!editable} onClick={() => void pasteRichContent(false)}>粘贴</button>
+          <button type="button" disabled={!editable} onClick={() => void pasteRichContent(true)}>纯文本粘贴</button>
+          {editorContextMenu.imagePos !== undefined ? (
+            <>
+              <span aria-hidden="true" />
+              <button type="button" onClick={() => selectRichNodeAtPos(editorContextMenu.imagePos, "image")}>选中图片</button>
+              <button type="button" disabled={!editable} onClick={() => openReplaceRichImage(editorContextMenu.imagePos)}>替换图片</button>
+              <button type="button" disabled={!editable} onClick={() => updateRichImageAtPos(editorContextMenu.imagePos, { width: "25%" })}>宽度 25%</button>
+              <button type="button" disabled={!editable} onClick={() => updateRichImageAtPos(editorContextMenu.imagePos, { width: "50%" })}>宽度 50%</button>
+              <button type="button" disabled={!editable} onClick={() => updateRichImageAtPos(editorContextMenu.imagePos, { width: "100%" })}>宽度 100%</button>
+              <button type="button" disabled={!editable} onClick={() => updateRichImageAtPos(editorContextMenu.imagePos, { align: "left" })}>图片左对齐</button>
+              <button type="button" disabled={!editable} onClick={() => updateRichImageAtPos(editorContextMenu.imagePos, { align: "center" })}>图片居中</button>
+              <button type="button" disabled={!editable} onClick={() => updateRichImageAtPos(editorContextMenu.imagePos, { align: "right" })}>图片右对齐</button>
+              <button type="button" disabled={!editable} onClick={() => deleteRichNodeAtPos(editorContextMenu.imagePos, "image")}>删除图片</button>
+            </>
+          ) : null}
+          {editorContextMenu.tablePos !== undefined ? (
+            <>
+              <span aria-hidden="true" />
+              <button type="button" onClick={() => selectRichNodeAtPos(editorContextMenu.tablePos, "table")}>选中表格</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("addRowBefore", editorContextMenu.tableClickPos)}>上方插入行</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("addRowAfter", editorContextMenu.tableClickPos)}>下方插入行</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("deleteRow", editorContextMenu.tableClickPos)}>删除行</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("addColumnBefore", editorContextMenu.tableClickPos)}>左侧插入列</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("addColumnAfter", editorContextMenu.tableClickPos)}>右侧插入列</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("deleteColumn", editorContextMenu.tableClickPos)}>删除列</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("toggleHeaderRow", editorContextMenu.tableClickPos)}>切换表头行</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("mergeCells", editorContextMenu.tableClickPos)}>合并单元格</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("splitCell", editorContextMenu.tableClickPos)}>拆分单元格</button>
+              <button type="button" disabled={!editable} onClick={() => runRichTableCommand("deleteTable", editorContextMenu.tableClickPos)}>删除表格</button>
+            </>
+          ) : null}
+          {editorContextMenu.dividerPos !== undefined ? (
+            <>
+              <span aria-hidden="true" />
+              <button type="button" onClick={() => selectRichNodeAtPos(editorContextMenu.dividerPos, "horizontalRule")}>选中分割线</button>
+              <button type="button" disabled={!editable} onClick={() => deleteRichNodeAtPos(editorContextMenu.dividerPos, "horizontalRule")}>删除分割线</button>
+            </>
+          ) : null}
+          <span aria-hidden="true" />
+          <button type="button" onClick={selectAllRichContent}>全选</button>
+          <button type="button" disabled={!editable} onClick={insertCurrentTime}>插入当前时间</button>
+          <span aria-hidden="true" />
+          <button type="button" onClick={showRichWordCount}>字数统计</button>
+        </div>
+      ) : null}
+      <input ref={replaceImageInputRef} className="sr-only" type="file" accept="image/*" aria-label="替换图片" onChange={handleReplaceRichImageChange} />
+      {selectionToolbar ? (
+        <div className="rich-block-selection-toolbar" style={{ left: selectionToolbar.x, top: selectionToolbar.y }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <span>{selectedBlockCount} 项</span>
+          <button type="button" onClick={() => void copySelectedRichBlocks(false)}>复制</button>
+          <button type="button" onClick={() => void copySelectedRichBlocks(true)}>剪切</button>
+          <button type="button" onClick={clearSelectedRichBlockFormats}>清除格式</button>
+          <button type="button" onClick={deleteSelectedRichBlocks}>删除</button>
+          <button type="button" onClick={clearRichBlockSelection}>取消</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RichFindReplaceDialog({
+  editor,
+  editable,
+  mode,
+  openSeed,
+  onClose
+}: {
+  editor: Editor;
+  editable: boolean;
+  mode: RichFindDialogMode;
+  openSeed: number;
+  onClose: () => void;
+}) {
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement | null>(null);
+  const [activeMode, setActiveMode] = useState<RichFindDialogMode>(mode);
+  const [findQuery, setFindQuery] = useState("");
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [findIndex, setFindIndex] = useState(-1);
+  const findMatches = findRichTextMatches(editor, findQuery);
+  const selectedFindIndex = findMatches.length && findIndex >= 0 ? Math.min(findIndex, findMatches.length - 1) : -1;
+  const displayFindIndex = selectedFindIndex >= 0 ? selectedFindIndex + 1 : 0;
+  const statusText = findQuery.trim()
+    ? findMatches.length
+      ? `找到 ${findMatches.length} 处`
+      : "未找到匹配项"
+    : "输入关键词开始查找";
+
+  const focusFindInput = () => {
+    window.setTimeout(() => {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    });
+  };
+
+  useEffect(() => {
+    setActiveMode(mode);
+    const { selection, doc } = editor.state;
+    const selectedText = selection.empty ? "" : doc.textBetween(selection.from, selection.to, "\n").trim();
+    if (selectedText) {
+      setFindQuery(selectedText);
+      setFindIndex(-1);
+    }
+    focusFindInput();
+  }, [editor, mode, openSeed]);
+
+  function selectMatchAtIndex(index: number, matches = findRichTextMatches(editor, findQuery)) {
+    if (!matches.length) {
+      setFindIndex(-1);
+      return;
+    }
+    const nextIndex = ((index % matches.length) + matches.length) % matches.length;
+    setFindIndex(nextIndex);
+    selectRichTextMatch(editor, matches[nextIndex]);
+  }
+
+  function selectFindMatch(offset: number) {
+    const matches = findRichTextMatches(editor, findQuery);
+    const baseIndex = findIndex >= 0 ? findIndex : offset > 0 ? -1 : 0;
+    selectMatchAtIndex(baseIndex + offset, matches);
+  }
+
+  function replaceCurrentMatch() {
+    const matches = findRichTextMatches(editor, findQuery);
+    const currentIndex = findIndex >= 0 && findIndex < matches.length ? findIndex : 0;
+    const currentMatch = matches[currentIndex];
+    if (!editable || !currentMatch) {
+      return;
+    }
+    editor.chain().focus().insertContentAt(currentMatch, replaceQuery).run();
+    window.setTimeout(() => {
+      const nextMatches = findRichTextMatches(editor, findQuery);
+      if (!nextMatches.length) {
+        setFindIndex(-1);
+        return;
+      }
+      selectMatchAtIndex(Math.min(currentIndex, nextMatches.length - 1), nextMatches);
+    });
+  }
+
+  function replaceAllMatches() {
+    const matches = findRichTextMatches(editor, findQuery);
+    if (!editable || !matches.length) {
+      return;
+    }
+    let transaction = editor.state.tr;
+    for (const match of [...matches].reverse()) {
+      transaction = transaction.insertText(replaceQuery, match.from, match.to);
+    }
+    editor.view.dispatch(transaction.scrollIntoView());
+    editor.view.focus();
+    setFindIndex(-1);
+  }
+
+  function handleFindSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    selectFindMatch(1);
+  }
+
+  function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key !== "f" && key !== "r") {
+      return;
+    }
+    event.preventDefault();
+    setActiveMode(key === "f" ? "find" : "replace");
+    focusFindInput();
+  }
+
+  return (
+    <div className="rich-find-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="rich-find-dialog" role="dialog" aria-modal="true" aria-label={activeMode === "replace" ? "查找和替换" : "查找"} onMouseDown={(event) => event.stopPropagation()} onKeyDown={handleDialogKeyDown}>
+        <header>
+          <div>
+            <h2>查找和替换</h2>
+            <span>{statusText}</span>
+          </div>
+          <button className="rich-find-dialog-close" type="button" aria-label="关闭" onClick={onClose}>x</button>
+        </header>
+        <div className="rich-find-mode-tabs" role="tablist" aria-label="模式">
+          <button className={activeMode === "find" ? "active" : ""} type="button" role="tab" aria-selected={activeMode === "find"} onClick={() => { setActiveMode("find"); focusFindInput(); }}>查找</button>
+          <button className={activeMode === "replace" ? "active" : ""} type="button" role="tab" aria-selected={activeMode === "replace"} onClick={() => { setActiveMode("replace"); window.setTimeout(() => replaceInputRef.current?.focus()); }}>替换</button>
+        </div>
+        <form className="rich-find-dialog-body" onSubmit={handleFindSubmit}>
+          <label>
+            <span>查找内容</span>
+            <input ref={findInputRef} value={findQuery} autoComplete="off" onChange={(event) => { setFindQuery(event.target.value); setFindIndex(-1); }} />
+          </label>
+          {activeMode === "replace" ? (
+            <label>
+              <span>替换为</span>
+              <input ref={replaceInputRef} value={replaceQuery} autoComplete="off" disabled={!editable} onChange={(event) => setReplaceQuery(event.target.value)} />
+            </label>
+          ) : null}
+          <div className="rich-find-dialog-count" aria-live="polite">
+            {displayFindIndex}/{findMatches.length}
+          </div>
+        </form>
+        <footer>
+          <button type="button" disabled={!findQuery.trim()} onClick={() => selectFindMatch(-1)}>上一个</button>
+          <button type="button" disabled={!findQuery.trim()} onClick={() => selectFindMatch(1)}>下一个</button>
+          {activeMode === "replace" ? (
+            <>
+              <button type="button" disabled={!editable || !findMatches.length} onClick={replaceCurrentMatch}>替换</button>
+              <button type="button" disabled={!editable || !findMatches.length} onClick={replaceAllMatches}>全部替换</button>
+            </>
+          ) : null}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function RichTextToolbar({ editor, editable, isOutlineOpen, onToggleOutline }: { editor: Editor; editable: boolean; isOutlineOpen: boolean; onToggleOutline: () => void }) {
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const [openPalette, setOpenPalette] = useState<"text" | "highlight" | null>(null);
+  const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
+  const [isAlignMenuOpen, setIsAlignMenuOpen] = useState(false);
+  const [isLineHeightMenuOpen, setIsLineHeightMenuOpen] = useState(false);
+  const [isScriptMenuOpen, setIsScriptMenuOpen] = useState(false);
+  const [isIndentMenuOpen, setIsIndentMenuOpen] = useState(false);
+  const [selectedFontFamily, setSelectedFontFamily] = useState("");
+  const [textColor, setTextColor] = useState("#172033");
+  const [highlightColor, setHighlightColor] = useState("#fff3a3");
+  const activeHeadingLevel = richHeadingLevels.find((level) => editor.isActive("heading", { level }));
+  const paragraphStyle = activeHeadingLevel ? `h${activeHeadingLevel}` : "paragraph";
+  const setParagraphStyle = (style: string) => {
+    const chain = editor.chain().focus();
+    const headingLevel = Number(style.slice(1)) as RichHeadingLevel;
+    if (style.startsWith("h") && richHeadingLevels.includes(headingLevel)) {
+      chain.setHeading({ level: headingLevel }).run();
+    } else {
+      chain.setParagraph().run();
+    }
+  };
+  const openImageDialog = () => {
+    setOpenPalette(null);
+    setIsAlignMenuOpen(false);
+    setIsLineHeightMenuOpen(false);
+    setIsScriptMenuOpen(false);
+    setIsIndentMenuOpen(false);
+    setIsInsertMenuOpen(false);
+    imageInputRef.current?.click();
+  };
+  const insertLocalImage = (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      window.alert("请选择图片文件");
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const src = typeof reader.result === "string" ? reader.result : "";
+      if (!src) {
+        window.alert("图片读取失败");
+        return;
+      }
+      editor.chain().focus().setImage({ src, alt: file.name }).run();
+    });
+    reader.addEventListener("error", () => {
+      window.alert("图片读取失败");
+    });
+    reader.readAsDataURL(file);
+  };
+  const handleImageFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+    insertLocalImage(file);
+  };
+  const applyFontSize = (size: string) => {
+    if (!size) {
+      editor.chain().focus().setMark("textStyle", { fontSize: null }).removeEmptyTextStyle().run();
+      return;
+    }
+    editor.chain().focus().setMark("textStyle", { fontSize: `${size}px` }).run();
+  };
+  const applyFontFamily = (fontFamily: string) => {
+    setSelectedFontFamily(fontFamily);
+    editor.chain().focus().setFontFamily(fontFamily).run();
+  };
+  const blockAttributes = editor.isActive("heading") ? editor.getAttributes("heading") : editor.getAttributes("paragraph");
+  const currentLineHeight = typeof blockAttributes.lineHeight === "string" ? blockAttributes.lineHeight : "";
+  const currentMarginTop = typeof blockAttributes.marginTop === "string" ? blockAttributes.marginTop : null;
+  const currentMarginBottom = typeof blockAttributes.marginBottom === "string" ? blockAttributes.marginBottom : null;
+  const currentParagraphSpacing = richParagraphSpacingOptions.find((option) => option.marginTop === currentMarginTop && option.marginBottom === currentMarginBottom)?.value ?? "";
+  const currentIndent = Number.parseFloat(String(blockAttributes.textIndent ?? "0")) || 0;
+  const setBlockStyle = (attributes: Record<string, string | null>) => {
+    editor.chain().focus().updateAttributes("paragraph", attributes).updateAttributes("heading", attributes).run();
+  };
+  const increaseIndent = () => {
+    setBlockStyle({ textIndent: `${Math.min(8, currentIndent + 2)}em` });
+    setIsIndentMenuOpen(false);
+  };
+  const decreaseIndent = () => {
+    const nextIndent = Math.max(0, currentIndent - 2);
+    setBlockStyle({ textIndent: nextIndent ? `${nextIndent}em` : null });
+    setIsIndentMenuOpen(false);
+  };
+  const setLineHeight = (value: string) => {
+    setBlockStyle({ lineHeight: value || null });
+    setIsLineHeightMenuOpen(false);
+  };
+  const setParagraphSpacing = (value: string) => {
+    const option = richParagraphSpacingOptions.find((item) => item.value === value);
+    setBlockStyle({
+      marginTop: option?.marginTop ?? null,
+      marginBottom: option?.marginBottom ?? null
+    });
+  };
+  const clearParagraphStyle = () => {
+    setBlockStyle({ lineHeight: null, textIndent: null, marginTop: null, marginBottom: null });
+  };
+  const toggleScriptMark = (mark: "superscript" | "subscript") => {
+    editor.chain().focus().toggleMark(mark).run();
+    setIsScriptMenuOpen(false);
+  };
+  const applyLink = () => {
+    const currentHref = typeof editor.getAttributes("link").href === "string" ? editor.getAttributes("link").href : "";
+    const href = window.prompt("链接地址", currentHref || "https://");
+    if (href === null) {
+      setIsInsertMenuOpen(false);
+      return;
+    }
+    const nextHref = href.trim();
+    if (!nextHref) {
+      editor.chain().focus().extendMarkRange("link").unsetLink().run();
+      setIsInsertMenuOpen(false);
+      return;
+    }
+    editor.chain().focus().extendMarkRange("link").setLink({ href: nextHref }).run();
+    setIsInsertMenuOpen(false);
+  };
+  const removeLink = () => {
+    editor.chain().focus().extendMarkRange("link").unsetLink().run();
+    setIsInsertMenuOpen(false);
+  };
+  const openCurrentLink = () => {
+    const href = typeof editor.getAttributes("link").href === "string" ? editor.getAttributes("link").href : "";
+    if (href) {
+      window.open(href, "_blank", "noopener,noreferrer");
+    }
+    setIsInsertMenuOpen(false);
+  };
+
+  useEffect(() => {
+    const closeMenus = () => {
+      setOpenPalette(null);
+      setIsInsertMenuOpen(false);
+      setIsAlignMenuOpen(false);
+      setIsLineHeightMenuOpen(false);
+      setIsScriptMenuOpen(false);
+      setIsIndentMenuOpen(false);
+    };
+    const isFloatingToolTarget = (target: EventTarget | null) => {
+      const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+      const floatingTool = element?.closest(".rich-insert-tool, .rich-align-tool, .growth-line-height-tool, .growth-color-tool, .rich-script-tool, .rich-indent-tool");
+      return Boolean(floatingTool && toolbarRef.current?.contains(floatingTool));
+    };
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!isFloatingToolTarget(event.target)) {
+        closeMenus();
+      }
+    };
+    const closeOnClick = (event: MouseEvent) => {
+      if (!isFloatingToolTarget(event.target)) {
+        closeMenus();
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeMenus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown, true);
+    window.addEventListener("click", closeOnClick);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeMenus, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown, true);
+      window.removeEventListener("click", closeOnClick);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeMenus, true);
+    };
+  }, []);
+
+  const currentAlign = editor.isActive({ textAlign: "center" }) ? "center" : editor.isActive({ textAlign: "right" }) ? "right" : editor.isActive({ textAlign: "justify" }) ? "justify" : "left";
+  const selectedFontLabel = richFontFamilies.find((font) => font.value === selectedFontFamily)?.label ?? richFontFamilies[0].label;
+  const fontSelectStyle = { "--font-select-width": getRichFontSelectWidth(selectedFontLabel) } as CSSProperties;
+  const applyTextAlign = (align: "left" | "center" | "right" | "justify") => {
+    editor.chain().focus().setTextAlign(align).run();
+    setIsAlignMenuOpen(false);
+  };
+  const applyTextColor = (color: string) => {
+    if (color === "transparent") {
+      editor.chain().focus().unsetColor().run();
+      setTextColor("#172033");
+    } else {
+      editor.chain().focus().setColor(color).run();
+      setTextColor(color);
+    }
+    setOpenPalette(null);
+  };
+  const applyHighlightColor = (color: string) => {
+    if (color === "transparent") {
+      editor.chain().focus().unsetHighlight().run();
+      setHighlightColor("#fff3a3");
+    } else {
+      editor.chain().focus().setHighlight({ color }).run();
+      setHighlightColor(color);
+    }
+    setOpenPalette(null);
+  };
+
+  return (
+    <>
+    <div className="growth-editor-toolbar-stack">
+    <div ref={toolbarRef} className="growth-editor-toolbar" aria-label="富文本工具箱">
+      <button type="button" title="撤销" disabled={!editable || !editor.can().undo()} onClick={() => editor.chain().focus().undo().run()}>↶</button>
+      <button type="button" title="重做" disabled={!editable || !editor.can().redo()} onClick={() => editor.chain().focus().redo().run()}>↷</button>
+      <button type="button" title="清除格式" disabled={!editable} onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()}>Tx</button>
+      <button className={isOutlineOpen ? "active" : ""} type="button" title="文档大纲" aria-pressed={isOutlineOpen} onClick={onToggleOutline}>纲</button>
+      <div className="rich-insert-tool" onClick={(event) => event.stopPropagation()}>
+        <button type="button" title="插入" disabled={!editable} aria-expanded={isInsertMenuOpen} onClick={() => { setOpenPalette(null); setIsAlignMenuOpen(false); setIsLineHeightMenuOpen(false); setIsScriptMenuOpen(false); setIsIndentMenuOpen(false); setIsInsertMenuOpen((open) => !open); }}>
+          <InsertToolbarIcon />
+          <span>插入</span>
+          <small>⌄</small>
+        </button>
+        {isInsertMenuOpen ? (
+          <div className="rich-insert-menu" role="menu" aria-label="插入">
+            <button className={editor.isActive("code") ? "active" : ""} type="button" role="menuitem" onClick={() => { editor.chain().focus().toggleCode().run(); setIsInsertMenuOpen(false); }}>
+              <InlineCodeToolbarIcon />
+              内联代码
+            </button>
+            <button type="button" role="menuitem" onClick={() => { editor.chain().focus().setCodeBlock().run(); setIsInsertMenuOpen(false); }}>
+              <CodeBlockToolbarIcon />
+              代码块
+            </button>
+            <button className={editor.isActive("link") ? "active" : ""} type="button" role="menuitem" disabled={!editable} onClick={applyLink}>
+              <LinkToolbarIcon />
+              插入或编辑链接
+            </button>
+            <button type="button" role="menuitem" disabled={!editable || !editor.isActive("link")} onClick={removeLink}>
+              <UnlinkToolbarIcon />
+              取消链接
+            </button>
+            <button type="button" role="menuitem" disabled={!editor.isActive("link")} onClick={openCurrentLink}>
+              <ExternalLinkToolbarIcon />
+              打开链接
+            </button>
+            <button type="button" role="menuitem" onClick={() => { editor.chain().focus().toggleBlockquote().run(); setIsInsertMenuOpen(false); }}>
+              <QuoteToolbarIcon />
+              引用
+            </button>
+            <button type="button" role="menuitem" onClick={() => { editor.chain().focus().setHorizontalRule().run(); setIsInsertMenuOpen(false); }}>
+              <DividerToolbarIcon />
+              分割线
+            </button>
+            <button type="button" role="menuitem" onClick={() => { editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); setIsInsertMenuOpen(false); }}>
+              <TableToolbarIcon />
+              表格
+            </button>
+            <button type="button" role="menuitem" onClick={openImageDialog}>
+              <ImageToolbarIcon />
+              图片
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <span className="growth-toolbar-divider" />
+      <select value={paragraphStyle} disabled={!editable} aria-label="段落样式" onChange={(event) => setParagraphStyle(event.target.value)}>
+        <option value="paragraph">正文</option>
+        {richHeadingLevels.map((level) => (
+          <option key={level} value={`h${level}`}>
+            标题 {level}
+          </option>
+        ))}
+      </select>
+      <select className="rich-font-family-select" disabled={!editable} aria-label="字体" value={selectedFontFamily} style={fontSelectStyle} onChange={(event) => applyFontFamily(event.target.value)}>
+        {richFontFamilies.map((font) => (
+          <option key={font.label} value={font.value}>
+            {font.label}
+          </option>
+        ))}
+      </select>
+      <select disabled={!editable} aria-label="字号" defaultValue="16" onChange={(event) => applyFontSize(event.target.value)}>
+        {richFontSizes.map((size) => (
+          <option key={size} value={size}>
+            {size}
+          </option>
+        ))}
+      </select>
+      <button className={`rich-format-icon bold ${editor.isActive("bold") ? "active" : ""}`} type="button" title="加粗" disabled={!editable} onClick={() => editor.chain().focus().toggleBold().run()}>B</button>
+      <button className={`rich-format-icon italic ${editor.isActive("italic") ? "active" : ""}`} type="button" title="斜体" disabled={!editable} onClick={() => editor.chain().focus().toggleItalic().run()}>I</button>
+      <button className={`rich-format-icon underline ${editor.isActive("underline") ? "active" : ""}`} type="button" title="下划线" disabled={!editable} onClick={() => editor.chain().focus().toggleUnderline().run()}>U</button>
+      <button className={`rich-format-icon strike ${editor.isActive("strike") ? "active" : ""}`} type="button" title="删除线" disabled={!editable} onClick={() => editor.chain().focus().toggleStrike().run()}>S</button>
+      <div className="rich-script-tool" onClick={(event) => event.stopPropagation()}>
+        <button className={editor.isActive("superscript") || editor.isActive("subscript") ? "active" : ""} type="button" title="上下标" disabled={!editable} aria-expanded={isScriptMenuOpen} onClick={() => { setOpenPalette(null); setIsInsertMenuOpen(false); setIsAlignMenuOpen(false); setIsLineHeightMenuOpen(false); setIsIndentMenuOpen(false); setIsScriptMenuOpen((open) => !open); }}>
+          <ScriptToolbarIcon />
+          <span>上下标</span>
+          <small>⌄</small>
+        </button>
+        {isScriptMenuOpen ? (
+          <div className="rich-script-menu" role="menu" aria-label="上下标">
+            <button className={editor.isActive("superscript") ? "active" : ""} type="button" role="menuitem" onClick={() => toggleScriptMark("superscript")}>
+              <SuperscriptToolbarIcon />
+              上标
+            </button>
+            <button className={editor.isActive("subscript") ? "active" : ""} type="button" role="menuitem" onClick={() => toggleScriptMark("subscript")}>
+              <SubscriptToolbarIcon />
+              下标
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <ColorPaletteTool
+        label="A"
+        kind="text"
+        title="文字颜色"
+        indicatorColor={textColor}
+        editable={editable}
+        isOpen={openPalette === "text"}
+        onToggle={() => { setIsInsertMenuOpen(false); setIsAlignMenuOpen(false); setIsLineHeightMenuOpen(false); setIsScriptMenuOpen(false); setIsIndentMenuOpen(false); setOpenPalette((value) => (value === "text" ? null : "text")); }}
+        onSelect={applyTextColor}
+        onCustomColor={applyTextColor}
+      />
+      <ColorPaletteTool
+        label="H"
+        kind="highlight"
+        title="高亮"
+        indicatorColor={highlightColor}
+        editable={editable}
+        isOpen={openPalette === "highlight"}
+        onToggle={() => { setIsInsertMenuOpen(false); setIsAlignMenuOpen(false); setIsLineHeightMenuOpen(false); setIsScriptMenuOpen(false); setIsIndentMenuOpen(false); setOpenPalette((value) => (value === "highlight" ? null : "highlight")); }}
+        onSelect={applyHighlightColor}
+        onCustomColor={applyHighlightColor}
+      />
+      <span className="growth-toolbar-divider" />
+      <button className={editor.isActive("bulletList") ? "active" : ""} type="button" title="无序列表" disabled={!editable} onClick={() => editor.chain().focus().toggleBulletList().run()}><ListToolbarIcon type="bullet" /></button>
+      <button className={editor.isActive("orderedList") ? "active" : ""} type="button" title="有序列表" disabled={!editable} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListToolbarIcon type="ordered" /></button>
+      <button className={editor.isActive("taskList") ? "active" : ""} type="button" title="任务列表" disabled={!editable} onClick={() => editor.chain().focus().toggleTaskList().run()}>☑</button>
+      <span className="growth-toolbar-divider" />
+      <div className="rich-align-tool" onClick={(event) => event.stopPropagation()}>
+        <button type="button" title="对齐方式" disabled={!editable} aria-expanded={isAlignMenuOpen} onClick={() => { setOpenPalette(null); setIsInsertMenuOpen(false); setIsLineHeightMenuOpen(false); setIsScriptMenuOpen(false); setIsIndentMenuOpen(false); setIsAlignMenuOpen((open) => !open); }}>
+          <AlignToolbarIcon type={currentAlign} />
+          <small>⌄</small>
+        </button>
+        {isAlignMenuOpen ? (
+          <div className="rich-align-menu" role="menu" aria-label="对齐方式">
+            <button className={currentAlign === "left" ? "active" : ""} type="button" role="menuitem" onClick={() => applyTextAlign("left")}>
+              <AlignToolbarIcon type="left" />
+              左对齐
+            </button>
+            <button className={currentAlign === "center" ? "active" : ""} type="button" role="menuitem" onClick={() => applyTextAlign("center")}>
+              <AlignToolbarIcon type="center" />
+              居中
+            </button>
+            <button className={currentAlign === "right" ? "active" : ""} type="button" role="menuitem" onClick={() => applyTextAlign("right")}>
+              <AlignToolbarIcon type="right" />
+              右对齐
+            </button>
+            <button className={currentAlign === "justify" ? "active" : ""} type="button" role="menuitem" onClick={() => applyTextAlign("justify")}>
+              <AlignToolbarIcon type="justify" />
+              两端对齐
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <div className="rich-indent-tool" onClick={(event) => event.stopPropagation()}>
+        <button className={currentIndent > 0 ? "active" : ""} type="button" title="缩进" disabled={!editable} aria-expanded={isIndentMenuOpen} onClick={() => { setOpenPalette(null); setIsInsertMenuOpen(false); setIsAlignMenuOpen(false); setIsLineHeightMenuOpen(false); setIsScriptMenuOpen(false); setIsIndentMenuOpen((open) => !open); }}>
+          <IndentToolbarIcon direction="in" />
+          <span>缩进</span>
+          <small>⌄</small>
+        </button>
+        {isIndentMenuOpen ? (
+          <div className="rich-indent-menu" role="menu" aria-label="缩进">
+            <button type="button" role="menuitem" disabled={currentIndent <= 0} onClick={decreaseIndent}>
+              <IndentToolbarIcon direction="out" />
+              减少缩进
+            </button>
+            <button type="button" role="menuitem" disabled={currentIndent >= 8} onClick={increaseIndent}>
+              <IndentToolbarIcon direction="in" />
+              增加缩进
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <div className="growth-line-height-tool" onClick={(event) => event.stopPropagation()}>
+        <button type="button" title="行距" disabled={!editable} aria-expanded={isLineHeightMenuOpen} onClick={() => { setOpenPalette(null); setIsInsertMenuOpen(false); setIsAlignMenuOpen(false); setIsScriptMenuOpen(false); setIsIndentMenuOpen(false); setIsLineHeightMenuOpen((open) => !open); }}>
+          <LineHeightToolbarIcon />
+          <small>⌄</small>
+        </button>
+        {isLineHeightMenuOpen ? (
+          <div className="rich-line-height-menu" role="menu" aria-label="行距">
+            {richLineHeightOptions.map((option) => (
+              <button className={currentLineHeight === option.value ? "active" : ""} key={option.value || "default"} type="button" role="menuitem" onClick={() => setLineHeight(option.value)}>
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <select value={currentParagraphSpacing} disabled={!editable} aria-label="段落间距" onChange={(event) => setParagraphSpacing(event.target.value)}>
+        {richParagraphSpacingOptions.map((option) => (
+          <option key={option.value || "default"} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <button type="button" title="清除段落样式" aria-label="清除段落样式" disabled={!editable} onClick={clearParagraphStyle}>
+        <ClearParagraphStyleToolbarIcon />
+      </button>
+    </div>
+    </div>
+    <input ref={imageInputRef} className="sr-only" type="file" accept="image/*" aria-label="选择本地图片" onChange={handleImageFileChange} />
+    </>
+  );
+}
+
+function ListToolbarIcon({ type }: { type: "bullet" | "ordered" }) {
+  return (
+    <IconBase className="rich-toolbar-svg list">
+      {type === "bullet" ? (
+        <>
+          <circle cx="5" cy="7" r="1.1" />
+          <circle cx="5" cy="12" r="1.1" />
+          <circle cx="5" cy="17" r="1.1" />
+        </>
+      ) : (
+        <>
+          <path className="ordered-list-number" d="M5.7 4.9v4.2" />
+          <path className="ordered-list-number" d="M4.9 5.5 5.7 4.9" />
+          <path className="ordered-list-number" d="M4.8 9.1h2" />
+          <path className="ordered-list-number" d="M4.7 11.1h2.2v1.7H4.8v1.7h2.2" />
+          <path className="ordered-list-number" d="M4.7 16.2h2.2l-1.1 1.3h.5c.7 0 1.1.4 1.1 1s-.5 1-1.4 1H4.7" />
+        </>
+      )}
+      <path d="M9 7h11" />
+      <path d="M9 12h11" />
+      <path d="M9 17h11" />
+    </IconBase>
+  );
+}
+
+function AlignToolbarIcon({ type }: { type: "left" | "center" | "right" | "justify" }) {
+  const lines = type === "left"
+    ? ["M4 5.5h16", "M4 9.8h11", "M4 14.2h16", "M4 18.5h12"]
+    : type === "center"
+      ? ["M4 5.5h16", "M7 9.8h10", "M4 14.2h16", "M6.5 18.5h11"]
+      : type === "right"
+        ? ["M4 5.5h16", "M9 9.8h11", "M4 14.2h16", "M8 18.5h12"]
+        : ["M4 5.5h16", "M4 9.8h16", "M4 14.2h16", "M4 18.5h16"];
+  return (
+    <IconBase className={`rich-toolbar-svg align ${type}`}>
+      {lines.map((line) => (
+        <path key={line} d={line} />
+      ))}
+    </IconBase>
+  );
+}
+
+function IndentToolbarIcon({ direction }: { direction: "in" | "out" }) {
+  return (
+    <IconBase className="rich-toolbar-svg">
+      <path d="M10 6h10" />
+      <path d="M10 12h10" />
+      <path d="M10 18h10" />
+      {direction === "in" ? <path d="M4 9l4 3-4 3V9Z" /> : <path d="M8 9l-4 3 4 3V9Z" />}
+    </IconBase>
+  );
+}
+
+function LineHeightToolbarIcon() {
+  return (
+    <IconBase className="rich-toolbar-svg">
+      <path d="M9 6h10" />
+      <path d="M9 12h10" />
+      <path d="M9 18h10" />
+      <path d="M5 5v14" />
+      <path d="M3.2 7 5 5l1.8 2" />
+      <path d="M3.2 17 5 19l1.8-2" />
+    </IconBase>
+  );
+}
+
+function ClearParagraphStyleToolbarIcon() {
+  return (
+    <IconBase className="rich-toolbar-svg">
+      <path d="M6 6h12" />
+      <path d="M6 11h9" />
+      <path d="M6 16h6" />
+      <path d="M15.5 15.5 19 19" />
+      <path d="M19 15.5 15.5 19" />
+    </IconBase>
+  );
+}
+
+function ScriptToolbarIcon() {
+  return (
+    <IconBase className="rich-toolbar-svg rich-script-svg">
+      <text x="5" y="15">x</text>
+      <text x="13" y="8">2</text>
+      <text x="13" y="18">2</text>
+    </IconBase>
+  );
+}
+
+function SuperscriptToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon rich-script-menu-icon">
+      <text x="5" y="16">x</text>
+      <text x="14" y="9">2</text>
+    </IconBase>
+  );
+}
+
+function SubscriptToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon rich-script-menu-icon">
+      <text x="5" y="13">x</text>
+      <text x="14" y="18">2</text>
+    </IconBase>
+  );
+}
+
+function LinkToolbarIcon() {
+  return (
+    <IconBase className="rich-toolbar-svg">
+      <path d="M9.5 8.2 8.1 9.6a4 4 0 0 0 5.7 5.7l1.4-1.4" />
+      <path d="M14.5 15.8 15.9 14.4a4 4 0 0 0-5.7-5.7L8.8 10.1" />
+      <path d="M9.8 14.2 14.2 9.8" />
+    </IconBase>
+  );
+}
+
+function UnlinkToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <path d="M9 8.5 7.8 9.7a3.8 3.8 0 0 0 4.6 5.9" />
+      <path d="M15 15.5 16.2 14.3a3.8 3.8 0 0 0-4.6-5.9" />
+      <path d="M5.2 5.2 18.8 18.8" />
+    </IconBase>
+  );
+}
+
+function ExternalLinkToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <path d="M8 8H6.2a1.7 1.7 0 0 0-1.7 1.7v7.1a1.7 1.7 0 0 0 1.7 1.7h7.1a1.7 1.7 0 0 0 1.7-1.7V15" />
+      <path d="M12.5 5.5h6v6" />
+      <path d="M18.5 5.5 10.5 13.5" />
+    </IconBase>
+  );
+}
+
+function InsertToolbarIcon() {
+  return (
+    <IconBase className="rich-insert-icon">
+      <circle cx="12" cy="12" r="9.2" />
+      <path d="M12 7.5v9" />
+      <path d="M7.5 12h9" />
+    </IconBase>
+  );
+}
+
+function InlineCodeToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <path d="M8.4 8.8 5.2 12l3.2 3.2" />
+      <path d="M15.6 8.8 18.8 12l-3.2 3.2" />
+      <path d="M10.1 16.2h3.8" />
+    </IconBase>
+  );
+}
+
+function CodeBlockToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <path d="M9 8 5 12l4 4" />
+      <path d="M15 8l4 4-4 4" />
+      <path d="M13 6.5 11 17.5" />
+    </IconBase>
+  );
+}
+
+function QuoteToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <path d="M8.5 8.5c-1.7.8-2.7 2.1-2.7 4.1v3.2h4.7v-4.6H8.1c.1-1 .7-1.8 1.8-2.4" />
+      <path d="M16.2 8.5c-1.7.8-2.7 2.1-2.7 4.1v3.2h4.7v-4.6h-2.4c.1-1 .7-1.8 1.8-2.4" />
+    </IconBase>
+  );
+}
+
+function DividerToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <path d="M5 12h14" />
+      <path d="M7 8h10" />
+      <path d="M7 16h10" />
+    </IconBase>
+  );
+}
+
+function TableToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <rect x="4.5" y="5" width="15" height="14" rx="1.5" />
+      <path d="M4.5 9.5h15" />
+      <path d="M4.5 14h15" />
+      <path d="M9.5 5v14" />
+      <path d="M14.5 5v14" />
+    </IconBase>
+  );
+}
+
+function ImageToolbarIcon() {
+  return (
+    <IconBase className="rich-menu-icon">
+      <rect x="4.5" y="5" width="15" height="14" rx="1.8" />
+      <circle cx="9" cy="9.5" r="1.3" />
+      <path d="M6.8 16.5 10.5 13l2.4 2.2 2.1-2.7 3 4" />
+    </IconBase>
+  );
+}
+
+function ColorPaletteTool({
+  label,
+  kind,
+  title,
+  indicatorColor,
+  editable,
+  isOpen,
+  onToggle,
+  onSelect,
+  onCustomColor
+}: {
+  label: string;
+  kind: "text" | "highlight";
+  title: string;
+  indicatorColor: string;
+  editable: boolean;
+  isOpen: boolean;
+  onToggle: () => void;
+  onSelect: (color: string) => void;
+  onCustomColor: (color: string) => void;
+}) {
+  const paletteID = `palette-${title}`;
+  return (
+    <div className={`growth-color-tool ${kind}`} onClick={(event) => event.stopPropagation()}>
+      <button type="button" title={title} disabled={!editable} aria-expanded={isOpen} aria-controls={paletteID} style={{ "--indicator-color": indicatorColor } as CSSProperties} onClick={onToggle}>
+        {label}
+        <span />
+      </button>
+      {isOpen ? (
+        <div id={paletteID} className="growth-color-palette" role="dialog" aria-label={title}>
+          <div className="growth-palette-row primary">
+            {richPalettePrimary.map((color, index) => (
+              <button
+                key={`${color}-${index}`}
+                className={color === "transparent" ? "empty" : ""}
+                type="button"
+                title={color === "transparent" ? "默认" : color}
+                style={color === "transparent" ? undefined : { "--swatch-color": color } as CSSProperties}
+                onClick={() => onSelect(color)}
+              />
+            ))}
+          </div>
+          <div className="growth-palette-matrix">
+            {richPaletteRows.flatMap((row, rowIndex) =>
+              row.map((color, columnIndex) => (
+                <button
+                  key={`${rowIndex}-${columnIndex}-${color}`}
+                  type="button"
+                  title={color}
+                  style={{ "--swatch-color": color } as CSSProperties}
+                  onClick={() => onSelect(color)}
+                />
+              ))
+            )}
+          </div>
+          <div className="growth-palette-recent">
+            <span>最近使用</span>
+            <div>
+              {richRecentColors.map((color, index) => (
+                <button
+                  key={`${color}-${index}`}
+                  className={color === "transparent" ? "empty" : ""}
+                  type="button"
+                  title={color === "transparent" ? "暂无" : color}
+                  disabled={color === "transparent"}
+                  style={color === "transparent" ? undefined : { "--swatch-color": color } as CSSProperties}
+                  onClick={() => onSelect(color)}
+                />
+              ))}
+            </div>
+          </div>
+          <label className="growth-palette-custom">
+            <span>◌</span>
+            自定义颜色
+            <strong>›</strong>
+            <input type="color" onInput={(event) => onCustomColor(event.currentTarget.value)} />
+          </label>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MarkdownPreview({ content }: { content: string }) {
+  const blocks: ReactNode[] = [];
+  const lines = content.split("\n");
+  let codeLines: string[] = [];
+  let isCodeBlock = false;
+
+  lines.forEach((line, index) => {
+    if (line.trim().startsWith("```")) {
+      if (isCodeBlock) {
+        blocks.push(
+          <pre key={`code-${index}`}>
+            <code>{codeLines.join("\n")}</code>
+          </pre>
+        );
+        codeLines = [];
+        isCodeBlock = false;
+      } else {
+        isCodeBlock = true;
+      }
+      return;
+    }
+    if (isCodeBlock) {
+      codeLines.push(line);
+      return;
+    }
+
+    const trimmed = line.trim();
+    if (!trimmed) {
+      blocks.push(<div key={`blank-${index}`} className="markdown-blank" />);
+      return;
+    }
+    if (trimmed.startsWith("### ")) {
+      blocks.push(<h3 key={index}>{renderInlineMarkdown(trimmed.slice(4))}</h3>);
+      return;
+    }
+    if (trimmed.startsWith("## ")) {
+      blocks.push(<h2 key={index}>{renderInlineMarkdown(trimmed.slice(3))}</h2>);
+      return;
+    }
+    if (trimmed.startsWith("# ")) {
+      blocks.push(<h1 key={index}>{renderInlineMarkdown(trimmed.slice(2))}</h1>);
+      return;
+    }
+    if (trimmed.startsWith("> ")) {
+      blocks.push(<blockquote key={index}>{renderInlineMarkdown(trimmed.slice(2))}</blockquote>);
+      return;
+    }
+    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      blocks.push(
+        <p key={index} className="markdown-list-item">
+          {renderInlineMarkdown(trimmed.slice(2))}
+        </p>
+      );
+      return;
+    }
+    if (/^\d+\.\s+/.test(trimmed)) {
+      blocks.push(
+        <p key={index} className="markdown-list-item ordered">
+          {renderInlineMarkdown(trimmed.replace(/^\d+\.\s+/, ""))}
+        </p>
+      );
+      return;
+    }
+    if (trimmed === "---" || trimmed === "***") {
+      blocks.push(<hr key={index} />);
+      return;
+    }
+    blocks.push(<p key={index}>{renderInlineMarkdown(line)}</p>);
+  });
+
+  if (isCodeBlock) {
+    blocks.push(
+      <pre key="code-tail">
+        <code>{codeLines.join("\n")}</code>
+      </pre>
+    );
+  }
+
+  return <div className="growth-markdown-preview">{blocks.length ? blocks : <p className="growth-muted">预览会显示在这里。</p>}</div>;
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("**")) {
+      parts.push(<strong key={`${token}-${match.index}`}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith("`")) {
+      parts.push(<code key={`${token}-${match.index}`}>{token.slice(1, -1)}</code>);
+    } else {
+      const [, label, href] = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/) ?? [];
+      parts.push(
+        <a key={`${token}-${match.index}`} href={href} target="_blank" rel="noreferrer">
+          {label}
+        </a>
+      );
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts;
+}
+
+function getNoteExcerpt(content: string) {
+  const text = content
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`[\]()\-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.slice(0, 72) : "还没有正文";
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 function EmptyPage({
   page,
   authSession,
@@ -6037,6 +10320,27 @@ function EyeOffIcon() {
       <path d="M10.6 5.2A10.5 10.5 0 0 1 12 5c6.2 0 9.5 7 9.5 7a16.2 16.2 0 0 1-2.6 3.4" />
       <path d="M6.2 6.9C3.8 8.6 2.5 12 2.5 12s3.3 7 9.5 7a9.8 9.8 0 0 0 4.3-1" />
       <path d="M9.8 9.8a3 3 0 0 0 4.4 4.4" />
+    </IconBase>
+  );
+}
+
+function FullscreenIcon({ active }: { active: boolean }) {
+  if (active) {
+    return (
+      <IconBase>
+        <path d="M9 4v5H4" />
+        <path d="M15 4v5h5" />
+        <path d="M9 20v-5H4" />
+        <path d="M15 20v-5h5" />
+      </IconBase>
+    );
+  }
+  return (
+    <IconBase>
+      <path d="M4 9V4h5" />
+      <path d="M20 9V4h-5" />
+      <path d="M4 15v5h5" />
+      <path d="M20 15v5h-5" />
     </IconBase>
   );
 }

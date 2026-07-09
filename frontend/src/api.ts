@@ -8,9 +8,15 @@ import type {
   FavoriteCategoryRequest,
   FavoriteCategoryTrackRequest,
   FavoriteRequest,
+  GrowthNote,
+  GrowthNoteRequest,
   LibrarySetting,
   LibrarySettingResponse,
   LoginRequest,
+  NoteComment,
+  NoteCommentRequest,
+  NoteFolder,
+  NoteFolderRequest,
   PresenceRequest,
   PresenceResponse,
   ScanResult,
@@ -24,12 +30,25 @@ const requestTimeoutMs = 30_000;
 const authRequestTimeoutMs = 12_000;
 const scanRequestTimeoutMs = 120_000;
 const audioFileRequestTimeoutMs = 30 * 60_000;
+let apiSessionToken = "";
 
 type TracksResponse = {
   tracks: Track[];
 };
 type FavoriteCategoriesResponse = {
   categories: FavoriteCategory[];
+};
+type NoteFoldersResponse = {
+  folders: NoteFolder[];
+};
+type GrowthNotesResponse = {
+  notes: GrowthNote[];
+};
+type GrowthNoteResponse = {
+  note: GrowthNote;
+};
+type NoteCommentsResponse = {
+  comments: NoteComment[];
 };
 type RequestOptions = {
   timeoutMs?: number;
@@ -52,6 +71,10 @@ export class ApiError extends Error {
   }
 }
 
+export function setApiSessionToken(token: string | null | undefined) {
+  apiSessionToken = token?.trim() ?? "";
+}
+
 function audioAccessHeaders(accessToken: string) {
   return {
     "X-Audio-Access-Token": accessToken
@@ -72,6 +95,9 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
     if (!isFormData && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
+    }
+    if (apiSessionToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${apiSessionToken}`);
     }
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
@@ -125,6 +151,10 @@ function parseRetryAfterSeconds(value: string | null) {
 
 export function streamURL(track: Track): string {
   return `${API_BASE}${track.stream_url}`;
+}
+
+export function coverURL(track: Track): string {
+  return track.cover_url ? `${API_BASE}${track.cover_url}` : "";
 }
 
 export function getTracks(): Promise<TracksResponse> {
@@ -283,6 +313,9 @@ function uploadFormData<T>(
     for (const [name, value] of Object.entries(headers)) {
       xhr.setRequestHeader(name, value);
     }
+    if (apiSessionToken && !headers.Authorization && !headers.authorization) {
+      xhr.setRequestHeader("Authorization", `Bearer ${apiSessionToken}`);
+    }
 
     xhr.upload.onprogress = (event) => {
       onProgress?.({
@@ -353,6 +386,15 @@ export function loginUser(payload: LoginRequest): Promise<AuthResponse> {
   });
 }
 
+export function logoutUser(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({})
+  }, {
+    timeoutMs: authRequestTimeoutMs
+  });
+}
+
 export function sendPresenceHeartbeat(payload: PresenceRequest): Promise<PresenceResponse> {
   return request<PresenceResponse>("/api/presence/heartbeat", {
     method: "POST",
@@ -365,4 +407,90 @@ export function sendPresenceOffline(payload: PresenceRequest): Promise<PresenceR
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export function getNoteFolders(userID?: number): Promise<NoteFoldersResponse> {
+  const query = userID ? `?user_id=${encodeURIComponent(String(userID))}` : "";
+  return request<NoteFoldersResponse>(`/api/note-folders${query}`);
+}
+
+export function createNoteFolder(payload: NoteFolderRequest): Promise<NoteFolder> {
+  return request<NoteFolder>("/api/note-folders", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateNoteFolder(folderID: number, payload: NoteFolderRequest): Promise<NoteFolder> {
+  return request<NoteFolder>(`/api/note-folders/${encodeURIComponent(String(folderID))}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteNoteFolder(folderID: number, userID: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/note-folders/${encodeURIComponent(String(folderID))}?user_id=${encodeURIComponent(String(userID))}`, {
+    method: "DELETE"
+  });
+}
+
+export function getNotes(options: { userID?: number; folderID?: number | "all" | "unfiled"; query?: string } = {}): Promise<GrowthNotesResponse> {
+  const params = new URLSearchParams();
+  if (options.userID) {
+    params.set("user_id", String(options.userID));
+  }
+  if (options.folderID !== undefined) {
+    params.set("folder_id", String(options.folderID));
+  }
+  if (options.query) {
+    params.set("q", options.query);
+  }
+  const query = params.toString();
+  return request<GrowthNotesResponse>(`/api/notes${query ? `?${query}` : ""}`);
+}
+
+export function getNote(noteID: number, userID?: number): Promise<GrowthNoteResponse> {
+  const query = userID ? `?user_id=${encodeURIComponent(String(userID))}` : "";
+  return request<GrowthNoteResponse>(`/api/notes/${encodeURIComponent(String(noteID))}${query}`);
+}
+
+export function createNote(payload: GrowthNoteRequest): Promise<GrowthNote> {
+  return request<GrowthNote>("/api/notes", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateNote(noteID: number, payload: GrowthNoteRequest): Promise<GrowthNote> {
+  return request<GrowthNote>(`/api/notes/${encodeURIComponent(String(noteID))}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteNote(noteID: number, userID: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/notes/${encodeURIComponent(String(noteID))}?user_id=${encodeURIComponent(String(userID))}`, {
+    method: "DELETE"
+  });
+}
+
+export function getNoteComments(noteID: number, userID?: number): Promise<NoteCommentsResponse> {
+  const query = userID ? `?user_id=${encodeURIComponent(String(userID))}` : "";
+  return request<NoteCommentsResponse>(`/api/notes/${encodeURIComponent(String(noteID))}/comments${query}`);
+}
+
+export function createNoteComment(noteID: number, payload: NoteCommentRequest): Promise<NoteComment> {
+  return request<NoteComment>(`/api/notes/${encodeURIComponent(String(noteID))}/comments`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteNoteComment(noteID: number, commentID: number, userID: number): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    `/api/notes/${encodeURIComponent(String(noteID))}/comments/${encodeURIComponent(String(commentID))}?user_id=${encodeURIComponent(String(userID))}`,
+    {
+      method: "DELETE"
+    }
+  );
 }

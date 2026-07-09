@@ -15,7 +15,16 @@ type Track struct {
 	DurationSeconds *int        `json:"duration_seconds"`
 	ModifiedAt      time.Time   `json:"modified_at"`
 	StreamURL       string      `json:"stream_url"`
+	CoverURL        string      `json:"cover_url,omitempty"`
+	Cover           *TrackCover `json:"-"`
 	Lyrics          []LyricLine `json:"lyrics,omitempty"`
+}
+
+type TrackCover struct {
+	MimeType  string `json:"mime_type"`
+	Data      []byte `json:"-"`
+	Hash      string `json:"hash"`
+	SizeBytes int64  `json:"size_bytes"`
 }
 
 type TrackLyrics struct {

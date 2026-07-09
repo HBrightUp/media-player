@@ -3,7 +3,9 @@ package library
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +23,8 @@ import (
 	"github.com/hml/media-player/backend/internal/models"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
+
+const maxEmbeddedCoverBytes = 8 * 1024 * 1024
 
 var supportedAudioFormats = map[string]bool{
 	".aac":  true,
@@ -44,6 +48,7 @@ type tags struct {
 	Artist string
 	Album  string
 	Lyrics []models.LyricLine
+	Cover  *models.TrackCover
 }
 
 func NewScanner(store *database.Store, lyricsRoot ...string) *Scanner {
@@ -181,6 +186,7 @@ func buildTrack(root, path, ext, lyricsRoot string) (models.Track, *models.Track
 		Format:       strings.TrimPrefix(ext, "."),
 		SizeBytes:    info.Size(),
 		ModifiedAt:   info.ModTime(),
+		Cover:        metadata.Cover,
 	}, lyrics, nil
 }
 
@@ -199,6 +205,11 @@ func readTags(path, ext string) tags {
 			metadata = mergeTags(metadata, mp4Tags)
 		}
 	}
+	if ext == ".flac" {
+		if flacTags, err := readFLACTags(path); err == nil {
+			metadata = mergeTags(metadata, flacTags)
+		}
+	}
 	return metadata
 }
 
@@ -207,6 +218,7 @@ func mergeTags(primary, fallback tags) tags {
 	primary.Artist = firstText(primary.Artist, fallback.Artist)
 	primary.Album = firstText(primary.Album, fallback.Album)
 	primary.Lyrics = firstLyrics(primary.Lyrics, fallback.Lyrics)
+	primary.Cover = firstCover(primary.Cover, fallback.Cover)
 	return primary
 }
 
@@ -254,6 +266,61 @@ func firstLyrics(values ...[]models.LyricLine) []models.LyricLine {
 		}
 	}
 	return []models.LyricLine{}
+}
+
+func firstCover(values ...*models.TrackCover) *models.TrackCover {
+	for _, value := range values {
+		if value != nil && value.MimeType != "" && len(value.Data) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func newTrackCover(mimeType string, data []byte) *models.TrackCover {
+	if len(data) == 0 || len(data) > maxEmbeddedCoverBytes {
+		return nil
+	}
+	mimeType = detectCoverMimeType(mimeType, data)
+	if !strings.HasPrefix(mimeType, "image/") {
+		return nil
+	}
+	copied := append([]byte(nil), data...)
+	sum := sha256.Sum256(copied)
+	return &models.TrackCover{
+		MimeType:  mimeType,
+		Data:      copied,
+		Hash:      hex.EncodeToString(sum[:]),
+		SizeBytes: int64(len(copied)),
+	}
+}
+
+func detectCoverMimeType(mimeType string, data []byte) string {
+	mimeType = strings.ToLower(strings.TrimSpace(strings.Trim(mimeType, "\x00")))
+	switch {
+	case len(data) >= 3 && bytes.Equal(data[:3], []byte{0xFF, 0xD8, 0xFF}):
+		return "image/jpeg"
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'}):
+		return "image/png"
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return "image/webp"
+	case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
+		return "image/gif"
+	}
+	switch mimeType {
+	case "image/jpg", "jpg", "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
+	}
+	if strings.HasPrefix(mimeType, "image/") {
+		return mimeType
+	}
+	return ""
 }
 
 func firstTrackLyrics(values ...*models.TrackLyrics) *models.TrackLyrics {
@@ -511,6 +578,79 @@ func lyricsFromPlainText(text string) []models.LyricLine {
 	return compactLyrics(lines)
 }
 
+func readFLACTags(path string) (tags, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return tags{}, err
+	}
+	defer file.Close()
+
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return tags{}, err
+	}
+	if string(header) != "fLaC" {
+		return tags{}, errors.New("missing flac marker")
+	}
+
+	var metadata tags
+	for {
+		blockHeader := make([]byte, 4)
+		if _, err := io.ReadFull(file, blockHeader); err != nil {
+			return metadata, err
+		}
+		isLast := blockHeader[0]&0x80 != 0
+		blockType := blockHeader[0] & 0x7F
+		blockSize := int(blockHeader[1])<<16 | int(blockHeader[2])<<8 | int(blockHeader[3])
+		if blockSize > maxEmbeddedCoverBytes+1024 {
+			if _, err := io.CopyN(io.Discard, file, int64(blockSize)); err != nil {
+				return metadata, err
+			}
+			if isLast {
+				break
+			}
+			continue
+		}
+		block := make([]byte, blockSize)
+		if _, err := io.ReadFull(file, block); err != nil {
+			return metadata, err
+		}
+		if blockType == 6 {
+			metadata.Cover = firstCover(metadata.Cover, decodeFLACPictureBlock(block))
+		}
+		if isLast {
+			break
+		}
+	}
+	return metadata, nil
+}
+
+func decodeFLACPictureBlock(block []byte) *models.TrackCover {
+	if len(block) < 32 {
+		return nil
+	}
+	offset := 4
+	mimeLength := int(binary.BigEndian.Uint32(block[offset : offset+4]))
+	offset += 4
+	if mimeLength < 0 || offset+mimeLength+4 > len(block) {
+		return nil
+	}
+	mimeType := string(block[offset : offset+mimeLength])
+	offset += mimeLength
+	descriptionLength := int(binary.BigEndian.Uint32(block[offset : offset+4]))
+	offset += 4
+	if descriptionLength < 0 || offset+descriptionLength+20 > len(block) {
+		return nil
+	}
+	offset += descriptionLength + 16
+	dataLength := int(binary.BigEndian.Uint32(block[offset : offset+4]))
+	offset += 4
+	if dataLength <= 0 || dataLength > maxEmbeddedCoverBytes || offset+dataLength > len(block) {
+		return nil
+	}
+	return newTrackCover(mimeType, block[offset:offset+dataLength])
+}
+
 type mp4Atom struct {
 	typ        string
 	offset     int64
@@ -579,6 +719,8 @@ func parseMP4Atoms(reader io.ReaderAt, start, end int64, depth int, metadata *ta
 			metadata.Album = firstText(metadata.Album, readMP4TextAtom(reader, payloadStart, payloadEnd))
 		case "\xa9lyr":
 			metadata.Lyrics = firstLyrics(metadata.Lyrics, lyricsFromPlainText(readMP4TextAtom(reader, payloadStart, payloadEnd)))
+		case "covr":
+			metadata.Cover = firstCover(metadata.Cover, readMP4CoverAtom(reader, payloadStart, payloadEnd))
 		}
 
 		offset += atom.size
@@ -636,6 +778,29 @@ func readMP4TextAtom(reader io.ReaderAt, start, end int64) string {
 		offset += atom.size
 	}
 	return ""
+}
+
+func readMP4CoverAtom(reader io.ReaderAt, start, end int64) *models.TrackCover {
+	for offset := start; offset+16 <= end; {
+		atom, ok := readMP4Atom(reader, offset, end)
+		if !ok {
+			break
+		}
+		if atom.typ == "data" {
+			dataStart := atom.offset + atom.headerSize + 8
+			dataEnd := atom.offset + atom.size
+			if dataStart >= dataEnd || dataEnd-dataStart > maxEmbeddedCoverBytes {
+				return nil
+			}
+			buffer := make([]byte, dataEnd-dataStart)
+			if _, err := reader.ReadAt(buffer, dataStart); err != nil {
+				return nil
+			}
+			return newTrackCover("", buffer)
+		}
+		offset += atom.size
+	}
+	return nil
 }
 
 func readID3v2(path string) (tags, error) {
@@ -699,6 +864,8 @@ func readID3v2(path string) (tags, error) {
 				metadata.Lyrics = firstLyrics(metadata.Lyrics, decodeUnsyncedLyricsFrame(payload))
 			case "SLT":
 				metadata.Lyrics = firstLyrics(metadata.Lyrics, decodeSyncedLyricsFrame(payload))
+			case "PIC":
+				metadata.Cover = firstCover(metadata.Cover, decodeID3v22PictureFrame(payload))
 			}
 			offset += 6 + frameSize
 			continue
@@ -734,6 +901,8 @@ func readID3v2(path string) (tags, error) {
 			metadata.Lyrics = firstLyrics(metadata.Lyrics, decodeUnsyncedLyricsFrame(payload))
 		case "SYLT":
 			metadata.Lyrics = firstLyrics(metadata.Lyrics, decodeSyncedLyricsFrame(payload))
+		case "APIC":
+			metadata.Cover = firstCover(metadata.Cover, decodeID3AttachedPictureFrame(payload))
 		}
 		offset += 10 + frameSize
 	}
@@ -882,6 +1051,36 @@ func decodeSyncedLyricsFrame(payload []byte) []models.LyricLine {
 		rest = remaining
 	}
 	return compactLyrics(lines)
+}
+
+func decodeID3AttachedPictureFrame(payload []byte) *models.TrackCover {
+	if len(payload) < 5 {
+		return nil
+	}
+	encoding := payload[0]
+	mimeEnd := bytes.IndexByte(payload[1:], 0)
+	if mimeEnd < 0 {
+		return nil
+	}
+	mimeType := string(payload[1 : 1+mimeEnd])
+	offset := 1 + mimeEnd + 1
+	if offset >= len(payload) {
+		return nil
+	}
+	offset++
+	_, data := splitID3TerminatedText(payload[offset:], encoding)
+	return newTrackCover(mimeType, data)
+}
+
+func decodeID3v22PictureFrame(payload []byte) *models.TrackCover {
+	if len(payload) < 6 {
+		return nil
+	}
+	encoding := payload[0]
+	imageFormat := strings.ToLower(string(payload[1:4]))
+	offset := 5
+	_, data := splitID3TerminatedText(payload[offset:], encoding)
+	return newTrackCover(imageFormat, data)
 }
 
 func splitID3TerminatedText(data []byte, encoding byte) ([]byte, []byte) {

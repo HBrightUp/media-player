@@ -15,6 +15,7 @@ export type Track = {
   duration_seconds: number | null;
   modified_at: string;
   stream_url: string;
+  cover_url?: string;
   lyrics?: LyricLine[];
 };
 
@@ -54,6 +55,8 @@ export type AuthUser = {
 
 export type AuthResponse = {
   user: AuthUser;
+  token?: string;
+  expires_at?: string;
 };
 
 export type LoginRequest = {
@@ -162,4 +165,59 @@ export type AudioFileRenameRequest = {
   user_id: number;
   artist: string;
   title: string;
+};
+
+export type NoteFolder = {
+  id: number;
+  parent_id: number | null;
+  owner_user_id: number;
+  owner_nickname: string;
+  name: string;
+  sort_order: number;
+  note_count: number;
+  can_edit: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GrowthNote = {
+  id: number;
+  folder_id: number | null;
+  owner_user_id: number;
+  owner_nickname: string;
+  title: string;
+  content: string;
+  comment_count: number;
+  can_edit: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NoteComment = {
+  id: number;
+  note_id: number;
+  user_id: number;
+  author_nickname: string;
+  content: string;
+  can_delete: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NoteFolderRequest = {
+  user_id: number;
+  parent_id?: number | null;
+  name: string;
+};
+
+export type GrowthNoteRequest = {
+  user_id: number;
+  folder_id?: number | null;
+  title: string;
+  content: string;
+};
+
+export type NoteCommentRequest = {
+  user_id: number;
+  content: string;
 };

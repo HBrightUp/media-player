@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -40,6 +41,9 @@ const (
 	passwordHashLength       = 32
 	loginMaxFails            = 8
 	loginLockout             = 2 * time.Minute
+	authSessionTTL           = 3 * 24 * time.Hour
+	authSessionTokenSize     = 32
+	authAuditSweepInterval   = 30 * time.Second
 	presenceTTL              = 75 * time.Second
 	manualTrackRefreshWindow = time.Minute
 	audioFileAccessTTL       = time.Hour
@@ -58,6 +62,7 @@ type Server struct {
 	loginFailures       *authFailureLimiter
 	trackRefreshLimiter *manualRefreshLimiter
 	audioFileAccess     *audioFileAccessManager
+	authAuditSweeper    *authAuditSweeper
 }
 
 type setLibraryRequest struct {
@@ -127,6 +132,11 @@ type authFailure struct {
 	LockedUntil time.Time
 }
 
+type authAuditSweeper struct {
+	mu      sync.Mutex
+	lastRun time.Time
+}
+
 type manualRefreshLimiter struct {
 	mu        sync.Mutex
 	lastByKey map[string]time.Time
@@ -159,6 +169,7 @@ func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Se
 		loginFailures:       newAuthFailureLimiter(),
 		trackRefreshLimiter: newManualRefreshLimiter(),
 		audioFileAccess:     newAudioFileAccessManager(audioFileAccessTokenSize, audioFileAccessTTL),
+		authAuditSweeper:    &authAuditSweeper{},
 	}
 }
 
@@ -167,6 +178,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/auth/register", s.handleRegister)
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
+	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/presence/heartbeat", s.handlePresenceHeartbeat)
 	mux.HandleFunc("/api/presence/offline", s.handlePresenceOffline)
 	mux.HandleFunc("/api/settings/library", s.handleLibrarySetting)
@@ -180,6 +192,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/audio-files/import", s.handleAudioFileImport)
 	mux.HandleFunc("/api/audio-files", s.handleAudioFiles)
 	mux.HandleFunc("/api/audio-files/", s.handleAudioFileRoute)
+	mux.HandleFunc("/api/note-folders", s.handleNoteFolders)
+	mux.HandleFunc("/api/note-folders/", s.handleNoteFolderRoute)
+	mux.HandleFunc("/api/notes", s.handleNotes)
+	mux.HandleFunc("/api/notes/", s.handleNoteRoute)
 	mux.HandleFunc("/api/tracks", s.handleTracks)
 	mux.HandleFunc("/api/tracks/refresh", s.handleTrackRefresh)
 	mux.HandleFunc("/api/tracks/", s.handleTrackRoute)
@@ -222,9 +238,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	failureKey := authFailureKey(phone, clientAddress(r))
+	clientIP := clientAddress(r)
+	userAgent := strings.TrimSpace(r.UserAgent())
+	failureKey := authFailureKey(phone, clientIP)
 	now := time.Now()
+	s.sweepAuthSessions(r.Context(), now)
 	if remaining, locked := s.loginFailures.CheckLockout(failureKey, now); locked {
+		s.recordAuthAudit(r.Context(), database.AuthAuditEvent{
+			EventType:     "login_failure",
+			Phone:         phone,
+			IPAddress:     clientIP,
+			UserAgent:     userAgent,
+			Success:       false,
+			FailureReason: "locked_out",
+			Metadata: map[string]any{
+				"retry_after_seconds": int((remaining + time.Second - 1) / time.Second),
+			},
+		})
 		retryAfterSeconds := int((remaining + time.Second - 1) / time.Second)
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("登录失败次数过多，请%d秒后再试", retryAfterSeconds))
@@ -232,6 +262,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := s.store.GetUserByPhone(r.Context(), phone)
 	if errors.Is(err, pgx.ErrNoRows) {
+		s.recordAuthAudit(r.Context(), database.AuthAuditEvent{
+			EventType:     "login_failure",
+			Phone:         phone,
+			IPAddress:     clientIP,
+			UserAgent:     userAgent,
+			Success:       false,
+			FailureReason: "user_not_found",
+		})
 		if s.recordLoginFailure(w, failureKey, now) {
 			return
 		}
@@ -243,6 +281,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !verifyPassword(password, user.PasswordSalt, user.PasswordHash) {
+		s.recordAuthAudit(r.Context(), database.AuthAuditEvent{
+			EventType:     "login_failure",
+			UserID:        user.ID,
+			Phone:         phone,
+			IPAddress:     clientIP,
+			UserAgent:     userAgent,
+			Success:       false,
+			FailureReason: "bad_password",
+		})
 		if s.recordLoginFailure(w, failureKey, now) {
 			return
 		}
@@ -250,8 +297,62 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.loginFailures.Clear(failureKey)
+	token, tokenHash, expiresAt, err := s.grantAuthSession(r.Context(), user.ID, now, clientIP, userAgent)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "生成登录会话失败")
+		return
+	}
+	s.recordAuthAudit(r.Context(), database.AuthAuditEvent{
+		EventType:        "login_success",
+		UserID:           user.ID,
+		Phone:            user.Phone,
+		SessionTokenHash: tokenHash,
+		IPAddress:        clientIP,
+		UserAgent:        userAgent,
+		Success:          true,
+		Metadata: map[string]any{
+			"expires_at": expiresAt.UTC().Format(time.RFC3339),
+		},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": publicUser(user),
+		"user":       publicUser(user),
+		"token":      token,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+
+	now := time.Now()
+	s.sweepAuthSessions(r.Context(), now)
+	token := authSessionToken(r)
+	if strings.TrimSpace(token) != "" {
+		tokenHash := hashAuthSessionToken(token)
+		session, err := s.store.EndAuthSession(r.Context(), tokenHash, "explicit_logout", now)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "退出登录失败")
+			return
+		}
+		if err == nil {
+			s.recordAuthAudit(r.Context(), database.AuthAuditEvent{
+				EventType:        "logout_explicit",
+				UserID:           session.UserID,
+				Phone:            session.Phone,
+				SessionTokenHash: session.TokenHash,
+				IPAddress:        clientAddress(r),
+				UserAgent:        strings.TrimSpace(r.UserAgent()),
+				Success:          true,
+				Metadata:         authSessionAuditMetadata(session),
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
 	})
 }
 
@@ -271,6 +372,9 @@ func (s *Server) handlePresenceHeartbeat(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	now := time.Now()
+	s.sweepAuthSessions(r.Context(), now)
+	s.touchAuthSessionIfPresent(r.Context(), authSessionToken(r), now)
 
 	phone := normalizePresencePhone(request.Phone)
 	user, hasUser := s.resolvePresenceUser(r.Context(), request.UserID, phone)
@@ -278,7 +382,7 @@ func (s *Server) handlePresenceHeartbeat(w http.ResponseWriter, r *http.Request)
 		request.UserID = user.ID
 		phone = user.Phone
 	}
-	snapshot := s.presence.Touch(sessionID, request.UserID, phone, user.Nickname, time.Now())
+	snapshot := s.presence.Touch(sessionID, request.UserID, phone, user.Nickname, now)
 	writePresenceResponse(w, snapshot, true)
 }
 
@@ -317,6 +421,151 @@ func (s *Server) resolvePresenceUser(ctx context.Context, userID int64, phone st
 		}
 	}
 	return models.User{}, false
+}
+
+func (s *Server) optionalSessionUserID(r *http.Request) int64 {
+	userID, ok := s.authSessionUserID(r.Context(), authSessionToken(r), time.Now())
+	if !ok {
+		return 0
+	}
+	return userID
+}
+
+func (s *Server) requireSessionUserID(w http.ResponseWriter, r *http.Request, message string) (int64, bool) {
+	userID, ok := s.authSessionUserID(r.Context(), authSessionToken(r), time.Now())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, message)
+		return 0, false
+	}
+	return userID, true
+}
+
+func (s *Server) requireMatchingSessionUserID(w http.ResponseWriter, r *http.Request, requestedUserID int64, message string) (int64, bool) {
+	sessionUserID, ok := s.requireSessionUserID(w, r, message)
+	if !ok {
+		return 0, false
+	}
+	if requestedUserID > 0 && requestedUserID != sessionUserID {
+		writeError(w, http.StatusForbidden, "当前登录用户无权执行此操作")
+		return 0, false
+	}
+	return sessionUserID, true
+}
+
+func (s *Server) requiredSessionQueryUserID(w http.ResponseWriter, r *http.Request, message string) (int64, bool) {
+	userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, message)
+		return 0, false
+	}
+	return s.requireMatchingSessionUserID(w, r, userID, message)
+}
+
+func (s *Server) grantAuthSession(ctx context.Context, userID int64, now time.Time, ipAddress string, userAgent string) (string, string, time.Time, error) {
+	token, tokenHash, err := newAuthSessionToken(authSessionTokenSize)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	expiresAt := now.Add(authSessionTTL)
+	if err := s.store.CreateAuthSession(ctx, userID, tokenHash, expiresAt, ipAddress, userAgent); err != nil {
+		return "", "", time.Time{}, err
+	}
+	return token, tokenHash, expiresAt, nil
+}
+
+func (s *Server) authSessionUserID(ctx context.Context, token string, now time.Time) (int64, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return 0, false
+	}
+	s.sweepAuthSessions(ctx, now)
+	userID, err := s.store.TouchAuthSession(ctx, hashAuthSessionToken(token), now)
+	return userID, err == nil
+}
+
+func authSessionToken(r *http.Request) string {
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+		return strings.TrimSpace(authorization[7:])
+	}
+	token := strings.TrimSpace(r.Header.Get("X-Session-Token"))
+	if token != "" {
+		return token
+	}
+	return strings.TrimSpace(r.URL.Query().Get("session_token"))
+}
+
+func newAuthSessionToken(tokenBytes int) (string, string, error) {
+	buffer := make([]byte, tokenBytes)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(buffer)
+	return token, hashAuthSessionToken(token), nil
+}
+
+func hashAuthSessionToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func (s *Server) touchAuthSessionIfPresent(ctx context.Context, token string, now time.Time) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	_, _ = s.store.TouchAuthSession(ctx, hashAuthSessionToken(token), now)
+}
+
+func (s *Server) sweepAuthSessions(ctx context.Context, now time.Time) {
+	if s.authAuditSweeper == nil || !s.authAuditSweeper.Allow(now, authAuditSweepInterval) {
+		return
+	}
+	expiredSessions, err := s.store.MarkExpiredAuthSessions(ctx, now)
+	if err == nil {
+		for _, session := range expiredSessions {
+			s.recordAuthAudit(ctx, database.AuthAuditEvent{
+				EventType:        "session_expired",
+				UserID:           session.UserID,
+				Phone:            session.Phone,
+				SessionTokenHash: session.TokenHash,
+				IPAddress:        session.IPAddress,
+				UserAgent:        session.UserAgent,
+				Success:          true,
+				Metadata:         authSessionAuditMetadata(session),
+			})
+		}
+	}
+
+	offlineSessions, err := s.store.MarkOfflineTimedOutAuthSessions(ctx, now.Add(-presenceTTL), now)
+	if err == nil {
+		for _, session := range offlineSessions {
+			metadata := authSessionAuditMetadata(session)
+			metadata["offline_detected_at"] = now.UTC().Format(time.RFC3339)
+			s.recordAuthAudit(ctx, database.AuthAuditEvent{
+				EventType:        "offline_timeout",
+				UserID:           session.UserID,
+				Phone:            session.Phone,
+				SessionTokenHash: session.TokenHash,
+				IPAddress:        session.IPAddress,
+				UserAgent:        session.UserAgent,
+				Success:          true,
+				Metadata:         metadata,
+			})
+		}
+	}
+}
+
+func (s *Server) recordAuthAudit(ctx context.Context, event database.AuthAuditEvent) {
+	_ = s.store.RecordAuthAuditLog(ctx, event)
+}
+
+func authSessionAuditMetadata(session database.AuthSessionRecord) map[string]any {
+	return map[string]any{
+		"created_at":   session.CreatedAt.UTC().Format(time.RFC3339),
+		"expires_at":   session.ExpiresAt.UTC().Format(time.RFC3339),
+		"last_seen_at": session.LastSeenAt.UTC().Format(time.RFC3339),
+	}
 }
 
 func writePresenceResponse(w http.ResponseWriter, snapshot presenceSnapshot, includeUsers bool) {
@@ -426,6 +675,10 @@ func (s *Server) handleTrackRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后刷新歌单")
+	if !ok {
+		return
+	}
 	if _, err := s.store.GetUserByID(r.Context(), userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "请先登录后刷新歌单")
@@ -460,6 +713,10 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后读取收藏列表")
+		if !ok {
+			return
+		}
 		var tracks []models.Track
 		categoryIDText := strings.TrimSpace(r.URL.Query().Get("category_id"))
 		if categoryIDText != "" {
@@ -490,11 +747,15 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "用户标识不正确")
 			return
 		}
+		userID, ok := s.requireMatchingSessionUserID(w, r, request.UserID, "请先登录后收藏歌曲")
+		if !ok {
+			return
+		}
 		if request.TrackID <= 0 {
 			writeError(w, http.StatusBadRequest, "歌曲标识不正确")
 			return
 		}
-		if err := s.store.AddFavoriteTrack(r.Context(), request.UserID, request.TrackID); err != nil {
+		if err := s.store.AddFavoriteTrack(r.Context(), userID, request.TrackID); err != nil {
 			if isForeignKeyViolation(err) {
 				writeError(w, http.StatusNotFound, "用户或歌曲不存在")
 				return
@@ -519,6 +780,10 @@ func (s *Server) handleTrackMemberships(w http.ResponseWriter, r *http.Request) 
 	userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后读取歌曲状态")
+	if !ok {
 		return
 	}
 	favoriteTrackIDs, categoryMemberships, err := s.store.ListTrackMemberships(r.Context(), userID)
@@ -547,6 +812,10 @@ func (s *Server) handleFavoriteRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	userID, ok = s.requireMatchingSessionUserID(w, r, userID, "请先登录后取消收藏")
+	if !ok {
+		return
+	}
 	if err := s.store.DeleteFavoriteTrack(r.Context(), userID, trackID); err != nil {
 		writeError(w, http.StatusInternalServerError, "取消收藏失败")
 		return
@@ -562,6 +831,10 @@ func (s *Server) handleFavoriteCategories(w http.ResponseWriter, r *http.Request
 		userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后读取分类")
+		if !ok {
 			return
 		}
 		categories, err := s.store.ListFavoriteCategories(r.Context(), userID)
@@ -583,12 +856,16 @@ func (s *Server) handleFavoriteCategories(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "用户标识不正确")
 			return
 		}
+		userID, ok := s.requireMatchingSessionUserID(w, r, request.UserID, "请先登录后创建分类")
+		if !ok {
+			return
+		}
 		name, err := validateFavoriteCategoryName(request.Name)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		category, err := s.store.CreateFavoriteCategory(r.Context(), request.UserID, name)
+		category, err := s.store.CreateFavoriteCategory(r.Context(), userID, name)
 		if err != nil {
 			if isForeignKeyViolation(err) {
 				writeError(w, http.StatusNotFound, "用户不存在")
@@ -624,6 +901,10 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		userID, ok = s.requireMatchingSessionUserID(w, r, userID, "请先登录后删除分类")
+		if !ok {
+			return
+		}
 		if err := s.store.DeleteFavoriteCategory(r.Context(), userID, categoryID); err != nil {
 			writeError(w, http.StatusInternalServerError, "删除分类失败")
 			return
@@ -642,11 +923,15 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "用户标识不正确")
 			return
 		}
+		userID, ok := s.requireMatchingSessionUserID(w, r, request.UserID, "请先登录后加入分类")
+		if !ok {
+			return
+		}
 		if request.TrackID <= 0 {
 			writeError(w, http.StatusBadRequest, "歌曲标识不正确")
 			return
 		}
-		if err := s.store.AddFavoriteTrackToCategory(r.Context(), request.UserID, categoryID, request.TrackID); err != nil {
+		if err := s.store.AddFavoriteTrackToCategory(r.Context(), userID, categoryID, request.TrackID); err != nil {
 			if isForeignKeyViolation(err) {
 				writeError(w, http.StatusNotFound, "用户、歌曲或分类不存在")
 				return
@@ -662,6 +947,10 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 		userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		userID, ok = s.requireMatchingSessionUserID(w, r, userID, "请先登录后移出分类")
+		if !ok {
 			return
 		}
 		if err := s.store.DeleteFavoriteTrackFromCategory(r.Context(), userID, categoryID, trackID); err != nil {
@@ -692,6 +981,8 @@ func (s *Server) handleTrackRoute(w http.ResponseWriter, r *http.Request) {
 		s.streamTrack(w, r, id)
 	case "lyrics":
 		s.handleTrackLyrics(w, r, id)
+	case "cover":
+		s.handleTrackCover(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -708,6 +999,31 @@ func (s *Server) handleTrackLyrics(w http.ResponseWriter, r *http.Request, id in
 		return
 	}
 	writeJSON(w, http.StatusOK, lyrics)
+}
+
+func (s *Server) handleTrackCover(w http.ResponseWriter, r *http.Request, id int64) {
+	cover, err := s.store.GetTrackCover(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取专辑封面失败")
+		return
+	}
+
+	w.Header().Set("Content-Type", cover.MimeType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if cover.Hash != "" {
+		etag := `"` + cover.Hash + `"`
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	http.ServeContent(w, r, fmt.Sprintf("track-%d-cover", id), time.Time{}, bytes.NewReader(cover.Data))
 }
 
 func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
@@ -927,6 +1243,16 @@ func newAuthFailureLimiter() *authFailureLimiter {
 	return &authFailureLimiter{
 		failures: make(map[string]authFailure),
 	}
+}
+
+func (s *authAuditSweeper) Allow(now time.Time, interval time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.lastRun.IsZero() && now.Sub(s.lastRun) < interval {
+		return false
+	}
+	s.lastRun = now
+	return true
 }
 
 func (l *authFailureLimiter) CheckLockout(key string, now time.Time) (time.Duration, bool) {
@@ -1187,7 +1513,7 @@ func parseTrackRoute(path string) (int64, string, bool) {
 	if len(parts) != 4 || parts[0] != "api" || parts[1] != "tracks" {
 		return 0, "", false
 	}
-	if parts[3] != "stream" && parts[3] != "lyrics" {
+	if parts[3] != "stream" && parts[3] != "lyrics" && parts[3] != "cover" {
 		return 0, "", false
 	}
 	id, err := strconv.ParseInt(parts[2], 10, 64)
@@ -1244,12 +1570,12 @@ func publicUser(user models.User) map[string]any {
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := s.corsOrigin
-		if origin == "" {
+		origin := strings.TrimSpace(s.corsOrigin)
+		if origin == "" || origin == "*" {
 			origin = "*"
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Audio-Access-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Token, X-Audio-Access-Token")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 		if r.Method == http.MethodOptions {

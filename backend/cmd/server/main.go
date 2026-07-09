@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -17,11 +19,21 @@ import (
 )
 
 func main() {
+	if logFile, err := os.OpenFile("backend-service.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		defer logFile.Close()
+		log.SetOutput(io.MultiWriter(logFile, os.Stderr))
+	}
+	defer func() {
+		if value := recover(); value != nil {
+			log.Printf("panic: %v\n%s", value, debug.Stack())
+		}
+	}()
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stopSignals()
 
 	store, err := database.New(ctx, cfg.DatabaseURL)

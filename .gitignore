@@ -10,6 +10,7 @@ coverage/
 
 backend/bin/
 backend/tmp/
+/media-player-backend.exe
 frontend/.vite/
 frontend/*.tsbuildinfo
 frontend/vite.config.js

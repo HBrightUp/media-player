@@ -33,6 +33,35 @@ func TestBuildTrackReadsID3v22Album(t *testing.T) {
 	}
 }
 
+func TestBuildTrackReadsID3v23Cover(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "cover.mp3")
+	coverData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'}
+	payload := append([]byte{3}, []byte("image/jpeg")...)
+	payload = append(payload, 0, 3, 0)
+	payload = append(payload, coverData...)
+	body := appendID3v23Frame(nil, "APIC", payload)
+	content := append(id3Header(3, body), []byte{0xFF, 0xFB, 0x90, 0x64}...)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	track, _, err := buildTrack(root, path, ".mp3", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if track.Cover == nil {
+		t.Fatal("cover = nil, want embedded cover")
+	}
+	if track.Cover.MimeType != "image/jpeg" {
+		t.Fatalf("mime = %q, want image/jpeg", track.Cover.MimeType)
+	}
+	if string(track.Cover.Data) != string(coverData) {
+		t.Fatalf("cover data = %v, want %v", track.Cover.Data, coverData)
+	}
+}
+
 func TestBuildTrackFallsBackToID3v1Album(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "fallback-title.mp3")

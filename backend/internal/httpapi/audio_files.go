@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 
@@ -130,6 +129,10 @@ func (s *Server) handleAudioFileAuthorize(w http.ResponseWriter, r *http.Request
 	userID, err := validatePositiveID(strconv.FormatInt(request.UserID, 10), "用户")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后管理服务器音频文件")
+	if !ok {
 		return
 	}
 	password, err := validatePassword(request.Password)
@@ -747,27 +750,14 @@ func countAndDiscard(reader io.Reader) (int64, error) {
 	return io.Copy(io.Discard, reader)
 }
 
-func ensureImportDiskSpace(root string, uploads []uploadedAudioImportFile) error {
-	var uploadBytes int64
-	for _, upload := range uploads {
-		uploadBytes += upload.SizeBytes
-	}
-	requiredBytes := uploadBytes*2 + int64(512*1024*1024)
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(root, &stat); err != nil {
-		return nil
-	}
-	availableBytes := int64(stat.Bavail) * int64(stat.Bsize)
-	if availableBytes < requiredBytes {
-		return errors.New("服务器剩余磁盘空间不足，无法安全导入并转码")
-	}
-	return nil
-}
-
 func (s *Server) requireAudioFileUser(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	userID, err := audioFileUserID(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
+		return 0, false
+	}
+	userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后管理服务器音频文件")
+	if !ok {
 		return 0, false
 	}
 	if _, err := s.store.GetUserByID(r.Context(), userID); err != nil {

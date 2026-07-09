@@ -16,9 +16,16 @@ CREATE TABLE IF NOT EXISTS tracks (
   size_bytes BIGINT NOT NULL,
   duration_seconds INTEGER,
   modified_at TIMESTAMPTZ NOT NULL,
+  cover_mime_type TEXT,
+  cover_data BYTEA,
+  cover_hash TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_mime_type TEXT;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_data BYTEA;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_hash TEXT;
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,

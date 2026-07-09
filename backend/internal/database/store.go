@@ -148,6 +148,15 @@ func (s *Store) GetUserByID(ctx context.Context, id int64) (models.User, error) 
 }
 
 func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, error) {
+	var coverMimeType any
+	var coverData any
+	var coverHash any
+	if track.Cover != nil && track.Cover.MimeType != "" && len(track.Cover.Data) > 0 {
+		coverMimeType = track.Cover.MimeType
+		coverData = track.Cover.Data
+		coverHash = track.Cover.Hash
+	}
+
 	var id int64
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO tracks (
@@ -161,9 +170,12 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			size_bytes,
 			duration_seconds,
 			modified_at,
+			cover_mime_type,
+			cover_data,
+			cover_hash,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
 		ON CONFLICT (path)
 		DO UPDATE SET
 			relative_path = EXCLUDED.relative_path,
@@ -175,6 +187,9 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			size_bytes = EXCLUDED.size_bytes,
 			duration_seconds = EXCLUDED.duration_seconds,
 			modified_at = EXCLUDED.modified_at,
+			cover_mime_type = EXCLUDED.cover_mime_type,
+			cover_data = EXCLUDED.cover_data,
+			cover_hash = EXCLUDED.cover_hash,
 			updated_at = now()
 		RETURNING id
 	`,
@@ -188,6 +203,9 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 		track.SizeBytes,
 		track.DurationSeconds,
 		track.ModifiedAt,
+		coverMimeType,
+		coverData,
+		coverHash,
 	).Scan(&id)
 	return id, err
 }
@@ -218,7 +236,8 @@ func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
 			format,
 			size_bytes,
 			duration_seconds,
-			modified_at
+			modified_at,
+			(cover_mime_type IS NOT NULL AND cover_mime_type <> '' AND cover_data IS NOT NULL) AS has_cover
 		FROM tracks
 		ORDER BY lower(title), lower(artist), id
 	`)
@@ -251,7 +270,8 @@ func (s *Store) ListFavoriteTracks(ctx context.Context, userID int64) ([]models.
 			t.format,
 			t.size_bytes,
 			t.duration_seconds,
-			t.modified_at
+			t.modified_at,
+			(t.cover_mime_type IS NOT NULL AND t.cover_mime_type <> '' AND t.cover_data IS NOT NULL) AS has_cover
 		FROM favorite_tracks ft
 		JOIN tracks t ON t.id = ft.track_id
 		WHERE ft.user_id = $1
@@ -286,7 +306,8 @@ func (s *Store) ListFavoriteTracksByCategory(ctx context.Context, userID, catego
 			t.format,
 			t.size_bytes,
 			t.duration_seconds,
-			t.modified_at
+			t.modified_at,
+			(t.cover_mime_type IS NOT NULL AND t.cover_mime_type <> '' AND t.cover_data IS NOT NULL) AS has_cover
 		FROM favorite_category_tracks fct
 		JOIN tracks t ON t.id = fct.track_id
 		WHERE fct.user_id = $1
@@ -595,6 +616,27 @@ func (s *Store) GetTrackLyrics(ctx context.Context, trackID int64) (models.Track
 	return lyrics, nil
 }
 
+func (s *Store) GetTrackCover(ctx context.Context, trackID int64) (models.TrackCover, error) {
+	var cover models.TrackCover
+	err := s.pool.QueryRow(ctx, `
+		SELECT cover_mime_type, cover_data, cover_hash
+		FROM tracks
+		WHERE id = $1
+			AND cover_mime_type IS NOT NULL
+			AND cover_mime_type <> ''
+			AND cover_data IS NOT NULL
+	`, trackID).Scan(
+		&cover.MimeType,
+		&cover.Data,
+		&cover.Hash,
+	)
+	if err != nil {
+		return models.TrackCover{}, err
+	}
+	cover.SizeBytes = int64(len(cover.Data))
+	return cover, nil
+}
+
 func (s *Store) GetTrack(ctx context.Context, id int64) (models.Track, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT
@@ -608,7 +650,8 @@ func (s *Store) GetTrack(ctx context.Context, id int64) (models.Track, error) {
 			format,
 			size_bytes,
 			duration_seconds,
-			modified_at
+			modified_at,
+			(cover_mime_type IS NOT NULL AND cover_mime_type <> '' AND cover_data IS NOT NULL) AS has_cover
 		FROM tracks
 		WHERE id = $1
 	`, id)
@@ -640,6 +683,7 @@ type rowScanner interface {
 func scanTrack(row rowScanner) (models.Track, error) {
 	var track models.Track
 	var duration sql.NullInt64
+	var hasCover bool
 	err := row.Scan(
 		&track.ID,
 		&track.Path,
@@ -652,6 +696,7 @@ func scanTrack(row rowScanner) (models.Track, error) {
 		&track.SizeBytes,
 		&duration,
 		&track.ModifiedAt,
+		&hasCover,
 	)
 	if err != nil {
 		return models.Track{}, err
@@ -661,6 +706,9 @@ func scanTrack(row rowScanner) (models.Track, error) {
 		track.DurationSeconds = &value
 	}
 	track.StreamURL = fmt.Sprintf("/api/tracks/%d/stream", track.ID)
+	if hasCover {
+		track.CoverURL = fmt.Sprintf("/api/tracks/%d/cover", track.ID)
+	}
 	return track, nil
 }
 

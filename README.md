@@ -15,7 +15,7 @@
 - 歌曲列表搜索、排序、选中播放
 - 后端按歌曲 ID 提供音频流
 
-## 本地启动
+## 本地 / 局域网启动
 
 1. 启动 Postgres：
 
@@ -60,6 +60,22 @@ npm run dev
 ```
 
 前端开发服务会监听 `0.0.0.0:5173`。本机可打开 `http://localhost:5173`，同一局域网设备请打开 `http://<本机局域网 IP>:5173`。
+
+### Windows 一键局域网启动
+
+如果已经安装 PostgreSQL，并按默认配置创建了 `media_player` 数据库，可以直接运行：
+
+```powershell
+.\scripts\start-lan.ps1
+```
+
+首次需要允许局域网设备访问时，用管理员 PowerShell 运行：
+
+```powershell
+.\scripts\start-lan.ps1 -OpenFirewall
+```
+
+脚本会启动后端 `0.0.0.0:8080` 和前端 `0.0.0.0:5173`，并输出可在同一 Wi-Fi/局域网设备上打开的地址，例如 `http://192.168.1.23:5173`。数据库端口仍建议只给本机使用。
 
 ## API
 

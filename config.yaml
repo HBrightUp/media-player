@@ -1,9 +1,9 @@
 # 后端启动时会读取这个目录，并递归扫描其中的音频文件写入数据库。
 # 可以写绝对路径，例如：/Users/hml/Music
 library:
-  music_directory: "/Users/hml/Music"
+  music_directory: "D:/Music"
   # 可选：歌词目录。支持按音乐目录的相对路径放置同名 .lrc 文件。
-  lyrics_directory: "/Users/hml/MusicLyrics"
+  lyrics_directory: "D:/MusicLyrics"
   # 后端会检测音乐/歌词目录变化，变化后等待防抖时间再扫描。
   watch_poll_interval: "1m"
   watch_debounce: "30s"
@@ -12,7 +12,8 @@ library:
 
 server:
   addr: ":8080"
-  cors_origin: "http://localhost:5173"
+  # Use "*" for LAN/dev access. Production can set a specific public origin.
+  cors_origin: "*"
 
 database:
   url: "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"
