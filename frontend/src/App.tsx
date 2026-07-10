@@ -217,6 +217,7 @@ const bufferedRangeChangeTolerancePercent = 0.05;
 const bufferedFullCoverageToleranceSeconds = 0.75;
 const bufferedRangeMergeGapPercent = 0.25;
 const bufferUpdateResumeDelayMs = 900;
+const unexpectedPauseResumeDelayMs = 120;
 const nextTrackPreloadDelayMs = 700;
 const fullyBufferedRanges: BufferedAudioRange[] = [{ startPercent: 0, endPercent: 100 }];
 const equalizerStorageKey = "media-player-equalizer-gains";
@@ -224,7 +225,7 @@ const equalizerGainMin = -9;
 const equalizerGainMax = 9;
 const equalizerGainStep = 0.5;
 const equalizerSmoothingTime = 0.018;
-const lyricsVisualizerPaintIntervalMs = 80;
+const lyricsVisualizerPaintIntervalMs = 160;
 const emptyLyricsVisualizerState: LyricsVisualizerState = { bass: 0, mid: 0, treble: 0, energy: 0 };
 const lyricsScenePalettes: LyricsScenePalette[] = [
   { surface: "#0b2f5c", toneA: "116, 196, 255", toneB: "102, 232, 226", toneC: "255, 207, 132", thread: "224, 250, 255" },
@@ -592,6 +593,8 @@ function App() {
   const musicListScrollSettleTimerRef = useRef<number | null>(null);
   const audioPlayRequestIdRef = useRef(0);
   const lastAppliedAudioSourceRef = useRef("");
+  const playbackIntentRef = useRef(false);
+  const ignoreAudioPauseUntilRef = useRef(0);
   const nextTrackPreloadAudioRef = useRef<HTMLAudioElement | null>(null);
   const nextTrackPreloadURLRef = useRef("");
   const nextTrackPreloadTimerRef = useRef<number | null>(null);
@@ -977,6 +980,7 @@ function App() {
 
     const remainingMs = sleepTimerEndsAt - Date.now();
     if (remainingMs <= 0) {
+      playbackIntentRef.current = false;
       audioRef.current?.pause();
       setIsPlaying(false);
       setSleepTimerEndsAt(null);
@@ -1080,6 +1084,7 @@ function App() {
     setBufferedRanges([]);
 
     if (!currentTrack.stream_url) {
+      playbackIntentRef.current = false;
       audio.pause();
       setIsPlaying(false);
       return;
@@ -1143,14 +1148,28 @@ function App() {
     if (!audio) {
       return;
     }
+    playbackIntentRef.current = isPlaying;
     if (!currentTrackStreamURL) {
       lastAppliedAudioSourceRef.current = "";
       audioPlayRequestIdRef.current += 1;
-      audio.pause();
+      ignoreAudioPauseUntilRef.current = 0;
+      if (!audio.paused) {
+        audio.pause();
+      }
+      if (audio.getAttribute("src")) {
+        audio.removeAttribute("src");
+        audio.load();
+      }
       return;
     }
     if (lastAppliedAudioSourceRef.current !== currentTrackStreamURL) {
       lastAppliedAudioSourceRef.current = currentTrackStreamURL;
+      if (audio.getAttribute("src") !== currentTrackStreamURL) {
+        audio.src = currentTrackStreamURL;
+      }
+      if (isPlaying) {
+        ignoreAudioPauseUntilRef.current = Date.now() + 1200;
+      }
       audio.load();
     }
     if (isPlaying) {
@@ -1169,7 +1188,10 @@ function App() {
       });
     } else {
       audioPlayRequestIdRef.current += 1;
-      audio.pause();
+      ignoreAudioPauseUntilRef.current = 0;
+      if (!audio.paused) {
+        audio.pause();
+      }
     }
   }, [currentTrackStreamURL, isPlaying]);
 
@@ -1665,6 +1687,7 @@ function App() {
     }
     nextTrackPreloadURLRef.current = "";
     if (audioRef.current) {
+      playbackIntentRef.current = false;
       audioRef.current.pause();
       audioRef.current.removeAttribute("src");
       audioRef.current.load();
@@ -4011,7 +4034,6 @@ function App() {
 
       <audio
         ref={audioRef}
-        src={currentTrackStreamURL || undefined}
         preload="auto"
         onLoadedMetadata={(event) => {
           const nextDuration = event.currentTarget.duration;
@@ -4028,8 +4050,48 @@ function App() {
         onTimeUpdate={(event) => {
           setCurrentTime(event.currentTarget.currentTime);
         }}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          playbackIntentRef.current = true;
+          setIsPlaying(true);
+        }}
+        onPlaying={() => {
+          ignoreAudioPauseUntilRef.current = 0;
+          playbackIntentRef.current = true;
+          setIsPlaying(true);
+        }}
+        onPause={() => {
+          if (playbackIntentRef.current && Date.now() < ignoreAudioPauseUntilRef.current) {
+            return;
+          }
+          const audio = audioRef.current;
+          const hasPlayableRemainder =
+            Boolean(audio && currentTrackStreamURL && !audio.ended && audio.currentTime < Math.max(0, activeDuration - 0.75));
+          if (playbackIntentRef.current && hasPlayableRemainder) {
+            const playRequestId = audioPlayRequestIdRef.current + 1;
+            audioPlayRequestIdRef.current = playRequestId;
+            window.setTimeout(() => {
+              const currentAudio = audioRef.current;
+              if (!currentAudio || audioPlayRequestIdRef.current !== playRequestId || !playbackIntentRef.current || !currentAudio.paused) {
+                return;
+              }
+              prepareEqualizerForPlayback();
+              void currentAudio.play().catch((error) => {
+                if (audioPlayRequestIdRef.current !== playRequestId) {
+                  return;
+                }
+                const errorName = error instanceof Error ? error.name : "";
+                if (errorName === "AbortError") {
+                  return;
+                }
+                playbackIntentRef.current = false;
+                setIsPlaying(false);
+              });
+            }, unexpectedPauseResumeDelayMs);
+            return;
+          }
+          playbackIntentRef.current = false;
+          setIsPlaying(false);
+        }}
         onEnded={handleEnded}
       />
 
