@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -111,6 +112,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
 		notes, err := s.store.ListNotes(r.Context(), viewerID, folderID, unfiled, query)
 		if err != nil {
+			log.Printf("list notes failed: viewer_id=%d folder_id=%v unfiled=%t query=%q error=%v", viewerID, folderID, unfiled, query, err)
 			writeError(w, http.StatusInternalServerError, "读取文档失败")
 			return
 		}
@@ -241,6 +243,7 @@ func writeNoteReadResult(w http.ResponseWriter, payload any, err error, fallback
 		return
 	}
 	if err != nil {
+		log.Printf("read note failed: fallback=%q error=%v", fallback, err)
 		writeError(w, http.StatusInternalServerError, fallback)
 		return
 	}

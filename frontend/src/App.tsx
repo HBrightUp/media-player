@@ -254,6 +254,8 @@ const playbackModeLabels: Record<PlaybackMode, string> = {
   one: "单曲循环",
   shuffle: "随机播放"
 };
+const appVersion = "0.1.0";
+const appReleaseDate = "2026.07.10";
 const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
@@ -1649,7 +1651,25 @@ function App() {
   }
 
   function clearCurrentLibrary() {
-    audioRef.current?.pause();
+    audioPlayRequestIdRef.current += 1;
+    trackLyricsAbortControllerRef.current?.abort();
+    trackLyricsAbortControllerRef.current = null;
+    if (nextTrackPreloadTimerRef.current !== null) {
+      window.clearTimeout(nextTrackPreloadTimerRef.current);
+      nextTrackPreloadTimerRef.current = null;
+    }
+    if (nextTrackPreloadAudioRef.current) {
+      nextTrackPreloadAudioRef.current.pause();
+      nextTrackPreloadAudioRef.current.removeAttribute("src");
+      nextTrackPreloadAudioRef.current.load();
+    }
+    nextTrackPreloadURLRef.current = "";
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+      audioRef.current.load();
+    }
+    lastAppliedAudioSourceRef.current = "";
     setLibraryTracks([]);
     setTracks([]);
     setPlaybackQueue([]);
@@ -1996,10 +2016,12 @@ function App() {
     if (page !== "music") {
       setIsSearchOpen(false);
       setSearchDialogPosition(null);
-      setActiveTab("音乐列表");
-      setActiveCategoryId(null);
-      setIsLibraryFiltered(false);
-      setTracks(sortMusicTracks(libraryTracks, musicSortKey));
+      if (activeTab === "歌曲搜索") {
+        setActiveTab("音乐列表");
+        setActiveCategoryId(null);
+        setIsLibraryFiltered(false);
+        setTracks(sortMusicTracks(libraryTracks, musicSortKey));
+      }
     }
   }
 
@@ -2056,6 +2078,7 @@ function App() {
     if (authSession?.token) {
       void logoutUser().catch(() => undefined);
     }
+    clearCurrentLibrary();
     setApiSessionToken("");
     removeLocalStorage(authSessionStorageKey);
     loadedLibrarySessionKeyRef.current = null;
@@ -2071,8 +2094,6 @@ function App() {
     setSearchDialogPosition(null);
     setActiveTab("音乐列表");
     setActiveCategoryId(null);
-    setLibraryTracks([]);
-    setTracks([]);
     setFavoriteTrackIds(new Set());
     setTrackCategoryMembershipMap(new Map());
     setFavoriteCategories([]);
@@ -5939,6 +5960,7 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   const [isTreeResizing, setIsTreeResizing] = useState(false);
   const outlineJumpRef = useRef<RichOutlineJumpHandler | null>(null);
   const selectedNoteIDRef = useRef<number | null>(selectedNoteID);
+  const saveStatusResetTimerRef = useRef<number | null>(null);
 
   const folderChildren = useMemo(() => {
     const map = new Map<number | null, NoteFolder[]>();
@@ -6006,6 +6028,12 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   }, [selectedNoteID]);
 
   useEffect(() => {
+    return () => {
+      clearSaveStatusResetTimer();
+    };
+  }, []);
+
+  useEffect(() => {
     void loadFolders();
   }, [userID]);
 
@@ -6023,6 +6051,7 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   }, [selectedFolder, searchQuery, userID]);
 
   useEffect(() => {
+    clearSaveStatusResetTimer();
     if (!selectedNoteID) {
       setSelectedNote(null);
       setDraftTitle("");
@@ -6090,6 +6119,22 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
     outlineJumpRef.current?.(pos);
   }, []);
 
+  function clearSaveStatusResetTimer() {
+    if (saveStatusResetTimerRef.current) {
+      window.clearTimeout(saveStatusResetTimerRef.current);
+      saveStatusResetTimerRef.current = null;
+    }
+  }
+
+  function showSavedThenReset() {
+    clearSaveStatusResetTimer();
+    setSaveStatus("saved");
+    saveStatusResetTimerRef.current = window.setTimeout(() => {
+      saveStatusResetTimerRef.current = null;
+      setSaveStatus("idle");
+    }, 1600);
+  }
+
   async function loadFolders() {
     try {
       const payload = await getNoteFolders(userID);
@@ -6124,6 +6169,7 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
       setSelectedNote(notePayload.note);
       setDraftTitle(notePayload.note.title);
       setDraftContent(notePayload.note.content);
+      clearSaveStatusResetTimer();
       setSaveStatus("idle");
       setMessage("");
     } catch (error) {
@@ -6349,18 +6395,21 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
     }
     const title = draftTitle.trim();
     if (!title) {
+      clearSaveStatusResetTimer();
       setSaveStatus("error");
       setMessage("标题不能为空");
       return;
     }
+    clearSaveStatusResetTimer();
     setSaveStatus("saving");
     try {
       const note = await updateNote(selectedNote.id, { user_id: userID, folder_id: selectedNote.folder_id, title, content: draftContent });
       setSelectedNote(note);
       setNotes((previous) => previous.map((item) => (item.id === note.id ? note : item)));
-      setSaveStatus("saved");
+      showSavedThenReset();
       setMessage("");
     } catch (error) {
+      clearSaveStatusResetTimer();
       setSaveStatus("error");
       setMessage(error instanceof Error ? error.message : "自动保存失败");
     }
@@ -6558,7 +6607,7 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   }
 
   const saveStatusText: Record<NoteSaveStatus, string> = {
-    idle: selectedNote?.can_edit ? "自动保存" : "只读",
+    idle: selectedNote?.can_edit ? "保存" : "只读",
     saving: "保存中",
     saved: "已保存",
     error: "保存失败"
@@ -6660,8 +6709,8 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
                 </span>
               </div>
               <div className="growth-editor-title-actions" onClick={(event) => event.stopPropagation()}>
-                <button type="button" disabled={!selectedNote.can_edit} onClick={() => void saveSelectedNote()}>
-                  保存
+                <button type="button" aria-live="polite" disabled={!selectedNote.can_edit || saveStatus === "saving"} onClick={() => void saveSelectedNote()}>
+                  {saveStatusText[saveStatus]}
                 </button>
                 <div className="growth-document-more">
                   <button type="button" className="growth-document-more-button" aria-label="更多文档操作" aria-expanded={isDocumentMenuOpen} onClick={() => setIsDocumentMenuOpen((open) => !open)}>
@@ -9495,6 +9544,12 @@ function EmptyPage({
               <button className="profile-action-button file-manager-open-button" type="button" onClick={onOpenAudioFileManager}>
                 服务器音频文件管理
               </button>
+            </div>
+            <div className="profile-row app-version-row" aria-label="软件版本">
+              <span className="profile-row-title">软件信息</span>
+              <span className="profile-row-value app-version-value">
+                v{appVersion} · 发布 {appReleaseDate}
+              </span>
             </div>
             <div className="profile-logout-area">
               <button className="profile-action-button logout-button" type="button" onClick={onLogout}>
