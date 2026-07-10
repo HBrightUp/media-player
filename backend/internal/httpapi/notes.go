@@ -15,7 +15,6 @@ import (
 const (
 	noteTitleMaxLength   = 120
 	noteContentMaxLength = 200_000
-	commentMaxLength     = 1_000
 	folderNameMaxLength  = 40
 )
 
@@ -30,11 +29,6 @@ type noteRequest struct {
 	FolderID *int64 `json:"folder_id"`
 	Title    string `json:"title"`
 	Content  string `json:"content"`
-}
-
-type noteCommentRequest struct {
-	UserID  int64  `json:"user_id"`
-	Content string `json:"content"`
 }
 
 func (s *Server) handleNoteFolders(w http.ResponseWriter, r *http.Request) {
@@ -155,10 +149,6 @@ func (s *Server) handleNoteRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "文档不存在")
 		return
 	}
-	if len(parts) >= 2 && parts[1] == "comments" {
-		s.handleNoteComments(w, r, noteID, parts[2:])
-		return
-	}
 	if len(parts) > 1 {
 		writeError(w, http.StatusNotFound, "文档不存在")
 		return
@@ -195,72 +185,6 @@ func (s *Server) handleNoteRoute(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
-}
-
-func (s *Server) handleNoteComments(w http.ResponseWriter, r *http.Request, noteID int64, parts []string) {
-	if len(parts) == 0 {
-		switch r.Method {
-		case http.MethodGet:
-			comments, err := s.store.ListNoteComments(r.Context(), s.optionalSessionUserID(r), noteID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "读取留言失败")
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"comments": comments})
-		case http.MethodPost:
-			var request noteCommentRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				writeError(w, http.StatusBadRequest, "请求格式不正确")
-				return
-			}
-			userID, ok := s.requireMatchingSessionUserID(w, r, request.UserID, "请先登录后留言")
-			if !ok {
-				return
-			}
-			content, err := validateNoteText(request.Content, 1, commentMaxLength, "留言")
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			comment, err := s.store.CreateNoteComment(r.Context(), userID, noteID, content)
-			writeNoteMutationResult(w, comment, err, "发送留言失败")
-		default:
-			methodNotAllowed(w)
-		}
-		return
-	}
-
-	if len(parts) != 1 || r.Method != http.MethodDelete {
-		writeError(w, http.StatusNotFound, "留言不存在")
-		return
-	}
-	commentID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || commentID <= 0 {
-		writeError(w, http.StatusNotFound, "留言不存在")
-		return
-	}
-	userID, ok := s.requiredSessionQueryUserID(w, r, "请先登录后删除留言")
-	if !ok {
-		return
-	}
-	err = s.store.DeleteNoteComment(r.Context(), userID, noteID, commentID)
-	writeNoteDeleteResult(w, err, "删除留言失败")
-}
-
-func optionalUserID(r *http.Request) int64 {
-	userID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("user_id")), 10, 64)
-	if userID < 0 {
-		return 0
-	}
-	return userID
-}
-
-func requiredQueryUserID(r *http.Request) (int64, error) {
-	userID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("user_id")), 10, 64)
-	if err != nil || userID <= 0 {
-		return 0, errors.New("missing user_id")
-	}
-	return userID, nil
 }
 
 func noteFolderFilter(r *http.Request) (*int64, bool, error) {

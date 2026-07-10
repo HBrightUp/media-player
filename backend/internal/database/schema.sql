@@ -134,15 +134,6 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS note_comments (
-  id BIGSERIAL PRIMARY KEY,
-  note_id BIGINT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  content TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 DO $$
 BEGIN
   IF EXISTS (
@@ -178,6 +169,7 @@ END $$;
 ALTER TABLE tracks DROP COLUMN IF EXISTS lyrics;
 DROP TABLE IF EXISTS chat_messages;
 DROP TABLE IF EXISTS chat_rooms;
+DROP TABLE IF EXISTS note_comments;
 
 CREATE INDEX IF NOT EXISTS tracks_title_idx ON tracks (lower(title));
 CREATE INDEX IF NOT EXISTS tracks_artist_idx ON tracks (lower(artist));
@@ -201,5 +193,3 @@ CREATE INDEX IF NOT EXISTS note_folders_owner_idx ON note_folders (owner_user_id
 CREATE INDEX IF NOT EXISTS notes_folder_updated_idx ON notes (folder_id, updated_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS notes_owner_updated_idx ON notes (owner_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS notes_search_idx ON notes (lower(title), updated_at DESC);
-CREATE INDEX IF NOT EXISTS note_comments_note_created_idx ON note_comments (note_id, created_at, id);
-CREATE INDEX IF NOT EXISTS note_comments_user_idx ON note_comments (user_id);

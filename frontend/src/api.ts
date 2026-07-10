@@ -13,8 +13,6 @@ import type {
   LibrarySetting,
   LibrarySettingResponse,
   LoginRequest,
-  NoteComment,
-  NoteCommentRequest,
   NoteFolder,
   NoteFolderRequest,
   PresenceRequest,
@@ -47,11 +45,9 @@ type GrowthNotesResponse = {
 type GrowthNoteResponse = {
   note: GrowthNote;
 };
-type NoteCommentsResponse = {
-  comments: NoteComment[];
-};
 type RequestOptions = {
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 export type UploadProgressSnapshot = {
   loadedBytes: number;
@@ -87,7 +83,17 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
   }
 
   const controller = new AbortController();
-  const timeoutID = window.setTimeout(() => controller.abort(), options.timeoutMs ?? requestTimeoutMs);
+  let didTimeout = false;
+  const abortFromCaller = () => controller.abort();
+  if (options.signal?.aborted) {
+    controller.abort();
+  } else {
+    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+  const timeoutID = window.setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, options.timeoutMs ?? requestTimeoutMs);
   let response: Response;
 
   try {
@@ -106,6 +112,9 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
+      if (!didTimeout && options.signal?.aborted) {
+        throw error;
+      }
       throw new Error("请求超时，请检查网络后重试");
     }
     if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -114,6 +123,7 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     throw new Error("网络连接失败，请稍后重试");
   } finally {
     window.clearTimeout(timeoutID);
+    options.signal?.removeEventListener("abort", abortFromCaller);
   }
 
   if (!response.ok) {
@@ -167,8 +177,10 @@ export function refreshTracks(userID: number): Promise<TracksResponse> {
   });
 }
 
-export function getTrackLyrics(trackID: number): Promise<TrackLyrics> {
-  return request<TrackLyrics>(`/api/tracks/${encodeURIComponent(String(trackID))}/lyrics`);
+export function getTrackLyrics(trackID: number, options: { signal?: AbortSignal } = {}): Promise<TrackLyrics> {
+  return request<TrackLyrics>(`/api/tracks/${encodeURIComponent(String(trackID))}/lyrics`, undefined, {
+    signal: options.signal
+  });
 }
 
 export function getFavoriteTracks(userID: number, categoryID?: number): Promise<TracksResponse> {
@@ -472,25 +484,4 @@ export function deleteNote(noteID: number, userID: number): Promise<{ ok: boolea
   return request<{ ok: boolean }>(`/api/notes/${encodeURIComponent(String(noteID))}?user_id=${encodeURIComponent(String(userID))}`, {
     method: "DELETE"
   });
-}
-
-export function getNoteComments(noteID: number, userID?: number): Promise<NoteCommentsResponse> {
-  const query = userID ? `?user_id=${encodeURIComponent(String(userID))}` : "";
-  return request<NoteCommentsResponse>(`/api/notes/${encodeURIComponent(String(noteID))}/comments${query}`);
-}
-
-export function createNoteComment(noteID: number, payload: NoteCommentRequest): Promise<NoteComment> {
-  return request<NoteComment>(`/api/notes/${encodeURIComponent(String(noteID))}/comments`, {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
-
-export function deleteNoteComment(noteID: number, commentID: number, userID: number): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>(
-    `/api/notes/${encodeURIComponent(String(noteID))}/comments/${encodeURIComponent(String(commentID))}?user_id=${encodeURIComponent(String(userID))}`,
-    {
-      method: "DELETE"
-    }
-  );
 }

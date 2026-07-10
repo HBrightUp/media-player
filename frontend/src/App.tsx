@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Extension, Mark, findParentNodeClosestToPos } from "@tiptap/core";
 import Color from "@tiptap/extension-color";
 import FontFamily from "@tiptap/extension-font-family";
@@ -26,19 +26,16 @@ import {
   authorizeAudioFileAccess,
   createFavoriteCategory,
   createNote,
-  createNoteComment,
   createNoteFolder,
   coverURL,
   deleteAudioFile,
   deleteFavoriteCategory,
   deleteNote,
-  deleteNoteComment,
   deleteNoteFolder,
   getAudioFiles,
   getFavoriteCategories,
   getFavoriteTracks,
   getNote,
-  getNoteComments,
   getNoteFolders,
   getNotes,
   getTrackMemberships,
@@ -59,7 +56,7 @@ import {
   updateNoteFolder
 } from "./api";
 import type { UploadProgressSnapshot } from "./api";
-import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, NoteComment, NoteFolder, OnlineUser, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
+import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, NoteFolder, OnlineUser, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -220,6 +217,7 @@ const bufferedRangeChangeTolerancePercent = 0.05;
 const bufferedFullCoverageToleranceSeconds = 0.75;
 const bufferedRangeMergeGapPercent = 0.25;
 const bufferUpdateResumeDelayMs = 900;
+const nextTrackPreloadDelayMs = 700;
 const fullyBufferedRanges: BufferedAudioRange[] = [{ startPercent: 0, endPercent: 100 }];
 const equalizerStorageKey = "media-player-equalizer-gains";
 const equalizerGainMin = -9;
@@ -590,6 +588,13 @@ function App() {
   const lyricsChromeTimerRef = useRef<number | null>(null);
   const musicListRef = useRef<HTMLDivElement | null>(null);
   const musicListScrollSettleTimerRef = useRef<number | null>(null);
+  const audioPlayRequestIdRef = useRef(0);
+  const lastAppliedAudioSourceRef = useRef("");
+  const nextTrackPreloadAudioRef = useRef<HTMLAudioElement | null>(null);
+  const nextTrackPreloadURLRef = useRef("");
+  const nextTrackPreloadTimerRef = useRef<number | null>(null);
+  const trackLyricsCacheRef = useRef<Map<number, TrackLyrics>>(new Map());
+  const trackLyricsAbortControllerRef = useRef<AbortController | null>(null);
   const shouldRevealCurrentTrackRef = useRef(false);
   const loadedLibrarySessionKeyRef = useRef<string | null>(null);
   const seekPointerIdRef = useRef<number | null>(null);
@@ -702,6 +707,15 @@ function App() {
     }
     return playbackQueue[0];
   }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
+  const currentTrackStreamURL = currentTrack?.stream_url ? streamURL(currentTrack) : "";
+  const nextTrackToPreload = useMemo(() => {
+    if (!isPlaying || playbackMode !== "all" || !currentTrack?.stream_url || playbackQueue.length < 2) {
+      return null;
+    }
+    const nextTrack = getAdjacentQueuedTrack(1);
+    return nextTrack?.id === currentTrack.id ? null : nextTrack;
+  }, [currentTrack, detachedCurrentTrack, isPlaying, playbackMode, playbackQueue]);
+  const nextTrackPreloadURL = nextTrackToPreload?.stream_url ? streamURL(nextTrackToPreload) : "";
 
   const hasTransientPopup = Boolean(
     trackContextMenu ||
@@ -1071,48 +1085,164 @@ function App() {
   }, [currentTrack]);
 
   useEffect(() => {
-    if (!currentTrack?.id) {
+    if (activePage !== "lyrics" || !currentTrack?.id) {
+      trackLyricsAbortControllerRef.current?.abort();
+      trackLyricsAbortControllerRef.current = null;
       setTrackLyrics(null);
       setLyricsStatus("idle");
       return;
     }
 
-    let isCancelled = false;
+    const trackID = currentTrack.id;
+    const cachedLyrics = trackLyricsCacheRef.current.get(trackID);
+    if (cachedLyrics) {
+      setTrackLyrics(cachedLyrics);
+      setLyricsStatus(cachedLyrics.lines.length ? "ready" : "empty");
+      return;
+    }
+
+    trackLyricsAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    trackLyricsAbortControllerRef.current = controller;
     setLyricsStatus("loading");
     setTrackLyrics(null);
-    void getTrackLyrics(currentTrack.id)
+    void getTrackLyrics(trackID, { signal: controller.signal })
       .then((payload) => {
-        if (isCancelled) {
+        if (controller.signal.aborted || trackLyricsAbortControllerRef.current !== controller) {
           return;
         }
         const lines = normalizeLyricLines(payload.lines);
-        setTrackLyrics({ ...payload, lines });
+        const normalizedLyrics = { ...payload, lines };
+        trackLyricsCacheRef.current.set(trackID, normalizedLyrics);
+        setTrackLyrics(normalizedLyrics);
         setLyricsStatus(lines.length ? "ready" : "empty");
       })
-      .catch(() => {
-        if (!isCancelled) {
-          setTrackLyrics(null);
-          setLyricsStatus("error");
+      .catch((error) => {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
         }
+        if (trackLyricsAbortControllerRef.current !== controller) {
+          return;
+        }
+        setTrackLyrics(null);
+        setLyricsStatus("error");
       });
 
     return () => {
-      isCancelled = true;
+      if (trackLyricsAbortControllerRef.current === controller) {
+        trackLyricsAbortControllerRef.current = null;
+      }
+      controller.abort();
     };
-  }, [currentTrack?.id]);
+  }, [activePage, currentTrack?.id]);
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !currentTrack?.stream_url) {
+    if (!audio) {
       return;
+    }
+    if (!currentTrackStreamURL) {
+      lastAppliedAudioSourceRef.current = "";
+      audioPlayRequestIdRef.current += 1;
+      audio.pause();
+      return;
+    }
+    if (lastAppliedAudioSourceRef.current !== currentTrackStreamURL) {
+      lastAppliedAudioSourceRef.current = currentTrackStreamURL;
+      audio.load();
     }
     if (isPlaying) {
       prepareEqualizerForPlayback();
-      void audio.play().catch(() => setIsPlaying(false));
+      const playRequestId = audioPlayRequestIdRef.current + 1;
+      audioPlayRequestIdRef.current = playRequestId;
+      void audio.play().catch((error) => {
+        if (audioPlayRequestIdRef.current !== playRequestId) {
+          return;
+        }
+        const errorName = error instanceof Error ? error.name : "";
+        if (errorName === "AbortError") {
+          return;
+        }
+        setIsPlaying(false);
+      });
     } else {
+      audioPlayRequestIdRef.current += 1;
       audio.pause();
     }
-  }, [currentTrack, isPlaying]);
+  }, [currentTrackStreamURL, isPlaying]);
+
+  useEffect(() => {
+    if (typeof Audio === "undefined") {
+      return;
+    }
+    if (nextTrackPreloadTimerRef.current !== null) {
+      window.clearTimeout(nextTrackPreloadTimerRef.current);
+      nextTrackPreloadTimerRef.current = null;
+    }
+
+    if (!nextTrackPreloadURL) {
+      const preloadAudio = nextTrackPreloadAudioRef.current;
+      if (nextTrackPreloadURLRef.current) {
+        nextTrackPreloadURLRef.current = "";
+        preloadAudio?.pause();
+        preloadAudio?.removeAttribute("src");
+        preloadAudio?.load();
+      }
+      return;
+    }
+
+    if (nextTrackPreloadURLRef.current && nextTrackPreloadURLRef.current !== nextTrackPreloadURL) {
+      const preloadAudio = nextTrackPreloadAudioRef.current;
+      nextTrackPreloadURLRef.current = "";
+      preloadAudio?.pause();
+      preloadAudio?.removeAttribute("src");
+      preloadAudio?.load();
+    }
+
+    if (nextTrackPreloadURLRef.current === nextTrackPreloadURL) {
+      return;
+    }
+
+    nextTrackPreloadTimerRef.current = window.setTimeout(() => {
+      const preloadAudio = nextTrackPreloadAudioRef.current ?? new Audio();
+      nextTrackPreloadAudioRef.current = preloadAudio;
+      preloadAudio.preload = "auto";
+
+      if (nextTrackPreloadURLRef.current === nextTrackPreloadURL) {
+        return;
+      }
+
+      nextTrackPreloadURLRef.current = nextTrackPreloadURL;
+      preloadAudio.src = nextTrackPreloadURL;
+      preloadAudio.load();
+      nextTrackPreloadTimerRef.current = null;
+    }, nextTrackPreloadDelayMs);
+
+    return () => {
+      if (nextTrackPreloadTimerRef.current !== null) {
+        window.clearTimeout(nextTrackPreloadTimerRef.current);
+        nextTrackPreloadTimerRef.current = null;
+      }
+    };
+  }, [nextTrackPreloadURL]);
+
+  useEffect(() => {
+    return () => {
+      if (nextTrackPreloadTimerRef.current !== null) {
+        window.clearTimeout(nextTrackPreloadTimerRef.current);
+        nextTrackPreloadTimerRef.current = null;
+      }
+      const preloadAudio = nextTrackPreloadAudioRef.current;
+      if (!preloadAudio) {
+        return;
+      }
+      preloadAudio.pause();
+      preloadAudio.removeAttribute("src");
+      preloadAudio.load();
+      nextTrackPreloadAudioRef.current = null;
+      nextTrackPreloadURLRef.current = "";
+    };
+  }, []);
 
   const activeDuration = duration || currentTrack?.duration_seconds || 185;
   const displayCurrentTime = seekPreviewTime ?? currentTime;
@@ -3790,9 +3920,7 @@ function App() {
             onScrollPositionChange={updateLyricsScrollPosition}
             onToggleFullscreen={toggleFullscreen}
           />
-        ) : activePage === "discover" ? (
-          <GrowthNotesPage authSession={authSession} />
-        ) : (
+        ) : activePage === "profile" ? (
           <EmptyPage
             page={activePage}
             authSession={authSession}
@@ -3835,7 +3963,10 @@ function App() {
             onCloseAudioFileMenu={() => setAudioFileMenu(null)}
             onLogout={handleLogout}
           />
-        )}
+        ) : null}
+        <section className="preserved-page-slot" hidden={activePage !== "discover"} aria-hidden={activePage !== "discover"}>
+          <MemoizedGrowthNotesPage authSession={authSession} />
+        </section>
       </section>
 
       <nav className="bottom-tabs" aria-label="底部页面导航">
@@ -3859,7 +3990,7 @@ function App() {
 
       <audio
         ref={audioRef}
-        src={currentTrack?.stream_url ? streamURL(currentTrack) : undefined}
+        src={currentTrackStreamURL || undefined}
         preload="auto"
         onLoadedMetadata={(event) => {
           const nextDuration = event.currentTarget.duration;
@@ -4029,24 +4160,6 @@ function areTrackListsEqual(previous: Track[], next: Track[]) {
   });
 }
 
-function areNoteCommentsEqual(previous: NoteComment[], next: NoteComment[]) {
-  if (previous.length !== next.length) {
-    return false;
-  }
-  return previous.every((comment, index) => {
-    const nextComment = next[index];
-    return (
-      comment.id === nextComment.id &&
-      comment.note_id === nextComment.note_id &&
-      comment.user_id === nextComment.user_id &&
-      comment.author_nickname === nextComment.author_nickname &&
-      comment.content === nextComment.content &&
-      comment.can_delete === nextComment.can_delete &&
-      comment.updated_at === nextComment.updated_at
-    );
-  });
-}
-
 function mergePlaybackQueue(previousQueue: Track[], nextTracks: Track[]) {
   if (!nextTracks.length) {
     return [];
@@ -4170,14 +4283,20 @@ function FullLyricsPage({
       }) as CSSProperties,
     [coverImageURL]
   );
-  const sceneStyle = useMemo(
+  const lyricsPaletteStyle = useMemo(
     () =>
       ({
         "--lyrics-surface": scenePalette.surface,
         "--lyrics-tone-a": scenePalette.toneA,
         "--lyrics-tone-b": scenePalette.toneB,
         "--lyrics-tone-c": scenePalette.toneC,
-        "--lyrics-thread": scenePalette.thread,
+        "--lyrics-thread": scenePalette.thread
+      }) as CSSProperties,
+    [scenePalette]
+  );
+  const sceneMotionStyle = useMemo(
+    () =>
+      ({
         "--lyrics-bass": visualizer.bass.toFixed(3),
         "--lyrics-mid": visualizer.mid.toFixed(3),
         "--lyrics-treble": visualizer.treble.toFixed(3),
@@ -4193,7 +4312,7 @@ function FullLyricsPage({
         "--lyrics-active-halo": `${48 + visualizer.mid * 32}px`,
         "--lyrics-active-warmth": (0.1 + visualizer.treble * 0.18).toFixed(3)
       }) as CSSProperties,
-    [currentTime, scenePalette, visualizer]
+    [currentTime, visualizer]
   );
 
   useEffect(() => {
@@ -4236,10 +4355,7 @@ function FullLyricsPage({
     }
 
     if (currentTrack && activeLineIndex >= 0 && activeLineRef.current) {
-      activeLineRef.current.scrollIntoView({
-        block: "center",
-        behavior: "auto"
-      });
+      syncActiveLyricIntoView("auto");
       initialSyncedLineIndexRef.current = activeLineIndex;
       return;
     }
@@ -4258,20 +4374,26 @@ function FullLyricsPage({
     if (Date.now() < userScrollPausedUntilRef.current) {
       return;
     }
-    markProgrammaticLyricsScroll(900);
-    activeLineRef.current?.scrollIntoView({
-      block: "center",
-      behavior: "smooth"
-    });
+    syncActiveLyricIntoView(shouldReduceMotion() ? "auto" : "smooth");
   }, [activeLineIndex, currentTrack?.id]);
 
   function syncActiveLyricIntoView(behavior: ScrollBehavior) {
-    if (!currentTrack || activeLineIndex < 0 || !activeLineRef.current) {
+    const lyricsList = lyricsListRef.current;
+    const activeLine = activeLineRef.current;
+    if (!currentTrack || activeLineIndex < 0 || !lyricsList || !activeLine) {
+      return;
+    }
+    const listRect = lyricsList.getBoundingClientRect();
+    const lineRect = activeLine.getBoundingClientRect();
+    const centeredTop = lyricsList.scrollTop + lineRect.top - listRect.top - (lyricsList.clientHeight - activeLine.offsetHeight) / 2;
+    const maxScrollTop = Math.max(0, lyricsList.scrollHeight - lyricsList.clientHeight);
+    const targetTop = Math.min(Math.max(0, centeredTop), maxScrollTop);
+    if (Math.abs(targetTop - lyricsList.scrollTop) < 1) {
       return;
     }
     markProgrammaticLyricsScroll(behavior === "smooth" ? 900 : 120);
-    activeLineRef.current.scrollIntoView({
-      block: "center",
+    lyricsList.scrollTo({
+      top: targetTop,
       behavior
     });
   }
@@ -4355,8 +4477,8 @@ function FullLyricsPage({
   }
 
   return (
-    <section className="lyrics-page" aria-label="歌词">
-      <div className={`lyrics-cinematic-scene ${isPlaying ? "is-playing" : "is-paused"} ${coverImageURL ? "has-cover" : "no-cover"}`} style={sceneStyle} aria-hidden="true">
+    <section className="lyrics-page" style={lyricsPaletteStyle} aria-label="歌词">
+      <div className={`lyrics-cinematic-scene ${isPlaying ? "is-playing" : "is-paused"} ${coverImageURL ? "has-cover" : "no-cover"}`} style={sceneMotionStyle} aria-hidden="true">
         <span className="lyrics-cover-art" style={coverImageStyle} />
         {!coverImageURL && currentTrack ? (
           <div className="lyrics-generated-cover">
@@ -4375,7 +4497,7 @@ function FullLyricsPage({
         <span className="lyrics-glass-depth" />
         <span className="lyrics-film-texture" />
       </div>
-      <section className="lyrics-page-body" style={sceneStyle} aria-live="polite">
+      <section className="lyrics-page-body" aria-live="polite">
         {content}
       </section>
     </section>
@@ -5791,9 +5913,6 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
-  const [commentDraft, setCommentDraft] = useState("");
-  const [selectedNoteComments, setSelectedNoteComments] = useState<NoteComment[]>([]);
-  const [noteCommentsCache, setNoteCommentsCache] = useState<Map<number, NoteComment[]>>(() => new Map());
   const [saveStatus, setSaveStatus] = useState<NoteSaveStatus>("idle");
   const [richEditorActions, setRichEditorActions] = useState<RichEditorActions | null>(null);
   const [isOutlineVisible, setIsOutlineVisible] = useState(false);
@@ -5801,8 +5920,6 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   const [isDocumentMenuOpen, setIsDocumentMenuOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isCommentsLoading, setIsCommentsLoading] = useState(false);
-  const [isCommentSubmitting, setIsCommentSubmitting] = useState(false);
   const [isTreeVisible, setIsTreeVisible] = useState(true);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<"dark" | "light">("light");
@@ -5889,9 +6006,6 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
   }, [selectedNoteID]);
 
   useEffect(() => {
-    setNoteCommentsCache(new Map());
-    setSelectedNoteComments([]);
-    setCommentDraft("");
     void loadFolders();
   }, [userID]);
 
@@ -5913,16 +6027,12 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
       setSelectedNote(null);
       setDraftTitle("");
       setDraftContent("");
-      setSelectedNoteComments([]);
-      setCommentDraft("");
-      setIsCommentsLoading(false);
       setSaveStatus("idle");
       setOutlineItems([]);
       outlineJumpRef.current = null;
       return;
     }
     void loadSelectedNote(selectedNoteID);
-    void loadNoteComments(selectedNoteID);
   }, [selectedNoteID, userID]);
 
   useEffect(() => {
@@ -6018,111 +6128,6 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "文档详情加载失败");
-    }
-  }
-
-  function cacheNoteComments(noteID: number, comments: NoteComment[]) {
-    setNoteCommentsCache((previous) => {
-      const cachedComments = previous.get(noteID);
-      if (cachedComments && areNoteCommentsEqual(cachedComments, comments)) {
-        return previous;
-      }
-      const next = new Map(previous);
-      next.set(noteID, comments);
-      return next;
-    });
-  }
-
-  function removeNoteCommentsCache(noteID: number) {
-    setNoteCommentsCache((previous) => {
-      if (!previous.has(noteID)) {
-        return previous;
-      }
-      const next = new Map(previous);
-      next.delete(noteID);
-      return next;
-    });
-  }
-
-  function updateNoteCommentCount(noteID: number, commentCount: number) {
-    setNotes((previous) => previous.map((note) => (note.id === noteID ? { ...note, comment_count: commentCount } : note)));
-    setSelectedNote((previous) => (previous?.id === noteID ? { ...previous, comment_count: commentCount } : previous));
-  }
-
-  async function loadNoteComments(noteID: number, { force = false }: { force?: boolean } = {}) {
-    const cachedComments = force ? null : noteCommentsCache.get(noteID) ?? null;
-    if (cachedComments) {
-      setSelectedNoteComments(cachedComments);
-      setIsCommentsLoading(false);
-      return;
-    }
-
-    const existingComments = noteCommentsCache.get(noteID) ?? null;
-    if (existingComments) {
-      setSelectedNoteComments(existingComments);
-    }
-    setIsCommentsLoading(!existingComments);
-    try {
-      const payload = await getNoteComments(noteID, userID);
-      cacheNoteComments(noteID, payload.comments);
-      updateNoteCommentCount(noteID, payload.comments.length);
-      if (selectedNoteIDRef.current === noteID) {
-        setSelectedNoteComments(payload.comments);
-        setMessage("");
-      }
-    } catch (error) {
-      if (selectedNoteIDRef.current === noteID) {
-        setMessage(error instanceof Error ? error.message : "留言加载失败");
-      }
-    } finally {
-      if (selectedNoteIDRef.current === noteID) {
-        setIsCommentsLoading(false);
-      }
-    }
-  }
-
-  async function handleSubmitNoteComment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!userID || !selectedNote) {
-      setMessage("请先登录后留言");
-      return;
-    }
-    const content = commentDraft.trim();
-    if (!content) {
-      setMessage("留言不能为空");
-      return;
-    }
-    setIsCommentSubmitting(true);
-    try {
-      const comment = await createNoteComment(selectedNote.id, { user_id: userID, content });
-      const nextComments = [...selectedNoteComments, comment];
-      cacheNoteComments(selectedNote.id, nextComments);
-      setSelectedNoteComments(nextComments);
-      updateNoteCommentCount(selectedNote.id, nextComments.length);
-      setCommentDraft("");
-      setMessage("");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "发送留言失败");
-    } finally {
-      setIsCommentSubmitting(false);
-    }
-  }
-
-  async function handleDeleteNoteComment(comment: NoteComment) {
-    if (!userID || !selectedNote) {
-      setMessage("请先登录后删除留言");
-      return;
-    }
-    try {
-      await deleteNoteComment(selectedNote.id, comment.id, userID);
-      const nextComments = selectedNoteComments.filter((item) => item.id !== comment.id);
-      cacheNoteComments(selectedNote.id, nextComments);
-      setSelectedNoteComments(nextComments);
-      updateNoteCommentCount(selectedNote.id, nextComments.length);
-      setMessage("");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除留言失败");
-      void loadNoteComments(selectedNote.id, { force: true });
     }
   }
 
@@ -6412,7 +6417,6 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
     try {
       await deleteNote(note.id, userID);
       setNotes((previous) => previous.filter((item) => item.id !== note.id));
-      removeNoteCommentsCache(note.id);
       setDeleteDialog(null);
       if (selectedNoteID === note.id) {
         setSelectedNoteID(notes.find((item) => item.id !== note.id)?.id ?? null);
@@ -6683,46 +6687,6 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
               onOutlineItemsChange={handleOutlineItemsChange}
               onOutlineJumpReady={handleOutlineJumpReady}
             />
-            <section className="growth-comments" aria-label="文档留言">
-              <header>
-                <strong>留言</strong>
-                <span>{isCommentsLoading ? "正在加载" : `${selectedNoteComments.length} 条`}</span>
-              </header>
-              <div className="growth-comment-list">
-                {selectedNoteComments.length ? (
-                  selectedNoteComments.map((comment) => (
-                    <article key={comment.id} className="growth-comment-item">
-                      <div>
-                        <strong>{comment.author_nickname || "朋友"}</strong>
-                        <time dateTime={comment.created_at}>{formatDateTime(comment.created_at)}</time>
-                      </div>
-                      <p>{comment.content}</p>
-                      {comment.can_delete ? (
-                        <button type="button" onClick={() => void handleDeleteNoteComment(comment)}>
-                          删除
-                        </button>
-                      ) : null}
-                    </article>
-                  ))
-                ) : (
-                  <div className="growth-comment-empty">{isCommentsLoading ? "留言加载中" : "还没有留言"}</div>
-                )}
-              </div>
-              <form className="growth-comment-form" onSubmit={(event) => void handleSubmitNoteComment(event)}>
-                <textarea
-                  value={commentDraft}
-                  maxLength={1000}
-                  rows={2}
-                  placeholder={userID ? "写下你的留言" : "登录后可以留言"}
-                  aria-label="留言内容"
-                  disabled={!userID || isCommentSubmitting}
-                  onChange={(event) => setCommentDraft(event.target.value)}
-                />
-                <button type="submit" disabled={!userID || isCommentSubmitting || !commentDraft.trim()}>
-                  {isCommentSubmitting ? "发送中" : "发送"}
-                </button>
-              </form>
-            </section>
           </>
         ) : (
           <div className="growth-empty growth-editor-empty">选择一篇文档查看内容。</div>
@@ -6903,6 +6867,8 @@ function GrowthNotesPage({ authSession }: { authSession: AuthSession | null }) {
     </section>
   );
 }
+
+const MemoizedGrowthNotesPage = memo(GrowthNotesPage);
 
 const richTextExtensions = [
   StarterKit.configure({

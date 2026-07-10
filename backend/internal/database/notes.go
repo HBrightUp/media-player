@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/hml/media-player/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -153,13 +152,11 @@ func (s *Store) ListNotes(ctx context.Context, viewerID int64, folderID *int64, 
 			u.nickname,
 			n.title,
 			n.content,
-			COUNT(c.id),
 			(n.owner_user_id = $1),
 			n.created_at,
 			n.updated_at
 		FROM notes n
 		JOIN users u ON u.id = n.owner_user_id
-		LEFT JOIN note_comments c ON c.note_id = n.id
 		WHERE ($2::bigint IS NULL OR n.folder_id = $2)
 			AND ($3::boolean = false OR n.folder_id IS NULL)
 			AND (
@@ -168,7 +165,6 @@ func (s *Store) ListNotes(ctx context.Context, viewerID int64, folderID *int64, 
 				OR lower(n.content) LIKE '%' || lower($4) || '%'
 				OR lower(u.nickname) LIKE '%' || lower($4) || '%'
 			)
-		GROUP BY n.id, u.nickname
 		ORDER BY n.updated_at DESC, n.id DESC
 	`, viewerID, nullableInt64Ptr(folderID), unfiled, query)
 	if err != nil {
@@ -196,15 +192,12 @@ func (s *Store) GetNote(ctx context.Context, viewerID, noteID int64) (models.Not
 			u.nickname,
 			n.title,
 			n.content,
-			COUNT(c.id),
 			(n.owner_user_id = $1),
 			n.created_at,
 			n.updated_at
 		FROM notes n
 		JOIN users u ON u.id = n.owner_user_id
-		LEFT JOIN note_comments c ON c.note_id = n.id
 		WHERE n.id = $2
-		GROUP BY n.id, u.nickname
 	`, viewerID, noteID)
 	return scanNote(row)
 }
@@ -219,7 +212,7 @@ func (s *Store) CreateNote(ctx context.Context, userID int64, folderID *int64, t
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO notes (folder_id, owner_user_id, title, content, updated_at)
 		VALUES ($1, $2, $3, $4, now())
-		RETURNING id, folder_id, owner_user_id, '', title, content, 0, true, created_at, updated_at
+		RETURNING id, folder_id, owner_user_id, '', title, content, true, created_at, updated_at
 	`, nullableInt64Ptr(folderID), userID, title, content)
 	note, err := scanNote(row)
 	if err != nil {
@@ -246,7 +239,7 @@ func (s *Store) UpdateNote(ctx context.Context, userID, noteID int64, folderID *
 		WHERE n.id = $2
 			AND n.owner_user_id = $1
 			AND u.id = n.owner_user_id
-		RETURNING n.id, n.folder_id, n.owner_user_id, u.nickname, n.title, n.content, (SELECT COUNT(*) FROM note_comments c WHERE c.note_id = n.id), true, n.created_at, n.updated_at
+		RETURNING n.id, n.folder_id, n.owner_user_id, u.nickname, n.title, n.content, true, n.created_at, n.updated_at
 	`, userID, noteID, nullableInt64Ptr(folderID), title, content)
 	note, err := scanNote(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -270,89 +263,6 @@ func (s *Store) DeleteNote(ctx context.Context, userID, noteID int64) error {
 	if exists, err := s.noteExists(ctx, noteID); err != nil {
 		return err
 	} else if exists {
-		return ErrForbidden
-	}
-	return pgx.ErrNoRows
-}
-
-func (s *Store) ListNoteComments(ctx context.Context, viewerID, noteID int64) ([]models.NoteComment, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT
-			c.id,
-			c.note_id,
-			c.user_id,
-			u.nickname,
-			c.content,
-			(c.user_id = $1 OR n.owner_user_id = $1),
-			c.created_at,
-			c.updated_at
-		FROM note_comments c
-		JOIN users u ON u.id = c.user_id
-		JOIN notes n ON n.id = c.note_id
-		WHERE c.note_id = $2
-		ORDER BY c.created_at, c.id
-	`, viewerID, noteID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	comments := make([]models.NoteComment, 0)
-	for rows.Next() {
-		comment, err := scanNoteComment(rows)
-		if err != nil {
-			return nil, err
-		}
-		comments = append(comments, comment)
-	}
-	return comments, rows.Err()
-}
-
-func (s *Store) CreateNoteComment(ctx context.Context, userID, noteID int64, content string) (models.NoteComment, error) {
-	if exists, err := s.noteExists(ctx, noteID); err != nil {
-		return models.NoteComment{}, err
-	} else if !exists {
-		return models.NoteComment{}, pgx.ErrNoRows
-	}
-
-	row := s.pool.QueryRow(ctx, `
-		INSERT INTO note_comments (note_id, user_id, content, updated_at)
-		VALUES ($1, $2, $3, now())
-		RETURNING id, note_id, user_id, '', content, true, created_at, updated_at
-	`, noteID, userID, content)
-	comment, err := scanNoteComment(row)
-	if err != nil {
-		return models.NoteComment{}, err
-	}
-	user, err := s.GetUserByID(ctx, userID)
-	if err == nil {
-		comment.AuthorNickname = user.Nickname
-	}
-	return comment, err
-}
-
-func (s *Store) DeleteNoteComment(ctx context.Context, userID, noteID, commentID int64) error {
-	tag, err := s.pool.Exec(ctx, `
-		DELETE FROM note_comments c
-		USING notes n
-		WHERE c.id = $1
-			AND c.note_id = $2
-			AND n.id = c.note_id
-			AND (c.user_id = $3 OR n.owner_user_id = $3)
-	`, commentID, noteID, userID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-
-	var exists bool
-	err = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM note_comments WHERE id = $1 AND note_id = $2)`, commentID, noteID).Scan(&exists)
-	if err != nil {
-		return err
-	}
-	if exists {
 		return ErrForbidden
 	}
 	return pgx.ErrNoRows
@@ -419,7 +329,6 @@ func scanNoteFolder(row rowScanner) (models.NoteFolder, error) {
 func scanNote(row rowScanner) (models.Note, error) {
 	var note models.Note
 	var folderID sql.NullInt64
-	var count int64
 	err := row.Scan(
 		&note.ID,
 		&folderID,
@@ -427,7 +336,6 @@ func scanNote(row rowScanner) (models.Note, error) {
 		&note.OwnerNickname,
 		&note.Title,
 		&note.Content,
-		&count,
 		&note.CanEdit,
 		&note.CreatedAt,
 		&note.UpdatedAt,
@@ -439,24 +347,5 @@ func scanNote(row rowScanner) (models.Note, error) {
 		value := folderID.Int64
 		note.FolderID = &value
 	}
-	note.CommentCount = int(count)
 	return note, nil
-}
-
-func scanNoteComment(row rowScanner) (models.NoteComment, error) {
-	var comment models.NoteComment
-	err := row.Scan(
-		&comment.ID,
-		&comment.NoteID,
-		&comment.UserID,
-		&comment.AuthorNickname,
-		&comment.Content,
-		&comment.CanDelete,
-		&comment.CreatedAt,
-		&comment.UpdatedAt,
-	)
-	if err != nil {
-		return models.NoteComment{}, fmt.Errorf("scan note comment: %w", err)
-	}
-	return comment, nil
 }

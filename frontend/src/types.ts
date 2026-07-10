@@ -187,19 +187,7 @@ export type GrowthNote = {
   owner_nickname: string;
   title: string;
   content: string;
-  comment_count: number;
   can_edit: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type NoteComment = {
-  id: number;
-  note_id: number;
-  user_id: number;
-  author_nickname: string;
-  content: string;
-  can_delete: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -214,10 +202,5 @@ export type GrowthNoteRequest = {
   user_id: number;
   folder_id?: number | null;
   title: string;
-  content: string;
-};
-
-export type NoteCommentRequest = {
-  user_id: number;
   content: string;
 };
