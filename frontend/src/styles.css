@@ -3448,7 +3448,7 @@ form.search-dialog .search-actions button {
   filter:
     drop-shadow(0 0 18px rgba(var(--lyrics-thread), 0.2))
     drop-shadow(0 0 42px rgba(var(--lyrics-tone-a), 0.12));
-  transform: translate3d(var(--lyrics-thread-drift), -50%, 0);
+  transform: translate3d(var(--lyrics-thread-drift, 0px), -50%, 0);
 }
 
 .lyrics-light-threads path {
@@ -3537,6 +3537,16 @@ form.search-dialog .search-actions button {
 .full-lyrics-list::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+.full-lyrics-list:focus {
+  outline: none;
+}
+
+.full-lyrics-list:focus-visible {
+  outline: 2px solid rgba(var(--lyrics-thread), 0.48);
+  outline-offset: -10px;
+  border-radius: 18px;
 }
 
 .full-lyrics-list p {
@@ -4689,6 +4699,7 @@ form.search-dialog.audio-file-dialog .search-actions button,
 }
 
 .transport .play-toggle {
+  position: relative;
   width: 42px;
   height: 46px;
   background:
@@ -4711,6 +4722,24 @@ form.search-dialog.audio-file-dialog .search-actions button,
   width: 45px;
   height: 45px;
   stroke-width: 1.4;
+}
+
+.transport .play-toggle.is-loading::after {
+  position: absolute;
+  inset: -5px;
+  content: "";
+  pointer-events: none;
+  border: 2px solid rgba(112, 244, 255, 0.2);
+  border-top-color: rgba(255, 244, 105, 0.92);
+  border-right-color: rgba(112, 244, 255, 0.72);
+  border-radius: 22px;
+  animation: playbackLoadingSpin 860ms linear infinite;
+}
+
+@keyframes playbackLoadingSpin {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 .transport button.active {
@@ -5247,7 +5276,8 @@ form.search-dialog.audio-file-dialog .search-actions button,
 
   .lyrics-color-field,
   .lyrics-cover-art,
-  .lyrics-light-threads path {
+  .lyrics-light-threads path,
+  .transport .play-toggle.is-loading::after {
     animation: none;
   }
 
@@ -6293,6 +6323,30 @@ form.search-dialog.audio-file-dialog .search-actions button,
 
   .auth-avatar {
     margin: 22px auto 42px;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1180px) and (orientation: landscape) and (max-height: 820px) {
+  .equalizer-panel {
+    bottom: calc(104px + env(safe-area-inset-bottom));
+    width: min(680px, calc(100vw - 28px));
+    max-height: calc(100dvh - 116px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    gap: 7px;
+    padding: 9px;
+  }
+
+  .equalizer-bands {
+    grid-template-columns: repeat(10, minmax(30px, 1fr));
+    gap: 4px;
+  }
+
+  .equalizer-band {
+    gap: 4px;
+  }
+
+  .equalizer-slider-wrap {
+    width: 28px;
+    height: clamp(64px, 10dvh, 78px);
   }
 }
 
