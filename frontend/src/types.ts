@@ -76,6 +76,7 @@ export type ManagedUser = {
   role: UserRole;
   created_at: string;
   updated_at: string;
+  last_active_at: string | null;
 };
 
 export type ManagedUserRequest = {
@@ -150,6 +151,7 @@ export type ServerAudioFile = {
   title: string;
   extension: string;
   area?: AudioFileArea;
+  has_lyrics?: boolean;
 };
 
 export type AudioFileArea = "lossless_music" | "lossy_music" | "lossless_lyrics" | "lossy_lyrics" | "shared_lyrics";
@@ -160,6 +162,7 @@ export type ServerManagedFile = {
   area: AudioFileArea;
   kind: "audio" | "lyrics";
   quality?: "lossless" | "lossy";
+  has_lyrics?: boolean;
   relative_path: string;
   filename: string;
   title: string;

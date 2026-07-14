@@ -47,7 +47,7 @@ func TestBuildServerAudioSetUsesCompleteFilenameHashAndFilenameParts(t *testing.
 		Artist:   "元数据歌手",
 		Title:    "元数据歌曲",
 		Format:   "mp3",
-	}}, "lossy_music")
+	}}, audioFileArea{ID: "lossy_music"})
 	if len(entries) != 1 {
 		t.Fatalf("len(entries) = %d, want 1", len(entries))
 	}

@@ -689,7 +689,7 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 		}
 	case models.TrackQualityLossless:
 		if !hasUser || !models.UserCanPlayLossless(user.Role) {
-			writeError(w, http.StatusForbidden, "当前用户无权播放无损音乐")
+			writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
 			return
 		}
 		tracks, err = s.store.ListTracksByQuality(r.Context(), quality)
@@ -822,7 +822,7 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !userCanAccessTrack(user, track) {
-			writeError(w, http.StatusForbidden, "当前用户无权收藏无损音乐")
+			writeError(w, http.StatusForbidden, "当前用户无权收藏高品质")
 			return
 		}
 		if err := s.store.AddFavoriteTrack(r.Context(), userID, request.TrackID); err != nil {
@@ -1016,7 +1016,7 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		if !userCanAccessTrack(user, track) {
-			writeError(w, http.StatusForbidden, "当前用户无权加入无损音乐")
+			writeError(w, http.StatusForbidden, "当前用户无权加入高品质")
 			return
 		}
 		if err := s.store.AddFavoriteTrackToCategory(r.Context(), userID, categoryID, request.TrackID); err != nil {
@@ -1091,7 +1091,7 @@ func (s *Server) handleTrackLyrics(w http.ResponseWriter, r *http.Request, id in
 		return
 	}
 	if !userCanAccessTrack(user, track) {
-		writeError(w, http.StatusForbidden, "当前用户无权读取无损音乐歌词")
+		writeError(w, http.StatusForbidden, "当前用户无权读取高品质歌词")
 		return
 	}
 
@@ -1147,7 +1147,7 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 		return
 	}
 	if !userCanAccessTrack(user, track) {
-		writeError(w, http.StatusForbidden, "当前用户无权播放无损音乐")
+		writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
 		return
 	}
 

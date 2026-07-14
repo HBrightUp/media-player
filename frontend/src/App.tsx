@@ -32,6 +32,7 @@ import {
   deleteAudioFile,
   deleteLyricsFile,
   deleteFavoriteCategory,
+  deleteManagedUser,
   deleteNote,
   deleteNoteFolder,
   getAudioFiles,
@@ -256,7 +257,7 @@ const lyricsScenePalettes: LyricsScenePalette[] = [
   { surface: "#163159", toneA: "183, 169, 255", toneB: "110, 224, 236", toneC: "242, 202, 134", thread: "236, 248, 255" }
 ];
 
-type MusicTab = "无损音乐" | "有损音乐" | "收藏" | "分类" | "歌曲搜索";
+type MusicTab = "高品质" | "轻音乐" | "收藏" | "分类" | "歌曲搜索";
 const appPages: Array<{ id: AppPage; label: string }> = [
   { id: "music", label: "音乐" },
   { id: "lyrics", label: "歌词" },
@@ -330,7 +331,7 @@ function canRolePlayLossless(role?: UserRole | null) {
 }
 
 function getDefaultMusicTab(role?: UserRole | null): MusicTab {
-  return canRolePlayLossless(role) ? "无损音乐" : "有损音乐";
+  return canRolePlayLossless(role) ? "高品质" : "轻音乐";
 }
 const trackPlayClickCooldownMs = 450;
 const trackSwitchDebounceWindowMs = 300;
@@ -369,12 +370,10 @@ const lossyAudioFileExtensionsForUpload = new Set([".mp3", ".aac", ".m4a", ".ogg
 const supportedAudioFileExtensions = new Set([...losslessAudioFileExtensions, ...lossyAudioFileExtensionsForUpload]);
 const lossyMusicFormats = new Set(["mp3", "aac", "m4a", "ogg"]);
 const supportedLyricFileExtensions = new Set([".lrc", ".txt"]);
-const audioFileAreas: Array<{ id: AudioFileArea; label: string; kind: "audio" | "lyrics" }> = [
-  { id: "lossless_music", label: "无损音乐", kind: "audio" },
-  { id: "lossy_music", label: "有损音乐", kind: "audio" },
-  { id: "lossless_lyrics", label: "无损歌词", kind: "lyrics" },
-  { id: "lossy_lyrics", label: "有损歌词", kind: "lyrics" },
-  { id: "shared_lyrics", label: "公共歌词", kind: "lyrics" }
+type AudioManagerArea = Extract<AudioFileArea, "lossless_music" | "lossy_music">;
+const audioFileAreas: Array<{ id: AudioManagerArea; label: string }> = [
+  { id: "lossless_music", label: "高品质" },
+  { id: "lossy_music", label: "轻音乐" }
 ];
 
 function areBufferedRangesEqual(previous: BufferedAudioRange[], next: BufferedAudioRange[]) {
@@ -768,7 +767,7 @@ function App() {
   const [onlineCount, setOnlineCount] = useState(0);
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("main");
-  const [audioFileArea, setAudioFileArea] = useState<AudioFileArea>("lossless_music");
+  const [audioFileArea, setAudioFileArea] = useState<AudioManagerArea>("lossless_music");
   const [audioFiles, setAudioFiles] = useState<ServerManagedFile[]>([]);
   const [serverAudioSet, setServerAudioSet] = useState<ServerAudioFile[]>([]);
   const [audioFileLimits, setAudioFileLimits] = useState<AudioFileImportLimits>(defaultAudioFileLimits);
@@ -781,6 +780,8 @@ function App() {
   const [isManagedUsersLoading, setIsManagedUsersLoading] = useState(false);
   const [isManagedUserSubmitting, setIsManagedUserSubmitting] = useState(false);
   const [managedUserForm, setManagedUserForm] = useState<ManagedUserFormState>(() => createEmptyManagedUserForm());
+  const [managedUserDeleteTarget, setManagedUserDeleteTarget] = useState<ManagedUser | null>(null);
+  const [isManagedUserDeleting, setIsManagedUserDeleting] = useState(false);
   const [audioFileAccess, setAudioFileAccess] = useState<AudioFileAccessGrant | null>(null);
   const [audioFileAccessDialog, setAudioFileAccessDialog] = useState<AudioFileAccessDialogState>(() => createClosedAudioFileAccessDialog());
   const [audioFileAccessClock, setAudioFileAccessClock] = useState(() => Date.now());
@@ -863,7 +864,7 @@ function App() {
   }, [authSession?.token]);
 
   useEffect(() => {
-    if (activeTab !== "无损音乐" || canRolePlayLossless(authSession?.role)) {
+    if (activeTab !== "高品质" || canRolePlayLossless(authSession?.role)) {
       return;
     }
     const nextTab = getDefaultMusicTab(authSession?.role);
@@ -895,6 +896,8 @@ function App() {
       setManagedUsers([]);
       setManagedUsersMessage("");
       setManagedUserForm(createEmptyManagedUserForm());
+      setManagedUserDeleteTarget(null);
+      setIsManagedUserDeleting(false);
       setIsLoading(false);
       return;
     }
@@ -1663,7 +1666,7 @@ function App() {
       if (manual) {
         const userID = authSession?.userId;
         if (!userID) {
-          throw new Error("请先登录后刷新无损音乐");
+          throw new Error("请先登录后刷新高品质");
         }
         payload = await refreshTracks(userID);
       } else {
@@ -1672,7 +1675,7 @@ function App() {
       syncLibraryTracksForTab(targetTab, payload.tracks, { forceVisible });
       return { ok: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "本地无损音乐加载失败";
+      const message = error instanceof Error ? error.message : "本地高品质加载失败";
       if (!keepExistingOnError) {
         setLibraryTracks([]);
         if (isLibraryMusicTab(targetTab)) {
@@ -1927,9 +1930,9 @@ function App() {
   }
 
   function handleTabClick(tab: MusicTab, target?: HTMLElement) {
-    if (tab === "无损音乐" && !canRolePlayLossless(authSession?.role)) {
-      showToast("当前用户无权播放无损音乐");
-      tab = "有损音乐";
+    if (tab === "高品质" && !canRolePlayLossless(authSession?.role)) {
+      showToast("当前用户无权播放高品质");
+      tab = "轻音乐";
     }
     shouldRevealCurrentTrackRef.current = false;
     setActiveTab(tab);
@@ -1954,7 +1957,7 @@ function App() {
       preserveCurrentTrackForQueue(visibleTracks);
       setPlaybackQueue(visibleTracks);
       setPlaybackQueueScope({ kind: "library" });
-      if (tab === "有损音乐") {
+      if (tab === "轻音乐") {
         void refreshLibrary({ keepExistingOnError: true, forceVisible: true, targetTab: tab });
       }
       return;
@@ -1975,12 +1978,12 @@ function App() {
 
   async function handleLibraryTabClick() {
     if (!canRolePlayLossless(authSession?.role)) {
-      handleTabClick("有损音乐");
-      showToast("当前用户无权播放无损音乐");
+      handleTabClick("轻音乐");
+      showToast("当前用户无权播放高品质");
       return;
     }
-    const shouldRefreshLibrary = activePage === "music" && activeTab === "无损音乐" && !isLibraryFiltered;
-    handleTabClick("无损音乐");
+    const shouldRefreshLibrary = activePage === "music" && activeTab === "高品质" && !isLibraryFiltered;
+    handleTabClick("高品质");
 
     if (!shouldRefreshLibrary) {
       return;
@@ -1989,11 +1992,11 @@ function App() {
       return;
     }
     if (!authSession?.userId) {
-      showToast("请先登录后刷新无损音乐");
+      showToast("请先登录后刷新高品质");
       return;
     }
     if (manualLibraryRefreshRemainingMs > 0) {
-      showToast(`无损音乐刷新太频繁，请${manualLibraryRefreshCooldownSeconds}秒后再试`);
+      showToast(`高品质刷新太频繁，请${manualLibraryRefreshCooldownSeconds}秒后再试`);
       return;
     }
 
@@ -2006,7 +2009,7 @@ function App() {
     setIsManualLibraryRefreshing(false);
 
     if (!result.ok) {
-      showToast(result.message ?? "无损音乐刷新失败");
+      showToast(result.message ?? "高品质刷新失败");
       return;
     }
 
@@ -2014,7 +2017,7 @@ function App() {
     setLastManualLibraryRefreshAt(refreshedAt);
     setManualLibraryRefreshClock(refreshedAt);
     writeManualLibraryRefreshAt(refreshedAt);
-    showToast("无损音乐已刷新");
+    showToast("高品质已刷新");
   }
 
   function getCategorySelectorPosition(target: HTMLElement): FloatingPanelPosition {
@@ -2369,6 +2372,8 @@ function App() {
     setManagedUsers([]);
     setManagedUsersMessage("");
     setManagedUserForm(createEmptyManagedUserForm());
+    setManagedUserDeleteTarget(null);
+    setIsManagedUserDeleting(false);
     setAudioFileAccess(null);
     setAudioFileAccessDialog(createClosedAudioFileAccessDialog());
     setTrackContextMenu(null);
@@ -2408,6 +2413,7 @@ function App() {
     accessToken?: string;
     area?: AudioFileArea;
   } = {}) {
+    const requestArea = normalizeAudioManagerArea(area);
     if (!authSession?.userId) {
       setAudioFiles([]);
       setServerAudioSet([]);
@@ -2433,7 +2439,7 @@ function App() {
       setIsAudioFilesLoading(true);
     }
     try {
-      const payload = await getAudioFiles(authSession.userId, accessToken, area);
+      const payload = await getAudioFiles(authSession.userId, accessToken, requestArea);
       const nextServerAudioSet = buildServerAudioSetFromTracks(payload.files, payload.server_audio_set);
       setAudioFiles(payload.files);
       setServerAudioSet(nextServerAudioSet);
@@ -2476,19 +2482,24 @@ function App() {
     setProfileView("audioFiles");
     setAudioImportReport(null);
     setAudioImportPreflight(null);
-    void refreshAudioFiles({ accessToken });
+    const managerArea = normalizeAudioManagerArea(audioFileArea);
+    if (managerArea !== audioFileArea) {
+      setAudioFileArea(managerArea);
+    }
+    void refreshAudioFiles({ accessToken, area: managerArea });
   }
 
   function changeAudioFileArea(area: AudioFileArea) {
-    if (area === audioFileArea || isAudioImporting) {
+    const managerArea = normalizeAudioManagerArea(area);
+    if (managerArea === audioFileArea || isAudioImporting) {
       return;
     }
     closeAudioFileOverlays();
-    setAudioFileArea(area);
+    setAudioFileArea(managerArea);
     setAudioImportReport(null);
     setAudioImportPreflight(null);
     setAudioImportProgress(null);
-    void refreshAudioFiles({ area });
+    void refreshAudioFiles({ area: managerArea });
   }
 
   async function submitAudioFileAccessDialog(event: FormEvent<HTMLFormElement>) {
@@ -2633,6 +2644,40 @@ function App() {
     } catch (error) {
       setManagedUsersMessage(error instanceof Error ? error.message : "更新用户权限失败");
       void refreshManagedUsers({ silent: true });
+    }
+  }
+
+  function openManagedUserDelete(user: ManagedUser) {
+    if (user.role === "super_admin" || !canRoleManageUsers(authSession?.role)) {
+      return;
+    }
+    setManagedUserDeleteTarget(user);
+    setManagedUsersMessage("");
+  }
+
+  function closeManagedUserDelete() {
+    if (isManagedUserDeleting) {
+      return;
+    }
+    setManagedUserDeleteTarget(null);
+  }
+
+  async function confirmManagedUserDelete() {
+    if (!managedUserDeleteTarget || isManagedUserDeleting || !canRoleManageUsers(authSession?.role)) {
+      return;
+    }
+    const target = managedUserDeleteTarget;
+    setIsManagedUserDeleting(true);
+    try {
+      await deleteManagedUser(target.id);
+      setManagedUsers((previous) => previous.filter((user) => user.id !== target.id));
+      setManagedUserDeleteTarget(null);
+      setManagedUsersMessage("用户已删除");
+    } catch (error) {
+      setManagedUsersMessage(error instanceof Error ? error.message : "删除用户失败");
+      void refreshManagedUsers({ silent: true });
+    } finally {
+      setIsManagedUserDeleting(false);
     }
   }
 
@@ -3869,7 +3914,7 @@ function App() {
   }
 
   const activeCategory = favoriteCategories.find((category) => category.id === activeCategoryId) ?? null;
-  const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : activeTab === "分类" ? "暂无分类歌曲" : activeTab === "有损音乐" ? "暂无有损音乐" : "暂无无损音乐");
+  const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : activeTab === "分类" ? "暂无分类歌曲" : activeTab === "轻音乐" ? "暂无轻音乐" : "暂无高品质");
   const isAuthVisible = !authSession;
   const canSubmitAuth = !isAuthSubmitting && isAuthFormReady(authForm);
   const canCurrentUserPlayLossless = canRolePlayLossless(authSession?.role);
@@ -3908,19 +3953,19 @@ function App() {
             <nav className="mode-tabs" aria-label="播放器视图">
               {canCurrentUserPlayLossless ? (
                 <button
-                  className={activeTab === "无损音乐" ? "active" : ""}
+                  className={activeTab === "高品质" ? "active" : ""}
                   type="button"
-                  aria-current={activeTab === "无损音乐" ? "page" : undefined}
-                  aria-label={isManualLibraryRefreshing ? "正在刷新无损音乐" : "刷新无损音乐"}
-                  title={manualLibraryRefreshRemainingMs > 0 ? `${manualLibraryRefreshCooldownSeconds}秒后可刷新无损音乐` : "刷新无损音乐"}
+                  aria-current={activeTab === "高品质" ? "page" : undefined}
+                  aria-label={isManualLibraryRefreshing ? "正在刷新高品质" : "刷新高品质"}
+                  title={manualLibraryRefreshRemainingMs > 0 ? `${manualLibraryRefreshCooldownSeconds}秒后可刷新高品质` : "刷新高品质"}
                   disabled={isManualLibraryRefreshing}
                   onClick={() => void handleLibraryTabClick()}
                 >
-                  无损音乐
+                  高品质
                 </button>
               ) : null}
-              <button className={activeTab === "有损音乐" ? "active" : ""} type="button" aria-current={activeTab === "有损音乐" ? "page" : undefined} onClick={() => handleTabClick("有损音乐")}>
-                有损音乐
+              <button className={activeTab === "轻音乐" ? "active" : ""} type="button" aria-current={activeTab === "轻音乐" ? "page" : undefined} onClick={() => handleTabClick("轻音乐")}>
+                轻音乐
               </button>
               <button className={activeTab === "收藏" ? "active" : ""} type="button" aria-current={activeTab === "收藏" ? "page" : undefined} onClick={() => handleTabClick("收藏")}>
                 我喜欢
@@ -3958,7 +4003,7 @@ function App() {
               </button>
             </nav>
 
-            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} aria-label="本地无损音乐列表" aria-busy={isLoading}>
+            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} aria-label="本地高品质列表" aria-busy={isLoading}>
               <div className="table-head">
                 <span />
                 {canSortMusicColumns ? (
@@ -4036,7 +4081,7 @@ function App() {
                 })}
                 {!tracks.length ? (
                   <div className="empty-table">
-                    {isLoading ? (activeTab === "收藏" ? "正在加载收藏歌曲" : activeTab === "分类" ? "正在加载分类歌曲" : activeTab === "有损音乐" ? "正在加载有损音乐" : "正在加载无损音乐") : emptyMessage}
+                    {isLoading ? (activeTab === "收藏" ? "正在加载收藏歌曲" : activeTab === "分类" ? "正在加载分类歌曲" : activeTab === "轻音乐" ? "正在加载轻音乐" : "正在加载高品质") : emptyMessage}
                   </div>
                 ) : null}
               </div>
@@ -4415,10 +4460,12 @@ function App() {
             managedUsers={managedUsers}
             managedUsersMessage={managedUsersMessage}
             managedUserForm={managedUserForm}
+            managedUserDeleteTarget={managedUserDeleteTarget}
             isAudioFilesLoading={isAudioFilesLoading}
             isAudioImporting={isAudioImporting}
             isManagedUsersLoading={isManagedUsersLoading}
             isManagedUserSubmitting={isManagedUserSubmitting}
+            isManagedUserDeleting={isManagedUserDeleting}
             audioFileMenu={audioFileMenu}
             audioRenameDraft={audioRenameDraft}
             audioDeleteTarget={audioDeleteTarget}
@@ -4430,6 +4477,9 @@ function App() {
             onUpdateManagedUserForm={updateManagedUserForm}
             onSubmitManagedUser={submitManagedUser}
             onChangeManagedUserRole={(user, role) => void changeManagedUserRole(user, role)}
+            onOpenManagedUserDelete={openManagedUserDelete}
+            onCloseManagedUserDelete={closeManagedUserDelete}
+            onConfirmManagedUserDelete={() => void confirmManagedUserDelete()}
             onChooseAudioFolder={handleChooseAudioFolder}
             onAudioFolderChange={handleAudioFolderChange}
             onConfirmAudioImportPreflight={() => void confirmAudioImportPreflight()}
@@ -4637,7 +4687,7 @@ function sortMusicTracks(tracks: Track[], sortKey: TrackSortKey | null) {
 }
 
 function isLibraryMusicTab(tab: MusicTab) {
-  return tab === "无损音乐" || tab === "有损音乐";
+  return tab === "高品质" || tab === "轻音乐";
 }
 
 function getTrackQuality(track: Track) {
@@ -4661,7 +4711,7 @@ function filterTracksForRole(tracks: Track[], role?: UserRole | null) {
 }
 
 function getLibraryTracksForTab(tab: MusicTab, tracks: Track[], sortKey: TrackSortKey | null) {
-  const filteredTracks = tab === "有损音乐" ? tracks.filter(isLossyMusicTrack) : tracks.filter(isLosslessMusicTrack);
+  const filteredTracks = tab === "轻音乐" ? tracks.filter(isLossyMusicTrack) : tracks.filter(isLosslessMusicTrack);
   return sortMusicTracks(filteredTracks, sortKey);
 }
 
@@ -5484,6 +5534,10 @@ function isAudioFileArea(area: AudioFileArea) {
   return area === "lossless_music" || area === "lossy_music";
 }
 
+function normalizeAudioManagerArea(area: AudioFileArea): AudioManagerArea {
+  return area === "lossy_music" ? "lossy_music" : "lossless_music";
+}
+
 function isLyricsFileArea(area: AudioFileArea) {
   return !isAudioFileArea(area);
 }
@@ -5625,7 +5679,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
         displayName,
         kind: "audio",
         status: "ignored",
-        reason: isLossyAudioArea(area) ? "当前区域只接受有损音乐" : "当前区域只接受无损音乐",
+        reason: isLossyAudioArea(area) ? "当前区域只接受轻音乐" : "当前区域只接受高品质",
         sizeBytes: file.size
       });
       continue;
@@ -5707,6 +5761,8 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
     const displayName = getDisplayFilename(relativePath);
     const baseKeys = getUploadLyricBaseKeys(relativePath);
     const audioStatus = baseKeys.map((key) => audioStatusByBase.get(key)).find(Boolean);
+    const hasReadyUploadAudio = audioStatus === "ready" && baseKeys.some((key) => readyAudioByBase.get(key));
+    const serverAudio = findServerAudioForLyric(serverAudioSet, relativePath);
     if (file.size > limits.max_lyric_file_bytes) {
       errorCount += 1;
       items.push({
@@ -5715,6 +5771,32 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
         kind: "lyrics",
         status: "error",
         reason: `超过单个歌词 ${formatBytes(limits.max_lyric_file_bytes)} 的限制`,
+        sizeBytes: file.size
+      });
+      continue;
+    }
+    if (!hasReadyUploadAudio && serverAudio) {
+      if (serverAudio.has_lyrics) {
+        duplicateCount += 1;
+        items.push({
+          relativePath,
+          displayName,
+          kind: "lyrics",
+          status: "duplicate",
+          reason: "服务器已有对应歌词文件，已跳过",
+          sizeBytes: file.size
+        });
+        continue;
+      }
+      readyLyricCount += 1;
+      totalUploadBytes += file.size;
+      uploadFiles.push(file);
+      items.push({
+        relativePath,
+        displayName,
+        kind: "lyrics",
+        status: "ready",
+        reason: `服务器已有 ${serverAudio.artist}-${serverAudio.title}，将补充歌词`,
         sizeBytes: file.size
       });
       continue;
@@ -5731,7 +5813,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
       });
       continue;
     }
-    if (audioStatus !== "ready" || !baseKeys.some((key) => readyAudioByBase.get(key))) {
+    if (!hasReadyUploadAudio) {
       if (audioStatus === "duplicate") {
         duplicateCount += 1;
       } else {
@@ -5912,7 +5994,8 @@ function buildServerAudioSetFromTracks(tracks: ServerManagedFile[], providedSet?
       artist,
       title,
       extension,
-      area: track.area
+      area: track.area,
+      has_lyrics: track.has_lyrics
     });
   }
   return entries;
@@ -5957,6 +6040,37 @@ function findServerAudioDuplicate(serverAudioSet: ServerAudioFile[], uploadRelat
   }
 
   return null;
+}
+
+function findServerAudioForLyric(serverAudioSet: ServerAudioFile[], lyricRelativePath: string) {
+  const lyricKeys = new Set(getUploadLyricBaseKeys(lyricRelativePath));
+  for (const serverAudio of serverAudioSet) {
+    if (getServerAudioBaseKeys(serverAudio).some((key) => lyricKeys.has(key))) {
+      return serverAudio;
+    }
+  }
+  return null;
+}
+
+function getServerAudioBaseKeys(serverAudio: ServerAudioFile) {
+  const keys = new Set<string>();
+  const filenameKey = normalizeImportBase(serverAudio.filename);
+  if (filenameKey) {
+    keys.add(filenameKey);
+  }
+  if (serverAudio.artist && serverAudio.title) {
+    const area = serverAudio.area && isAudioFileArea(serverAudio.area) ? serverAudio.area : "lossless_music";
+    const targetFilename = buildServerTargetFilenameForUpload(
+      { artist: serverAudio.artist, title: serverAudio.title },
+      area,
+      serverAudio.filename
+    );
+    const targetKey = normalizeImportBase(targetFilename);
+    if (targetKey) {
+      keys.add(targetKey);
+    }
+  }
+  return Array.from(keys);
 }
 
 function normalizeAudioImportComparisonText(value: string) {
@@ -10092,6 +10206,13 @@ function formatDateTime(value: string) {
   });
 }
 
+function formatLastActiveTime(value?: string | null) {
+  if (!value) {
+    return "从未活跃";
+  }
+  return formatDateTime(value) || "从未活跃";
+}
+
 function EmptyPage({
   page,
   authSession,
@@ -10114,10 +10235,12 @@ function EmptyPage({
   managedUsers,
   managedUsersMessage,
   managedUserForm,
+  managedUserDeleteTarget,
   isAudioFilesLoading,
   isAudioImporting,
   isManagedUsersLoading,
   isManagedUserSubmitting,
+  isManagedUserDeleting,
   audioFileMenu,
   audioRenameDraft,
   audioDeleteTarget,
@@ -10129,6 +10252,9 @@ function EmptyPage({
   onUpdateManagedUserForm,
   onSubmitManagedUser,
   onChangeManagedUserRole,
+  onOpenManagedUserDelete,
+  onCloseManagedUserDelete,
+  onConfirmManagedUserDelete,
   onChooseAudioFolder,
   onAudioFolderChange,
   onConfirmAudioImportPreflight,
@@ -10168,10 +10294,12 @@ function EmptyPage({
   managedUsers: ManagedUser[];
   managedUsersMessage: string;
   managedUserForm: ManagedUserFormState;
+  managedUserDeleteTarget: ManagedUser | null;
   isAudioFilesLoading: boolean;
   isAudioImporting: boolean;
   isManagedUsersLoading: boolean;
   isManagedUserSubmitting: boolean;
+  isManagedUserDeleting: boolean;
   audioFileMenu: AudioFileContextMenu | null;
   audioRenameDraft: AudioFileRenameDraft | null;
   audioDeleteTarget: ServerManagedFile | null;
@@ -10183,6 +10311,9 @@ function EmptyPage({
   onUpdateManagedUserForm: (field: keyof ManagedUserFormState, value: string) => void;
   onSubmitManagedUser: (event: FormEvent<HTMLFormElement>) => void;
   onChangeManagedUserRole: (user: ManagedUser, role: ManagedUserRequest["role"]) => void;
+  onOpenManagedUserDelete: (user: ManagedUser) => void;
+  onCloseManagedUserDelete: () => void;
+  onConfirmManagedUserDelete: () => void;
   onChooseAudioFolder: () => void;
   onAudioFolderChange: (files: FileList | null) => void;
   onConfirmAudioImportPreflight: () => void;
@@ -10304,12 +10435,17 @@ function EmptyPage({
                 users={managedUsers}
                 form={managedUserForm}
                 message={managedUsersMessage}
+                deleteTarget={managedUserDeleteTarget}
                 isLoading={isManagedUsersLoading}
                 isSubmitting={isManagedUserSubmitting}
+                isDeleting={isManagedUserDeleting}
                 onRefresh={onRefreshManagedUsers}
                 onChangeForm={onUpdateManagedUserForm}
                 onSubmit={onSubmitManagedUser}
                 onChangeRole={onChangeManagedUserRole}
+                onOpenDelete={onOpenManagedUserDelete}
+                onCloseDelete={onCloseManagedUserDelete}
+                onConfirmDelete={onConfirmManagedUserDelete}
               />
             ) : profileView === "settings" ? (
               <div className="profile-tab-panel">
@@ -10360,22 +10496,32 @@ function UserManagementPage({
   users,
   form,
   message,
+  deleteTarget,
   isLoading,
   isSubmitting,
+  isDeleting,
   onRefresh,
   onChangeForm,
   onSubmit,
-  onChangeRole
+  onChangeRole,
+  onOpenDelete,
+  onCloseDelete,
+  onConfirmDelete
 }: {
   users: ManagedUser[];
   form: ManagedUserFormState;
   message: string;
+  deleteTarget: ManagedUser | null;
   isLoading: boolean;
   isSubmitting: boolean;
+  isDeleting: boolean;
   onRefresh: () => void;
   onChangeForm: (field: keyof ManagedUserFormState, value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onChangeRole: (user: ManagedUser, role: ManagedUserRequest["role"]) => void;
+  onOpenDelete: (user: ManagedUser) => void;
+  onCloseDelete: () => void;
+  onConfirmDelete: () => void;
 }) {
   return (
     <div className="user-manager-page profile-tab-panel">
@@ -10433,7 +10579,9 @@ function UserManagementPage({
         <div className="user-manager-list-head" role="row">
           <span>用户</span>
           <span>角色</span>
+          <span>最后活跃</span>
           <span>创建时间</span>
+          <span>操作</span>
         </div>
         <div className="user-manager-list-body">
           {users.map((user) => (
@@ -10457,12 +10605,45 @@ function UserManagementPage({
                   ))}
                 </select>
               )}
+              {user.last_active_at ? (
+                <time className="user-manager-last-active" dateTime={user.last_active_at}>
+                  {formatLastActiveTime(user.last_active_at)}
+                </time>
+              ) : (
+                <span className="user-manager-last-active muted">{formatLastActiveTime(user.last_active_at)}</span>
+              )}
               <time dateTime={user.created_at}>{formatDateTime(user.created_at)}</time>
+              <div className="user-manager-actions">
+                {user.role === "super_admin" ? (
+                  <span className="user-manager-action-muted">不可删除</span>
+                ) : (
+                  <button type="button" disabled={isDeleting} onClick={() => onOpenDelete(user)}>
+                    删除
+                  </button>
+                )}
+              </div>
             </div>
           ))}
           {!users.length ? <div className="user-manager-empty">{isLoading ? "正在读取用户" : "暂无用户"}</div> : null}
         </div>
       </section>
+
+      {deleteTarget ? (
+        <div className="search-dialog-backdrop" role="presentation" onClick={onCloseDelete}>
+          <div className="search-dialog user-delete-dialog" role="dialog" aria-modal="true" aria-label="删除用户" onClick={(event) => event.stopPropagation()}>
+            <h2>删除用户</h2>
+            <p>{deleteTarget.nickname}（{formatProfilePhone(deleteTarget.phone)}）</p>
+            <div className="search-actions">
+              <button type="button" disabled={isDeleting} onClick={onCloseDelete}>
+                取消
+              </button>
+              <button className="primary danger" type="button" disabled={isDeleting} onClick={onConfirmDelete}>
+                {isDeleting ? "删除中" : "确认删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -10613,7 +10794,7 @@ function AudioFileManagerPage({
           }}
         />
         <button className="audio-manager-primary-button" type="button" disabled={isImporting} onClick={onChooseFolder}>
-          {isImporting ? "导入中" : activeArea.kind === "lyrics" ? "选择歌词文件夹" : "选择音乐文件夹"}
+          {isImporting ? "导入中" : "选择音乐文件夹"}
         </button>
         <button className="audio-manager-secondary-button" type="button" disabled={isLoading || isImporting} onClick={refreshAndClearAudioSearch}>
           刷新

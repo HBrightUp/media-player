@@ -478,6 +478,12 @@ export function updateManagedUserRole(userID: number, role: ManagedUserRequest["
   });
 }
 
+export function deleteManagedUser(userID: number): Promise<{ ok: boolean; user: ManagedUser }> {
+  return request<{ ok: boolean; user: ManagedUser }>(`/api/admin/users/${encodeURIComponent(String(userID))}`, {
+    method: "DELETE"
+  });
+}
+
 export function sendPresenceHeartbeat(payload: PresenceRequest): Promise<PresenceResponse> {
   return request<PresenceResponse>("/api/presence/heartbeat", {
     method: "POST",

@@ -34,7 +34,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		users, err := s.store.ListUsers(r.Context())
+		users, err := s.store.ListUsersWithLastActive(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "读取用户列表失败")
 			return
@@ -96,11 +96,8 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminUserRoute(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireSuperAdmin(w, r); !ok {
-		return
-	}
-	if r.Method != http.MethodPatch {
-		methodNotAllowed(w)
+	operator, ok := s.requireSuperAdmin(w, r)
+	if !ok {
 		return
 	}
 	userID, ok := parseAdminUserID(r.URL.Path)
@@ -109,6 +106,17 @@ func (s *Server) handleAdminUserRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	switch r.Method {
+	case http.MethodPatch:
+		s.updateAdminUserRole(w, r, userID)
+	case http.MethodDelete:
+		s.deleteAdminUser(w, r, operator, userID)
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *Server) updateAdminUserRole(w http.ResponseWriter, r *http.Request, userID int64) {
 	var request adminUserRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式不正确")
@@ -146,6 +154,41 @@ func (s *Server) handleAdminUserRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": publicManagedUser(user)})
 }
 
+func (s *Server) deleteAdminUser(w http.ResponseWriter, r *http.Request, operator models.User, userID int64) {
+	if operator.ID == userID {
+		writeError(w, http.StatusForbidden, "不能删除当前登录的超级管理员")
+		return
+	}
+
+	existing, err := s.store.GetUserByID(r.Context(), userID)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取用户失败")
+		return
+	}
+	if models.NormalizeUserRole(existing.Role) == models.UserRoleSuperAdmin {
+		writeError(w, http.StatusForbidden, "不能删除超级管理员")
+		return
+	}
+
+	deleted, err := s.store.DeleteUser(r.Context(), userID)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "删除用户失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":   true,
+		"user": publicManagedUser(deleted),
+	})
+}
+
 func validateNickname(value string) (string, error) {
 	nickname := strings.TrimSpace(value)
 	if nickname == "" {
@@ -180,13 +223,14 @@ func publicManagedUsers(users []models.User) []map[string]any {
 
 func publicManagedUser(user models.User) map[string]any {
 	return map[string]any{
-		"id":           user.ID,
-		"phone":        user.Phone,
-		"country_code": user.CountryCode,
-		"nickname":     user.Nickname,
-		"role":         models.NormalizeUserRole(user.Role),
-		"created_at":   user.CreatedAt,
-		"updated_at":   user.UpdatedAt,
+		"id":             user.ID,
+		"phone":          user.Phone,
+		"country_code":   user.CountryCode,
+		"nickname":       user.Nickname,
+		"role":           models.NormalizeUserRole(user.Role),
+		"created_at":     user.CreatedAt,
+		"updated_at":     user.UpdatedAt,
+		"last_active_at": user.LastActiveAt,
 	}
 }
 

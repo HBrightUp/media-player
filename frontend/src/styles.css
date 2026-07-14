@@ -4242,7 +4242,7 @@ form.search-dialog .search-actions button {
 .user-manager-list-head,
 .user-manager-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) 136px 112px;
+  grid-template-columns: minmax(140px, 1fr) 128px 108px 104px 72px;
   align-items: center;
   gap: 10px;
 }
@@ -4287,16 +4287,55 @@ form.search-dialog .search-actions button {
 }
 
 .user-manager-user span,
-.user-manager-row time {
+.user-manager-row time,
+.user-manager-last-active {
   color: rgba(226, 246, 249, 0.58);
   font-size: 12px;
   font-weight: 720;
+}
+
+.user-manager-last-active.muted {
+  color: rgba(226, 246, 249, 0.36);
 }
 
 .user-manager-row select {
   width: 126px;
   padding: 0 9px;
   background-color: rgba(255, 255, 255, 0.07);
+}
+
+.user-manager-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.user-manager-actions button {
+  min-width: 52px;
+  height: 30px;
+  padding: 0 10px;
+  color: rgba(255, 159, 153, 0.94);
+  background: rgba(255, 91, 82, 0.1);
+  border: 1px solid rgba(255, 159, 153, 0.18);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.user-manager-actions button:hover:not(:disabled) {
+  background: rgba(255, 91, 82, 0.16);
+}
+
+.user-manager-action-muted {
+  color: rgba(226, 246, 249, 0.34);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.user-delete-dialog p {
+  margin: 0;
+  color: rgba(226, 246, 249, 0.72);
+  font-size: 14px;
+  font-weight: 720;
 }
 
 .user-role-badge {
@@ -4331,6 +4370,10 @@ form.search-dialog .search-actions button {
 
   .user-manager-row {
     align-items: start;
+  }
+
+  .user-manager-actions {
+    justify-content: flex-start;
   }
 }
 

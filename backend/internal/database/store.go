@@ -156,6 +156,41 @@ func (s *Store) ListUsers(ctx context.Context) ([]models.User, error) {
 	return users, rows.Err()
 }
 
+func (s *Store) ListUsersWithLastActive(ctx context.Context) ([]models.User, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			u.id,
+			u.phone,
+			u.country_code,
+			u.nickname,
+			u.role,
+			u.password_hash,
+			u.password_salt,
+			u.terms_accepted_at,
+			u.created_at,
+			u.updated_at,
+			MAX(a.last_seen_at) AS last_active_at
+		FROM users u
+		LEFT JOIN auth_sessions a ON a.user_id = u.id
+		GROUP BY u.id
+		ORDER BY u.id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]models.User, 0)
+	for rows.Next() {
+		user, err := scanUserWithLastActive(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
 func (s *Store) UpdateUserRole(ctx context.Context, userID int64, role string) (models.User, error) {
 	row := s.pool.QueryRow(ctx, `
 		UPDATE users
@@ -164,6 +199,15 @@ func (s *Store) UpdateUserRole(ctx context.Context, userID int64, role string) (
 		WHERE id = $1
 		RETURNING id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
 	`, userID, models.NormalizeUserRole(role))
+	return scanUser(row)
+}
+
+func (s *Store) DeleteUser(ctx context.Context, userID int64) (models.User, error) {
+	row := s.pool.QueryRow(ctx, `
+		DELETE FROM users
+		WHERE id = $1
+		RETURNING id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+	`, userID)
 	return scanUser(row)
 }
 
@@ -758,6 +802,29 @@ func scanUser(row rowScanner) (models.User, error) {
 		&user.UpdatedAt,
 	)
 	user.Role = models.NormalizeUserRole(user.Role)
+	return user, err
+}
+
+func scanUserWithLastActive(row rowScanner) (models.User, error) {
+	var user models.User
+	var lastActiveAt sql.NullTime
+	err := row.Scan(
+		&user.ID,
+		&user.Phone,
+		&user.CountryCode,
+		&user.Nickname,
+		&user.Role,
+		&user.PasswordHash,
+		&user.PasswordSalt,
+		&user.TermsAcceptedAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&lastActiveAt,
+	)
+	user.Role = models.NormalizeUserRole(user.Role)
+	if lastActiveAt.Valid {
+		user.LastActiveAt = &lastActiveAt.Time
+	}
 	return user, err
 }
 
