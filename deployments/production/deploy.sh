@@ -35,5 +35,25 @@ mkdir -p "$LOSSY_MUSIC_DIRECTORY"
 mkdir -p "$LOSSY_LYRICS_DIRECTORY"
 mkdir -p "$SHARED_LYRICS_DIRECTORY"
 
+MEDIA_PLAYER_FILE_OWNER="${MEDIA_PLAYER_FILE_OWNER:-}"
+if [ -z "$MEDIA_PLAYER_FILE_OWNER" ]; then
+  if [ -e "$LOSSLESS_MUSIC_DIRECTORY" ]; then
+    MEDIA_PLAYER_FILE_OWNER="$(stat -c '%u:%g' "$LOSSLESS_MUSIC_DIRECTORY")"
+  else
+    MEDIA_PLAYER_FILE_OWNER="1000:1000"
+  fi
+fi
+
+for directory in \
+  "${MUSIC_DIRECTORY:-/opt/media-player/music}" \
+  "${LYRICS_DIRECTORY:-/opt/media-player/lyrics}" \
+  "$LOSSLESS_MUSIC_DIRECTORY" \
+  "$LOSSLESS_LYRICS_DIRECTORY" \
+  "$LOSSY_MUSIC_DIRECTORY" \
+  "$LOSSY_LYRICS_DIRECTORY" \
+  "$SHARED_LYRICS_DIRECTORY"; do
+  chown "$MEDIA_PLAYER_FILE_OWNER" "$directory"
+done
+
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
