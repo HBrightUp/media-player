@@ -37,10 +37,31 @@ var supportedAudioFormats = map[string]bool{
 	".wav":  true,
 }
 
+var losslessAudioFormats = map[string]bool{
+	".aif":  true,
+	".aiff": true,
+	".flac": true,
+	".wav":  true,
+}
+
+var lossyAudioFormats = map[string]bool{
+	".aac": true,
+	".m4a": true,
+	".mp3": true,
+	".ogg": true,
+}
+
 type Scanner struct {
-	store      *database.Store
-	lyricsRoot string
-	mu         sync.Mutex
+	store       *database.Store
+	lyricsRoots []string
+	mu          sync.Mutex
+}
+
+type ScanRoot struct {
+	MusicRoot   string
+	LyricsRoots []string
+	Quality     string
+	Formats     map[string]bool
 }
 
 type tags struct {
@@ -52,88 +73,143 @@ type tags struct {
 }
 
 func NewScanner(store *database.Store, lyricsRoot ...string) *Scanner {
-	root := ""
-	if len(lyricsRoot) > 0 {
-		root = strings.TrimSpace(lyricsRoot[0])
+	roots := make([]string, 0, len(lyricsRoot))
+	for _, root := range lyricsRoot {
+		root = strings.TrimSpace(root)
 		if root != "" {
 			if absolute, err := filepath.Abs(root); err == nil {
 				root = absolute
 			}
+			roots = append(roots, root)
 		}
 	}
-	return &Scanner{store: store, lyricsRoot: root}
+	return &Scanner{store: store, lyricsRoots: roots}
 }
 
 func (s *Scanner) Scan(ctx context.Context, root string) (models.ScanResult, error) {
-	return s.scanFormats(ctx, root, supportedAudioFormats)
+	return s.ScanRoots(ctx, []ScanRoot{{
+		MusicRoot:   root,
+		LyricsRoots: s.lyricsRoots,
+		Formats:     supportedAudioFormats,
+	}})
 }
 
 func (s *Scanner) ScanMP3(ctx context.Context, root string) (models.ScanResult, error) {
-	return s.scanFormats(ctx, root, map[string]bool{".mp3": true})
+	return s.ScanRoots(ctx, []ScanRoot{{
+		MusicRoot:   root,
+		LyricsRoots: s.lyricsRoots,
+		Quality:     models.TrackQualityLossy,
+		Formats:     map[string]bool{".mp3": true},
+	}})
 }
 
-func (s *Scanner) scanFormats(ctx context.Context, root string, formats map[string]bool) (models.ScanResult, error) {
+func LosslessScanRoot(musicRoot string, lyricsRoots ...string) ScanRoot {
+	return ScanRoot{
+		MusicRoot:   musicRoot,
+		LyricsRoots: lyricsRoots,
+		Quality:     models.TrackQualityLossless,
+		Formats:     losslessAudioFormats,
+	}
+}
+
+func LossyScanRoot(musicRoot string, lyricsRoots ...string) ScanRoot {
+	return ScanRoot{
+		MusicRoot:   musicRoot,
+		LyricsRoots: lyricsRoots,
+		Quality:     models.TrackQualityLossy,
+		Formats:     lossyAudioFormats,
+	}
+}
+
+func (s *Scanner) ScanRoots(ctx context.Context, specs []ScanRoot) (models.ScanResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return models.ScanResult{}, fmt.Errorf("resolve music directory: %w", err)
-	}
-
-	info, err := os.Stat(absRoot)
-	if err != nil {
-		return models.ScanResult{}, fmt.Errorf("read music directory: %w", err)
-	}
-	if !info.IsDir() {
-		return models.ScanResult{}, fmt.Errorf("%s is not a directory", absRoot)
-	}
-
-	result := models.ScanResult{RootPath: absRoot}
+	result := models.ScanResult{}
+	rootLabels := make([]string, 0, len(specs))
 	seenPaths := make([]string, 0)
 	traversalIncomplete := false
+	scannedRoots := 0
 
-	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			recordScanError(&result, path, walkErr)
-			if entry == nil || entry.IsDir() {
-				traversalIncomplete = true
+	for _, spec := range specs {
+		musicRoot := strings.TrimSpace(spec.MusicRoot)
+		if musicRoot == "" {
+			continue
+		}
+		absRoot, err := filepath.Abs(musicRoot)
+		if err != nil {
+			recordScanError(&result, musicRoot, fmt.Errorf("resolve music directory: %w", err))
+			continue
+		}
+		info, err := os.Stat(absRoot)
+		if err != nil {
+			recordScanError(&result, absRoot, fmt.Errorf("read music directory: %w", err))
+			continue
+		}
+		if !info.IsDir() {
+			recordScanError(&result, absRoot, fmt.Errorf("%s is not a directory", absRoot))
+			continue
+		}
+
+		formats := spec.Formats
+		if len(formats) == 0 {
+			formats = supportedAudioFormats
+		}
+		quality := strings.TrimSpace(strings.ToLower(spec.Quality))
+		lyricsRoots := normalizeLyricsRoots(spec.LyricsRoots)
+		labelQuality := quality
+		if labelQuality == "" {
+			labelQuality = "mixed"
+		}
+		rootLabels = append(rootLabels, fmt.Sprintf("%s:%s", labelQuality, absRoot))
+		scannedRoots++
+
+		err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				recordScanError(&result, path, walkErr)
+				if entry == nil || entry.IsDir() {
+					traversalIncomplete = true
+				}
+				return nil
 			}
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if entry.IsDir() {
-			return nil
-		}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if entry.IsDir() {
+				return nil
+			}
 
-		ext := strings.ToLower(filepath.Ext(path))
-		if !formats[ext] {
-			return nil
-		}
-		result.Found++
-		seenPaths = append(seenPaths, path)
+			ext := strings.ToLower(filepath.Ext(path))
+			if !formats[ext] {
+				return nil
+			}
+			result.Found++
+			seenPaths = append(seenPaths, path)
 
-		track, lyrics, err := buildTrack(absRoot, path, ext, s.lyricsRoot)
+			track, lyrics, err := buildTrack(absRoot, path, ext, lyricsRoots, quality)
+			if err != nil {
+				recordScanError(&result, path, err)
+				return nil
+			}
+			trackID, err := s.store.UpsertTrack(ctx, track)
+			if err != nil {
+				recordScanError(&result, path, err)
+				return nil
+			}
+			if err := s.store.ReplaceTrackLyrics(ctx, trackID, lyrics); err != nil {
+				recordScanError(&result, path, err)
+				return nil
+			}
+			result.Imported++
+			return nil
+		})
 		if err != nil {
-			recordScanError(&result, path, err)
-			return nil
+			return result, err
 		}
-		trackID, err := s.store.UpsertTrack(ctx, track)
-		if err != nil {
-			recordScanError(&result, path, err)
-			return nil
-		}
-		if err := s.store.ReplaceTrackLyrics(ctx, trackID, lyrics); err != nil {
-			recordScanError(&result, path, err)
-			return nil
-		}
-		result.Imported++
-		return nil
-	})
-	if err != nil {
-		return result, err
+	}
+	result.RootPath = strings.Join(rootLabels, ";")
+	if scannedRoots == 0 {
+		return result, errors.New("music directory is required")
 	}
 	if traversalIncomplete {
 		return result, nil
@@ -152,7 +228,43 @@ func recordScanError(result *models.ScanResult, path string, err error) {
 	result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", path, err))
 }
 
-func buildTrack(root, path, ext, lyricsRoot string) (models.Track, *models.TrackLyrics, error) {
+func normalizeTrackQuality(quality string) string {
+	switch strings.TrimSpace(strings.ToLower(quality)) {
+	case models.TrackQualityLossy:
+		return models.TrackQualityLossy
+	default:
+		return models.TrackQualityLossless
+	}
+}
+
+func trackQualityFromExtension(ext string) string {
+	if lossyAudioFormats[strings.ToLower(ext)] {
+		return models.TrackQualityLossy
+	}
+	return models.TrackQualityLossless
+}
+
+func normalizeLyricsRoots(roots []string) []string {
+	normalized := make([]string, 0, len(roots))
+	seen := make(map[string]bool, len(roots))
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if absolute, err := filepath.Abs(root); err == nil {
+			root = absolute
+		}
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		normalized = append(normalized, root)
+	}
+	return normalized
+}
+
+func buildTrack(root, path, ext string, lyricsRoots []string, quality string) (models.Track, *models.TrackLyrics, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return models.Track{}, nil, err
@@ -166,7 +278,7 @@ func buildTrack(root, path, ext, lyricsRoot string) (models.Track, *models.Track
 	artist := firstAudioNameText(metadata.Artist, nameMetadata.Artist, "未知歌手")
 	album := firstText(metadata.Album, "未知专辑")
 	lyrics := firstTrackLyrics(
-		readLyricsDirectory(root, path, lyricsRoot),
+		readLyricsDirectories(root, path, lyricsRoots),
 		readSidecarLyrics(path),
 		trackLyricsFromLines(metadata.Lyrics, "embedded", ""),
 	)
@@ -184,6 +296,7 @@ func buildTrack(root, path, ext, lyricsRoot string) (models.Track, *models.Track
 		Artist:       artist,
 		Album:        album,
 		Format:       strings.TrimPrefix(ext, "."),
+		Quality:      normalizeTrackQuality(firstText(quality, trackQualityFromExtension(ext))),
 		SizeBytes:    info.Size(),
 		ModifiedAt:   info.ModTime(),
 		Cover:        metadata.Cover,
@@ -367,6 +480,15 @@ func compactLyrics(lines []models.LyricLine) []models.LyricLine {
 	return result
 }
 
+func readLyricsDirectories(root, audioPath string, lyricsRoots []string) *models.TrackLyrics {
+	for _, lyricsRoot := range lyricsRoots {
+		if lyrics := readLyricsDirectory(root, audioPath, lyricsRoot); lyrics != nil {
+			return lyrics
+		}
+	}
+	return nil
+}
+
 func readLyricsDirectory(root, audioPath, lyricsRoot string) *models.TrackLyrics {
 	if lyricsRoot == "" {
 		return nil
@@ -377,23 +499,84 @@ func readLyricsDirectory(root, audioPath, lyricsRoot string) *models.TrackLyrics
 	}
 	baseRelativePath := strings.TrimSuffix(relativePath, filepath.Ext(relativePath))
 	baseFilename := strings.TrimSuffix(filepath.Base(audioPath), filepath.Ext(audioPath))
-	candidates := []string{
-		filepath.Join(lyricsRoot, baseRelativePath+".lrc"),
-		filepath.Join(lyricsRoot, baseRelativePath+".LRC"),
-		filepath.Join(lyricsRoot, baseFilename+".lrc"),
-		filepath.Join(lyricsRoot, baseFilename+".LRC"),
-	}
+	candidates := lyricsPathCandidates(lyricsRoot, baseRelativePath, baseFilename)
 	for _, candidate := range candidates {
 		if lyrics := readLRCFile(candidate, "lyrics_directory"); lyrics != nil {
+			return lyrics
+		}
+	}
+	lyricsDir := filepath.Join(lyricsRoot, filepath.Dir(baseRelativePath))
+	if lyrics := readTitleSuffixLyrics(lyricsDir, baseFilename); lyrics != nil {
+		return lyrics
+	}
+	return nil
+}
+
+func lyricsPathCandidates(lyricsRoot string, baseRelativePath string, baseFilename string) []string {
+	bases := []string{baseRelativePath, baseFilename}
+	extensions := []string{".lrc", ".LRC", ".txt", ".TXT"}
+	candidates := make([]string, 0, len(bases)*len(extensions))
+	seen := make(map[string]bool, len(bases)*len(extensions))
+	for _, base := range bases {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		for _, extension := range extensions {
+			candidate := filepath.Join(lyricsRoot, base+extension)
+			if seen[candidate] {
+				continue
+			}
+			seen[candidate] = true
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+func readTitleSuffixLyrics(lyricsDir string, baseFilename string) *models.TrackLyrics {
+	entries, err := os.ReadDir(lyricsDir)
+	if err != nil {
+		return nil
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		extension := strings.ToLower(filepath.Ext(name))
+		if extension != ".lrc" && extension != ".txt" {
+			continue
+		}
+		base := strings.TrimSuffix(name, filepath.Ext(name))
+		if !isLyricsTitleMatch(base, baseFilename) {
+			continue
+		}
+		if lyrics := readLRCFile(filepath.Join(lyricsDir, name), "lyrics_directory"); lyrics != nil {
 			return lyrics
 		}
 	}
 	return nil
 }
 
+func isLyricsTitleMatch(lyricsBase string, audioBase string) bool {
+	lyricsBase = strings.TrimSpace(lyricsBase)
+	audioBase = strings.TrimSpace(audioBase)
+	if lyricsBase == "" || audioBase == "" {
+		return false
+	}
+	if strings.EqualFold(lyricsBase, audioBase) {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(lyricsBase), "-"+strings.ToLower(audioBase))
+}
+
 func readSidecarLyrics(path string) *models.TrackLyrics {
 	base := strings.TrimSuffix(path, filepath.Ext(path))
-	for _, candidate := range []string{base + ".lrc", base + ".LRC"} {
+	for _, candidate := range []string{base + ".lrc", base + ".LRC", base + ".txt", base + ".TXT"} {
 		if lyrics := readLRCFile(candidate, "sidecar"); lyrics != nil {
 			return lyrics
 		}

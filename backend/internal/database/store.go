@@ -71,36 +71,45 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) (models.Libra
 }
 
 func (s *Store) CreateUser(ctx context.Context, user models.User) (models.User, error) {
-	err := s.pool.QueryRow(ctx, `
+	if user.CountryCode == "" {
+		user.CountryCode = "+86"
+	}
+	user.Role = models.NormalizeUserRole(user.Role)
+	row := s.pool.QueryRow(ctx, `
+		WITH guard AS (
+			SELECT pg_advisory_xact_lock(918273645)
+		),
+		candidate_role AS (
+			SELECT
+				CASE
+					WHEN NOT EXISTS (SELECT 1 FROM users) THEN 'super_admin'
+					ELSE $4
+				END AS role
+			FROM guard
+		)
 		INSERT INTO users (
 			phone,
 			country_code,
 			nickname,
+			role,
 			password_hash,
 			password_salt,
 			terms_accepted_at,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, now(), now())
+		SELECT $1, $2, $3, role, $5, $6, now(), now()
+		FROM candidate_role
 		ON CONFLICT (phone) DO NOTHING
-		RETURNING id, phone, country_code, nickname, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+		RETURNING id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
 	`,
 		user.Phone,
 		user.CountryCode,
 		user.Nickname,
+		user.Role,
 		user.PasswordHash,
 		user.PasswordSalt,
-	).Scan(
-		&user.ID,
-		&user.Phone,
-		&user.CountryCode,
-		&user.Nickname,
-		&user.PasswordHash,
-		&user.PasswordSalt,
-		&user.TermsAcceptedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
 	)
+	user, err := scanUser(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return models.User{}, ErrUserAlreadyExists
 	}
@@ -108,43 +117,54 @@ func (s *Store) CreateUser(ctx context.Context, user models.User) (models.User, 
 }
 
 func (s *Store) GetUserByPhone(ctx context.Context, phone string) (models.User, error) {
-	var user models.User
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, phone, country_code, nickname, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
 		FROM users
 		WHERE phone = $1
-	`, phone).Scan(
-		&user.ID,
-		&user.Phone,
-		&user.CountryCode,
-		&user.Nickname,
-		&user.PasswordHash,
-		&user.PasswordSalt,
-		&user.TermsAcceptedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-	return user, err
+	`, phone)
+	return scanUser(row)
 }
 
 func (s *Store) GetUserByID(ctx context.Context, id int64) (models.User, error) {
-	var user models.User
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, phone, country_code, nickname, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
 		FROM users
 		WHERE id = $1
-	`, id).Scan(
-		&user.ID,
-		&user.Phone,
-		&user.CountryCode,
-		&user.Nickname,
-		&user.PasswordHash,
-		&user.PasswordSalt,
-		&user.TermsAcceptedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-	return user, err
+	`, id)
+	return scanUser(row)
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]models.User, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+		FROM users
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]models.User, 0)
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
+func (s *Store) UpdateUserRole(ctx context.Context, userID int64, role string) (models.User, error) {
+	row := s.pool.QueryRow(ctx, `
+		UPDATE users
+		SET role = $2,
+			updated_at = now()
+		WHERE id = $1
+		RETURNING id, phone, country_code, nickname, role, password_hash, password_salt, terms_accepted_at, created_at, updated_at
+	`, userID, models.NormalizeUserRole(role))
+	return scanUser(row)
 }
 
 func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, error) {
@@ -167,6 +187,7 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			artist,
 			album,
 			format,
+			quality,
 			size_bytes,
 			duration_seconds,
 			modified_at,
@@ -175,7 +196,7 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			cover_hash,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
 		ON CONFLICT (path)
 		DO UPDATE SET
 			relative_path = EXCLUDED.relative_path,
@@ -184,6 +205,7 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 			artist = EXCLUDED.artist,
 			album = EXCLUDED.album,
 			format = EXCLUDED.format,
+			quality = EXCLUDED.quality,
 			size_bytes = EXCLUDED.size_bytes,
 			duration_seconds = EXCLUDED.duration_seconds,
 			modified_at = EXCLUDED.modified_at,
@@ -200,6 +222,7 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 		track.Artist,
 		track.Album,
 		track.Format,
+		normalizedTrackQuality(track.Quality),
 		track.SizeBytes,
 		track.DurationSeconds,
 		track.ModifiedAt,
@@ -234,6 +257,7 @@ func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
 			artist,
 			album,
 			format,
+			quality,
 			size_bytes,
 			duration_seconds,
 			modified_at,
@@ -241,6 +265,42 @@ func (s *Store) ListTracks(ctx context.Context) ([]models.Track, error) {
 		FROM tracks
 		ORDER BY lower(title), lower(artist), id
 	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tracks := make([]models.Track, 0)
+	for rows.Next() {
+		track, err := scanTrack(rows)
+		if err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, track)
+	}
+	return tracks, rows.Err()
+}
+
+func (s *Store) ListTracksByQuality(ctx context.Context, quality string) ([]models.Track, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id,
+			path,
+			relative_path,
+			filename,
+			title,
+			artist,
+			album,
+			format,
+			quality,
+			size_bytes,
+			duration_seconds,
+			modified_at,
+			(cover_mime_type IS NOT NULL AND cover_mime_type <> '' AND cover_data IS NOT NULL) AS has_cover
+		FROM tracks
+		WHERE quality = $1
+		ORDER BY lower(title), lower(artist), id
+	`, normalizedTrackQuality(quality))
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +328,7 @@ func (s *Store) ListFavoriteTracks(ctx context.Context, userID int64) ([]models.
 			t.artist,
 			t.album,
 			t.format,
+			t.quality,
 			t.size_bytes,
 			t.duration_seconds,
 			t.modified_at,
@@ -304,6 +365,7 @@ func (s *Store) ListFavoriteTracksByCategory(ctx context.Context, userID, catego
 			t.artist,
 			t.album,
 			t.format,
+			t.quality,
 			t.size_bytes,
 			t.duration_seconds,
 			t.modified_at,
@@ -648,6 +710,7 @@ func (s *Store) GetTrack(ctx context.Context, id int64) (models.Track, error) {
 			artist,
 			album,
 			format,
+			quality,
 			size_bytes,
 			duration_seconds,
 			modified_at,
@@ -680,6 +743,33 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+func scanUser(row rowScanner) (models.User, error) {
+	var user models.User
+	err := row.Scan(
+		&user.ID,
+		&user.Phone,
+		&user.CountryCode,
+		&user.Nickname,
+		&user.Role,
+		&user.PasswordHash,
+		&user.PasswordSalt,
+		&user.TermsAcceptedAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	user.Role = models.NormalizeUserRole(user.Role)
+	return user, err
+}
+
+func normalizedTrackQuality(quality string) string {
+	switch quality {
+	case models.TrackQualityLossy:
+		return models.TrackQualityLossy
+	default:
+		return models.TrackQualityLossless
+	}
+}
+
 func scanTrack(row rowScanner) (models.Track, error) {
 	var track models.Track
 	var duration sql.NullInt64
@@ -693,6 +783,7 @@ func scanTrack(row rowScanner) (models.Track, error) {
 		&track.Artist,
 		&track.Album,
 		&track.Format,
+		&track.Quality,
 		&track.SizeBytes,
 		&duration,
 		&track.ModifiedAt,

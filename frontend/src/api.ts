@@ -1,9 +1,11 @@
 import type {
   AudioFileAccessResponse,
+  AudioFileArea,
   AudioFileImportReport,
   AudioFileRenameRequest,
   AudioFilesResponse,
   AuthResponse,
+  AuthUser,
   FavoriteCategory,
   FavoriteCategoryRequest,
   FavoriteCategoryTrackRequest,
@@ -13,6 +15,8 @@ import type {
   LibrarySetting,
   LibrarySettingResponse,
   LoginRequest,
+  ManagedUser,
+  ManagedUserRequest,
   NoteFolder,
   NoteFolderRequest,
   PresenceRequest,
@@ -44,6 +48,15 @@ type GrowthNotesResponse = {
 };
 type GrowthNoteResponse = {
   note: GrowthNote;
+};
+type ManagedUsersResponse = {
+  users: ManagedUser[];
+};
+type ManagedUserResponse = {
+  user: ManagedUser;
+};
+type AuthUserResponse = {
+  user: AuthUser;
 };
 type RequestOptions = {
   timeoutMs?: number;
@@ -159,16 +172,26 @@ function parseRetryAfterSeconds(value: string | null) {
   return Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
-export function streamURL(track: Track): string {
-  return `${API_BASE}${track.stream_url}`;
+export function streamURL(track: Track, sessionToken?: string): string {
+  const url = `${API_BASE}${track.stream_url}`;
+  const token = sessionToken?.trim();
+  if (!token) {
+    return url;
+  }
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}session_token=${encodeURIComponent(token)}`;
 }
 
 export function coverURL(track: Track): string {
   return track.cover_url ? `${API_BASE}${track.cover_url}` : "";
 }
 
-export function getTracks(): Promise<TracksResponse> {
-  return request<TracksResponse>("/api/tracks");
+export function getTracks(quality?: "lossless" | "lossy"): Promise<TracksResponse> {
+  const params = new URLSearchParams();
+  if (quality) {
+    params.set("quality", quality);
+  }
+  return request<TracksResponse>(params.size ? `/api/tracks?${params.toString()}` : "/api/tracks");
 }
 
 export function refreshTracks(userID: number): Promise<TracksResponse> {
@@ -272,8 +295,8 @@ export function authorizeAudioFileAccess(userID: number, password: string): Prom
   });
 }
 
-export function getAudioFiles(userID: number, accessToken: string): Promise<AudioFilesResponse> {
-  return request<AudioFilesResponse>(`/api/audio-files?user_id=${encodeURIComponent(String(userID))}`, {
+export function getAudioFiles(userID: number, accessToken: string, area: AudioFileArea): Promise<AudioFilesResponse> {
+  return request<AudioFilesResponse>(`/api/audio-files?user_id=${encodeURIComponent(String(userID))}&area=${encodeURIComponent(area)}`, {
     headers: audioAccessHeaders(accessToken)
   });
 }
@@ -282,6 +305,7 @@ export function importAudioFolder(
   userID: number,
   files: File[],
   accessToken: string,
+  area: AudioFileArea,
   onProgress?: (snapshot: UploadProgressSnapshot) => void
 ): Promise<AudioFileImportReport> {
   const formData = new FormData();
@@ -299,7 +323,7 @@ export function importAudioFolder(
   });
 
   return uploadFormData<AudioFileImportReport>(
-    `/api/audio-files/import?user_id=${encodeURIComponent(String(userID))}`,
+    `/api/audio-files/import?user_id=${encodeURIComponent(String(userID))}&area=${encodeURIComponent(area)}`,
     formData,
     audioAccessHeaders(accessToken),
     onProgress,
@@ -370,8 +394,8 @@ function uploadFormData<T>(
   });
 }
 
-export function renameAudioFile(trackID: number, payload: AudioFileRenameRequest, accessToken: string): Promise<{ ok: boolean; scan: ScanResult }> {
-  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(payload.user_id))}`, {
+export function renameAudioFile(trackID: number, payload: AudioFileRenameRequest, accessToken: string, area: AudioFileArea): Promise<{ ok: boolean; scan: ScanResult }> {
+  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(payload.user_id))}&area=${encodeURIComponent(area)}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
     headers: audioAccessHeaders(accessToken)
@@ -380,13 +404,36 @@ export function renameAudioFile(trackID: number, payload: AudioFileRenameRequest
   });
 }
 
-export function deleteAudioFile(userID: number, trackID: number, accessToken: string): Promise<{ ok: boolean; scan: ScanResult }> {
-  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(userID))}`, {
+export function renameLyricsFile(payload: AudioFileRenameRequest, accessToken: string, area: AudioFileArea): Promise<{ ok: boolean; scan: ScanResult }> {
+  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/lyrics?user_id=${encodeURIComponent(String(payload.user_id))}&area=${encodeURIComponent(area)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    headers: audioAccessHeaders(accessToken)
+  }, {
+    timeoutMs: scanRequestTimeoutMs
+  });
+}
+
+export function deleteAudioFile(userID: number, trackID: number, accessToken: string, area: AudioFileArea): Promise<{ ok: boolean; scan: ScanResult }> {
+  return request<{ ok: boolean; scan: ScanResult }>(`/api/audio-files/${encodeURIComponent(String(trackID))}?user_id=${encodeURIComponent(String(userID))}&area=${encodeURIComponent(area)}`, {
     method: "DELETE",
     headers: audioAccessHeaders(accessToken)
   }, {
     timeoutMs: scanRequestTimeoutMs
   });
+}
+
+export function deleteLyricsFile(userID: number, relativePath: string, accessToken: string, area: AudioFileArea): Promise<{ ok: boolean; scan: ScanResult }> {
+  return request<{ ok: boolean; scan: ScanResult }>(
+    `/api/audio-files/lyrics?user_id=${encodeURIComponent(String(userID))}&area=${encodeURIComponent(area)}&path=${encodeURIComponent(relativePath)}`,
+    {
+      method: "DELETE",
+      headers: audioAccessHeaders(accessToken)
+    },
+    {
+      timeoutMs: scanRequestTimeoutMs
+    }
+  );
 }
 
 export function loginUser(payload: LoginRequest): Promise<AuthResponse> {
@@ -404,6 +451,30 @@ export function logoutUser(): Promise<{ ok: boolean }> {
     body: JSON.stringify({})
   }, {
     timeoutMs: authRequestTimeoutMs
+  });
+}
+
+export function getCurrentUser(): Promise<AuthUserResponse> {
+  return request<AuthUserResponse>("/api/auth/me", undefined, {
+    timeoutMs: authRequestTimeoutMs
+  });
+}
+
+export function getManagedUsers(): Promise<ManagedUsersResponse> {
+  return request<ManagedUsersResponse>("/api/admin/users");
+}
+
+export function createManagedUser(payload: ManagedUserRequest): Promise<ManagedUserResponse> {
+  return request<ManagedUserResponse>("/api/admin/users", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateManagedUserRole(userID: number, role: ManagedUserRequest["role"]): Promise<ManagedUserResponse> {
+  return request<ManagedUserResponse>(`/api/admin/users/${encodeURIComponent(String(userID))}`, {
+    method: "PATCH",
+    body: JSON.stringify({ role })
   });
 }
 

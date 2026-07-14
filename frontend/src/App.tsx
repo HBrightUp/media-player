@@ -24,17 +24,21 @@ import {
   addFavoriteTrackToCategory,
   ApiError,
   authorizeAudioFileAccess,
+  createManagedUser,
   createFavoriteCategory,
   createNote,
   createNoteFolder,
   coverURL,
   deleteAudioFile,
+  deleteLyricsFile,
   deleteFavoriteCategory,
   deleteNote,
   deleteNoteFolder,
   getAudioFiles,
+  getCurrentUser,
   getFavoriteCategories,
   getFavoriteTracks,
+  getManagedUsers,
   getNote,
   getNoteFolders,
   getNotes,
@@ -48,15 +52,17 @@ import {
   removeFavoriteTrack,
   removeFavoriteTrackFromCategory,
   renameAudioFile,
+  renameLyricsFile,
   sendPresenceHeartbeat,
   sendPresenceOffline,
   setApiSessionToken,
   streamURL,
+  updateManagedUserRole,
   updateNote,
   updateNoteFolder
 } from "./api";
 import type { UploadProgressSnapshot } from "./api";
-import type { AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, NoteFolder, OnlineUser, ServerAudioFile, Track, TrackCategoryMembership, TrackLyrics } from "./types";
+import type { AudioFileArea, AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, ManagedUser, ManagedUserRequest, NoteFolder, OnlineUser, ServerAudioFile, ServerManagedFile, Track, TrackCategoryMembership, TrackLyrics, UserRole } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -64,6 +70,7 @@ type AuthSession = {
   userId?: number;
   phone: string;
   nickname: string;
+  role: UserRole;
   token?: string;
   expiresAt: number;
   createdAt: string;
@@ -77,14 +84,24 @@ type AuthFormState = {
   phone: string;
   password: string;
 };
+type ManagedUserFormState = {
+  phone: string;
+  nickname: string;
+  password: string;
+  role: ManagedUserRequest["role"];
+};
 type TrackContextMenu = {
   track: Track;
   x: number;
   y: number;
 };
-type AudioFileContextMenu = TrackContextMenu;
+type AudioFileContextMenu = {
+  track: ServerManagedFile;
+  x: number;
+  y: number;
+};
 type AudioFileRenameDraft = {
-  track: Track;
+  track: ServerManagedFile;
   artist: string;
   title: string;
   isSubmitting: boolean;
@@ -179,7 +196,7 @@ type LyricsScenePalette = {
   thread: string;
 };
 type TrackSortKey = "title" | "artist";
-type ProfileView = "main" | "audioFiles";
+type ProfileView = "main" | "settings" | "audioFiles" | "users" | "about";
 type PlaybackQueueScope = { kind: "library" | "favorites" | "category" | "search"; categoryId?: number | null };
 type DetachedCurrentTrack = {
   track: Track;
@@ -239,7 +256,7 @@ const lyricsScenePalettes: LyricsScenePalette[] = [
   { surface: "#163159", toneA: "183, 169, 255", toneB: "110, 224, 236", toneC: "242, 202, 134", thread: "236, 248, 255" }
 ];
 
-type MusicTab = "音乐列表" | "收藏" | "分类" | "歌曲搜索";
+type MusicTab = "无损音乐" | "有损音乐" | "收藏" | "分类" | "歌曲搜索";
 const appPages: Array<{ id: AppPage; label: string }> = [
   { id: "music", label: "音乐" },
   { id: "lyrics", label: "歌词" },
@@ -260,6 +277,11 @@ const playbackModeLabels: Record<PlaybackMode, string> = {
 };
 const appVersion = "0.1.0";
 const appReleaseDate = "2026.07.10";
+const baseProfileViewTabs: { id: ProfileView; label: string }[] = [
+  { id: "main", label: "个人" },
+  { id: "settings", label: "设置" },
+  { id: "about", label: "关于" }
+];
 const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
@@ -271,6 +293,45 @@ const lyricsChromeAutoHideMs = 2800;
 const passwordMinLength = 6;
 const passwordMaxLength = 64;
 const mainlandPhonePattern = /^1[3-9]\d{9}$/;
+const userRoleLabels: Record<UserRole, string> = {
+  super_admin: "超级管理员",
+  admin: "普通管理员",
+  vip: "VIP用户",
+  user: "普通用户"
+};
+const assignableUserRoles: Array<{ role: ManagedUserRequest["role"]; label: string }> = [
+  { role: "admin", label: "普通管理员" },
+  { role: "vip", label: "VIP用户" },
+  { role: "user", label: "普通用户" }
+];
+
+function normalizeUserRole(role?: string | null): UserRole {
+  switch (role) {
+    case "super_admin":
+    case "admin":
+    case "vip":
+      return role;
+    default:
+      return "user";
+  }
+}
+
+function canRoleManageUsers(role?: UserRole | null) {
+  return normalizeUserRole(role) === "super_admin";
+}
+
+function canRoleManageAudioFiles(role?: UserRole | null) {
+  const normalizedRole = normalizeUserRole(role);
+  return normalizedRole === "super_admin" || normalizedRole === "admin";
+}
+
+function canRolePlayLossless(role?: UserRole | null) {
+  return normalizeUserRole(role) !== "user";
+}
+
+function getDefaultMusicTab(role?: UserRole | null): MusicTab {
+  return canRolePlayLossless(role) ? "无损音乐" : "有损音乐";
+}
 const trackPlayClickCooldownMs = 450;
 const trackSwitchDebounceWindowMs = 300;
 const trackSwitchDebounceDelayMs = 250;
@@ -303,8 +364,18 @@ const defaultAudioFileLimits: AudioFileImportLimits = {
 };
 const audioImportBatchMaxBytes = 160 * 1024 * 1024;
 const audioImportBatchMaxFiles = 80;
-const supportedAudioFileExtensions = new Set([".flac", ".wav", ".aif", ".aiff"]);
+const losslessAudioFileExtensions = new Set([".flac", ".wav", ".aif", ".aiff"]);
+const lossyAudioFileExtensionsForUpload = new Set([".mp3", ".aac", ".m4a", ".ogg"]);
+const supportedAudioFileExtensions = new Set([...losslessAudioFileExtensions, ...lossyAudioFileExtensionsForUpload]);
+const lossyMusicFormats = new Set(["mp3", "aac", "m4a", "ogg"]);
 const supportedLyricFileExtensions = new Set([".lrc", ".txt"]);
+const audioFileAreas: Array<{ id: AudioFileArea; label: string; kind: "audio" | "lyrics" }> = [
+  { id: "lossless_music", label: "无损音乐", kind: "audio" },
+  { id: "lossy_music", label: "有损音乐", kind: "audio" },
+  { id: "lossless_lyrics", label: "无损歌词", kind: "lyrics" },
+  { id: "lossy_lyrics", label: "有损歌词", kind: "lyrics" },
+  { id: "shared_lyrics", label: "公共歌词", kind: "lyrics" }
+];
 
 function areBufferedRangesEqual(previous: BufferedAudioRange[], next: BufferedAudioRange[]) {
   if (previous.length !== next.length) {
@@ -648,7 +719,7 @@ function App() {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [activePage, setActivePage] = useState<AppPage>("music");
-  const [activeTab, setActiveTab] = useState<MusicTab>("音乐列表");
+  const [activeTab, setActiveTab] = useState<MusicTab>(() => getDefaultMusicTab(initialAuthRef.current?.session?.role));
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
   const [musicSortKey, setMusicSortKey] = useState<TrackSortKey | null>(null);
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(() => new Set());
@@ -697,13 +768,19 @@ function App() {
   const [onlineCount, setOnlineCount] = useState(0);
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [profileView, setProfileView] = useState<ProfileView>("main");
-  const [audioFiles, setAudioFiles] = useState<Track[]>([]);
+  const [audioFileArea, setAudioFileArea] = useState<AudioFileArea>("lossless_music");
+  const [audioFiles, setAudioFiles] = useState<ServerManagedFile[]>([]);
   const [serverAudioSet, setServerAudioSet] = useState<ServerAudioFile[]>([]);
   const [audioFileLimits, setAudioFileLimits] = useState<AudioFileImportLimits>(defaultAudioFileLimits);
   const [audioFilesMessage, setAudioFilesMessage] = useState("");
   const [audioImportReport, setAudioImportReport] = useState<AudioFileImportReport | null>(null);
   const [audioImportPreflight, setAudioImportPreflight] = useState<AudioImportPreflightReport | null>(null);
   const [audioImportProgress, setAudioImportProgress] = useState<AudioImportProgress | null>(null);
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [managedUsersMessage, setManagedUsersMessage] = useState("");
+  const [isManagedUsersLoading, setIsManagedUsersLoading] = useState(false);
+  const [isManagedUserSubmitting, setIsManagedUserSubmitting] = useState(false);
+  const [managedUserForm, setManagedUserForm] = useState<ManagedUserFormState>(() => createEmptyManagedUserForm());
   const [audioFileAccess, setAudioFileAccess] = useState<AudioFileAccessGrant | null>(null);
   const [audioFileAccessDialog, setAudioFileAccessDialog] = useState<AudioFileAccessDialogState>(() => createClosedAudioFileAccessDialog());
   const [audioFileAccessClock, setAudioFileAccessClock] = useState(() => Date.now());
@@ -711,7 +788,7 @@ function App() {
   const [isAudioImporting, setIsAudioImporting] = useState(false);
   const [audioFileMenu, setAudioFileMenu] = useState<AudioFileContextMenu | null>(null);
   const [audioRenameDraft, setAudioRenameDraft] = useState<AudioFileRenameDraft | null>(null);
-  const [audioDeleteTarget, setAudioDeleteTarget] = useState<Track | null>(null);
+  const [audioDeleteTarget, setAudioDeleteTarget] = useState<ServerManagedFile | null>(null);
 
   const currentTrack = useMemo(() => {
     if (!playbackQueue.length) {
@@ -729,7 +806,7 @@ function App() {
     }
     return playbackQueue[0];
   }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
-  const currentTrackStreamURL = currentTrack?.stream_url ? streamURL(currentTrack) : "";
+  const currentTrackStreamURL = currentTrack?.stream_url ? streamURL(currentTrack, authSession?.token) : "";
   const nextTrackToPreload = useMemo(() => {
     if (!isPlaying || playbackMode !== "all" || !currentTrack?.stream_url || playbackQueue.length < 2) {
       return null;
@@ -737,7 +814,7 @@ function App() {
     const nextTrack = getAdjacentQueuedTrack(1);
     return nextTrack?.id === currentTrack.id ? null : nextTrack;
   }, [currentTrack, detachedCurrentTrack, isPlaying, playbackMode, playbackQueue]);
-  const nextTrackPreloadURL = nextTrackToPreload?.stream_url ? streamURL(nextTrackToPreload) : "";
+  const nextTrackPreloadURL = nextTrackToPreload?.stream_url ? streamURL(nextTrackToPreload, authSession?.token) : "";
 
   const hasTransientPopup = Boolean(
     trackContextMenu ||
@@ -763,6 +840,16 @@ function App() {
   );
 
   useEffect(() => {
+    const preventSystemContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+    document.addEventListener("contextmenu", preventSystemContextMenu, true);
+    return () => {
+      document.removeEventListener("contextmenu", preventSystemContextMenu, true);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!detachedCurrentTrack) {
       return;
     }
@@ -776,10 +863,38 @@ function App() {
   }, [authSession?.token]);
 
   useEffect(() => {
+    if (activeTab !== "无损音乐" || canRolePlayLossless(authSession?.role)) {
+      return;
+    }
+    const nextTab = getDefaultMusicTab(authSession?.role);
+    const visibleTracks = getLibraryTracksForTab(nextTab, libraryTracks, musicSortKey);
+    setActiveTab(nextTab);
+    setActiveCategoryId(null);
+    setIsLibraryFiltered(false);
+    setTracks(visibleTracks);
+    preserveCurrentTrackForQueue(visibleTracks);
+    setPlaybackQueue(visibleTracks);
+    setPlaybackQueueScope({ kind: "library" });
+  }, [activeTab, authSession?.role, libraryTracks, musicSortKey]);
+
+  useEffect(() => {
+    if (profileView === "audioFiles" && !canRoleManageAudioFiles(authSession?.role)) {
+      closeAudioFileOverlays();
+      setProfileView("main");
+    }
+    if (profileView === "users" && !canRoleManageUsers(authSession?.role)) {
+      setProfileView("main");
+    }
+  }, [authSession?.role, profileView]);
+
+  useEffect(() => {
     if (!authSession) {
       loadedLibrarySessionKeyRef.current = null;
       setAudioFileAccess(null);
       setAudioFileAccessDialog(createClosedAudioFileAccessDialog());
+      setManagedUsers([]);
+      setManagedUsersMessage("");
+      setManagedUserForm(createEmptyManagedUserForm());
       setIsLoading(false);
       return;
     }
@@ -1021,7 +1136,7 @@ function App() {
   }, [sleepTimerEndsAt, sleepTimerNow]);
 
   useLayoutEffect(() => {
-    if (activePage !== "music" || activeTab !== "音乐列表" || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
+    if (activePage !== "music" || !isLibraryMusicTab(activeTab) || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
       return;
     }
 
@@ -1050,6 +1165,59 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    const token = authSession?.token;
+    if (!token) {
+      return;
+    }
+    let cancelled = false;
+
+    void getCurrentUser()
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        setAuthSession((previous) => {
+          if (!previous || previous.token !== token) {
+            return previous;
+          }
+          const nextSession: AuthSession = {
+            ...previous,
+            userId: response.user.id,
+            phone: response.user.phone,
+            nickname: response.user.nickname,
+            role: normalizeUserRole(response.user.role)
+          };
+          if (
+            previous.userId === nextSession.userId &&
+            previous.phone === nextSession.phone &&
+            previous.nickname === nextSession.nickname &&
+            previous.role === nextSession.role
+          ) {
+            return previous;
+          }
+          persistAuthSession(nextSession);
+          persistAuthProfile(response.user);
+          return nextSession;
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          removeLocalStorage(authSessionStorageKey);
+          setApiSessionToken("");
+          setAuthSession(null);
+          setAuthMessage("登录已过期，请重新登录");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authSession?.token]);
 
   useEffect(() => {
     const sessionID = presenceSessionIdRef.current;
@@ -1431,39 +1599,61 @@ function App() {
     }
   }
 
+  function preserveCurrentTrackForQueue(nextQueue: Track[]) {
+    if (!currentTrackId || !currentTrack || nextQueue.some((track) => track.id === currentTrack.id)) {
+      return;
+    }
+    const queueIndex = playbackQueue.findIndex((track) => track.id === currentTrack.id);
+    setDetachedCurrentTrack((previous) => {
+      if (previous?.track.id === currentTrack.id) {
+        return previous;
+      }
+      return {
+        track: currentTrack,
+        queueIndex: Math.max(0, queueIndex)
+      };
+    });
+  }
+
+  function syncLibraryTracksForTab(
+    tab: MusicTab,
+    nextTracks: Track[],
+    { resetQueue = false, forceVisible = false }: { resetQueue?: boolean; forceVisible?: boolean } = {}
+  ) {
+    const visibleTracks = getLibraryTracksForTab(tab, nextTracks, musicSortKey);
+    setLibraryTracks((previous) => (areTrackListsEqual(previous, nextTracks) ? previous : nextTracks));
+    if (forceVisible || isLibraryMusicTab(tab)) {
+      setTracks((previous) => (areTrackListsEqual(previous, visibleTracks) ? previous : visibleTracks));
+    }
+    setPlaybackQueueScope({ kind: "library" });
+    const nextQueue = resetQueue || !playbackQueue.length ? visibleTracks : mergePlaybackQueue(playbackQueue, visibleTracks);
+    preserveCurrentTrackForQueue(nextQueue);
+    setPlaybackQueue((previous) => (areTrackListsEqual(previous, nextQueue) ? previous : nextQueue));
+    setCurrentTrackId((previous) => {
+      if (previous) {
+        return previous;
+      }
+      return visibleTracks[0]?.id ?? null;
+    });
+  }
+
   function syncLibraryTracks(
     nextTracks: Track[],
     { resetQueue = false, forceVisible = false }: { resetQueue?: boolean; forceVisible?: boolean } = {}
   ) {
-    const visibleTracks = sortMusicTracks(nextTracks, musicSortKey);
-    setLibraryTracks((previous) => (areTrackListsEqual(previous, nextTracks) ? previous : nextTracks));
-    if (forceVisible || activeTab === "音乐列表") {
-      setTracks((previous) => (areTrackListsEqual(previous, visibleTracks) ? previous : visibleTracks));
-    }
-    setPlaybackQueueScope({ kind: "library" });
-    setPlaybackQueue((previous) => {
-      if (resetQueue || !previous.length) {
-        return visibleTracks;
-      }
-      const mergedQueue = mergePlaybackQueue(previous, visibleTracks);
-      return areTrackListsEqual(previous, mergedQueue) ? previous : mergedQueue;
-    });
-    setCurrentTrackId((previous) => {
-      if (previous && nextTracks.some((track) => track.id === previous)) {
-        return previous;
-      }
-      return nextTracks[0]?.id ?? null;
-    });
+    syncLibraryTracksForTab(activeTab, nextTracks, { resetQueue, forceVisible });
   }
 
   async function refreshLibrary({
     keepExistingOnError = false,
     manual = false,
-    forceVisible = false
+    forceVisible = false,
+    targetTab = activeTab
   }: {
     keepExistingOnError?: boolean;
     manual?: boolean;
     forceVisible?: boolean;
+    targetTab?: MusicTab;
   } = {}) {
     setIsLoading(true);
     setLoadMessage("");
@@ -1473,19 +1663,19 @@ function App() {
       if (manual) {
         const userID = authSession?.userId;
         if (!userID) {
-          throw new Error("请先登录后刷新歌单");
+          throw new Error("请先登录后刷新无损音乐");
         }
         payload = await refreshTracks(userID);
       } else {
         payload = await getTracks();
       }
-      syncLibraryTracks(payload.tracks, { forceVisible });
+      syncLibraryTracksForTab(targetTab, payload.tracks, { forceVisible });
       return { ok: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "本地音乐列表加载失败";
+      const message = error instanceof Error ? error.message : "本地无损音乐加载失败";
       if (!keepExistingOnError) {
         setLibraryTracks([]);
-        if (activeTab === "音乐列表") {
+        if (isLibraryMusicTab(targetTab)) {
           setTracks([]);
         }
       }
@@ -1737,6 +1927,10 @@ function App() {
   }
 
   function handleTabClick(tab: MusicTab, target?: HTMLElement) {
+    if (tab === "无损音乐" && !canRolePlayLossless(authSession?.role)) {
+      showToast("当前用户无权播放无损音乐");
+      tab = "有损音乐";
+    }
     shouldRevealCurrentTrackRef.current = false;
     setActiveTab(tab);
     setActivePage("music");
@@ -1749,13 +1943,20 @@ function App() {
     setCategoryDialogPosition(null);
     setCategoryContextMenu(null);
     closeCategoryPicker();
-    if (tab === "音乐列表") {
+    if (isLibraryMusicTab(tab)) {
+      const visibleTracks = getLibraryTracksForTab(tab, libraryTracks, musicSortKey);
       setIsLibraryFiltered(false);
       setIsSearchOpen(false);
       setSearchDialogPosition(null);
       setTrackContextMenu(null);
       setLoadMessage("");
-      setTracks(sortMusicTracks(libraryTracks, musicSortKey));
+      setTracks(visibleTracks);
+      preserveCurrentTrackForQueue(visibleTracks);
+      setPlaybackQueue(visibleTracks);
+      setPlaybackQueueScope({ kind: "library" });
+      if (tab === "有损音乐") {
+        void refreshLibrary({ keepExistingOnError: true, forceVisible: true, targetTab: tab });
+      }
       return;
     }
     if (tab === "收藏") {
@@ -1773,8 +1974,13 @@ function App() {
   }
 
   async function handleLibraryTabClick() {
-    const shouldRefreshLibrary = activePage === "music" && activeTab === "音乐列表" && !isLibraryFiltered;
-    handleTabClick("音乐列表");
+    if (!canRolePlayLossless(authSession?.role)) {
+      handleTabClick("有损音乐");
+      showToast("当前用户无权播放无损音乐");
+      return;
+    }
+    const shouldRefreshLibrary = activePage === "music" && activeTab === "无损音乐" && !isLibraryFiltered;
+    handleTabClick("无损音乐");
 
     if (!shouldRefreshLibrary) {
       return;
@@ -1783,11 +1989,11 @@ function App() {
       return;
     }
     if (!authSession?.userId) {
-      showToast("请先登录后刷新歌单");
+      showToast("请先登录后刷新无损音乐");
       return;
     }
     if (manualLibraryRefreshRemainingMs > 0) {
-      showToast(`歌单刷新太频繁，请${manualLibraryRefreshCooldownSeconds}秒后再试`);
+      showToast(`无损音乐刷新太频繁，请${manualLibraryRefreshCooldownSeconds}秒后再试`);
       return;
     }
 
@@ -1800,7 +2006,7 @@ function App() {
     setIsManualLibraryRefreshing(false);
 
     if (!result.ok) {
-      showToast(result.message ?? "歌单刷新失败");
+      showToast(result.message ?? "无损音乐刷新失败");
       return;
     }
 
@@ -1808,7 +2014,7 @@ function App() {
     setLastManualLibraryRefreshAt(refreshedAt);
     setManualLibraryRefreshClock(refreshedAt);
     writeManualLibraryRefreshAt(refreshedAt);
-    showToast("歌单已刷新");
+    showToast("无损音乐已刷新");
   }
 
   function getCategorySelectorPosition(target: HTMLElement): FloatingPanelPosition {
@@ -1966,7 +2172,7 @@ function App() {
     setCategoryName("");
     setIsSearchOpen(false);
     setSearchDialogPosition(null);
-    setActiveTab((previous) => (previous === "歌曲搜索" ? "音乐列表" : previous));
+    setActiveTab((previous) => (previous === "歌曲搜索" ? getDefaultMusicTab(authSession?.role) : previous));
     closeAudioFileOverlays();
   }
 
@@ -2012,11 +2218,11 @@ function App() {
   }
 
   function handleMusicSortClick(sortKey: TrackSortKey) {
-    if (activeTab !== "音乐列表") {
+    if (!isLibraryMusicTab(activeTab)) {
       return;
     }
 
-    const sortedTracks = sortMusicTracks(libraryTracks, sortKey);
+    const sortedTracks = getLibraryTracksForTab(activeTab, libraryTracks, sortKey);
     setMusicSortKey(sortKey);
     setIsLibraryFiltered(false);
     setSearchQuery("");
@@ -2071,10 +2277,11 @@ function App() {
       setIsSearchOpen(false);
       setSearchDialogPosition(null);
       if (activeTab === "歌曲搜索") {
-        setActiveTab("音乐列表");
+        const nextTab = getDefaultMusicTab(authSession?.role);
+        setActiveTab(nextTab);
         setActiveCategoryId(null);
         setIsLibraryFiltered(false);
-        setTracks(sortMusicTracks(libraryTracks, musicSortKey));
+        setTracks(getLibraryTracksForTab(nextTab, libraryTracks, musicSortKey));
       }
     }
   }
@@ -2119,6 +2326,7 @@ function App() {
       setAuthMessage("");
       setShowAuthPassword(false);
       setActivePage("music");
+      setActiveTab(getDefaultMusicTab(nextSession.role));
       setProfileView("main");
       setIsPlaybackModeMenuOpen(false);
     } catch (error) {
@@ -2146,7 +2354,7 @@ function App() {
     setProfileView("main");
     setIsSearchOpen(false);
     setSearchDialogPosition(null);
-    setActiveTab("音乐列表");
+    setActiveTab(getDefaultMusicTab(null));
     setActiveCategoryId(null);
     setFavoriteTrackIds(new Set());
     setTrackCategoryMembershipMap(new Map());
@@ -2158,6 +2366,9 @@ function App() {
     setAudioFilesMessage("");
     setAudioImportReport(null);
     setAudioImportPreflight(null);
+    setManagedUsers([]);
+    setManagedUsersMessage("");
+    setManagedUserForm(createEmptyManagedUserForm());
     setAudioFileAccess(null);
     setAudioFileAccessDialog(createClosedAudioFileAccessDialog());
     setTrackContextMenu(null);
@@ -2174,7 +2385,7 @@ function App() {
   function closeSearchDialog() {
     setIsSearchOpen(false);
     setSearchDialogPosition(null);
-    setActiveTab("音乐列表");
+    setActiveTab(getDefaultMusicTab(authSession?.role));
   }
 
   function showToast(message: string) {
@@ -2190,20 +2401,28 @@ function App() {
 
   async function refreshAudioFiles({
     silent = false,
-    accessToken: providedAccessToken
+    accessToken: providedAccessToken,
+    area = audioFileArea
   }: {
     silent?: boolean;
     accessToken?: string;
+    area?: AudioFileArea;
   } = {}) {
     if (!authSession?.userId) {
       setAudioFiles([]);
       setServerAudioSet([]);
-      setAudioFilesMessage("请先登录后管理服务器音频文件");
+      setAudioFilesMessage("请先登录后管理服务器文件");
+      return { ok: false };
+    }
+    if (!canRoleManageAudioFiles(authSession.role)) {
+      setAudioFiles([]);
+      setServerAudioSet([]);
+      setAudioFilesMessage("当前用户无权管理服务器文件");
       return { ok: false };
     }
     const accessToken = providedAccessToken ?? getValidAudioFileAccessToken();
     if (!accessToken) {
-      setAudioFilesMessage("请先验证当前用户密码后再管理服务器音频文件");
+      setAudioFilesMessage("请先验证当前用户密码后再管理服务器文件");
       if (!silent) {
         openAudioFileAccessDialog();
       }
@@ -2214,7 +2433,7 @@ function App() {
       setIsAudioFilesLoading(true);
     }
     try {
-      const payload = await getAudioFiles(authSession.userId, accessToken);
+      const payload = await getAudioFiles(authSession.userId, accessToken, area);
       const nextServerAudioSet = buildServerAudioSetFromTracks(payload.files, payload.server_audio_set);
       setAudioFiles(payload.files);
       setServerAudioSet(nextServerAudioSet);
@@ -2222,7 +2441,7 @@ function App() {
       setAudioFilesMessage("");
       return { ok: true, files: payload.files, serverAudioSet: nextServerAudioSet, limits: payload.limits };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "读取服务器音频文件失败";
+      const message = error instanceof Error ? error.message : "读取服务器文件失败";
       setAudioFilesMessage(message);
       if (!silent) {
         showToast(message);
@@ -2237,7 +2456,11 @@ function App() {
 
   function openAudioFileManager() {
     if (!authSession?.userId) {
-      showToast("请先登录后管理服务器音频文件");
+      showToast("请先登录后管理服务器文件");
+      return;
+    }
+    if (!canRoleManageAudioFiles(authSession.role)) {
+      showToast("当前用户无权管理服务器文件");
       return;
     }
     const accessToken = getValidAudioFileAccessToken();
@@ -2254,6 +2477,18 @@ function App() {
     setAudioImportReport(null);
     setAudioImportPreflight(null);
     void refreshAudioFiles({ accessToken });
+  }
+
+  function changeAudioFileArea(area: AudioFileArea) {
+    if (area === audioFileArea || isAudioImporting) {
+      return;
+    }
+    closeAudioFileOverlays();
+    setAudioFileArea(area);
+    setAudioImportReport(null);
+    setAudioImportPreflight(null);
+    setAudioImportProgress(null);
+    void refreshAudioFiles({ area });
   }
 
   async function submitAudioFileAccessDialog(event: FormEvent<HTMLFormElement>) {
@@ -2304,6 +2539,103 @@ function App() {
     setProfileView("main");
   }
 
+  async function refreshManagedUsers({ silent = false }: { silent?: boolean } = {}) {
+    if (!canRoleManageUsers(authSession?.role)) {
+      setManagedUsers([]);
+      setManagedUsersMessage("仅超级管理员可以管理用户");
+      return { ok: false };
+    }
+    if (!silent) {
+      setIsManagedUsersLoading(true);
+    }
+    try {
+      const payload = await getManagedUsers();
+      setManagedUsers(payload.users);
+      setManagedUsersMessage("");
+      return { ok: true, users: payload.users };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "读取用户列表失败";
+      setManagedUsersMessage(message);
+      if (!silent) {
+        showToast(message);
+      }
+      return { ok: false, message };
+    } finally {
+      if (!silent) {
+        setIsManagedUsersLoading(false);
+      }
+    }
+  }
+
+  function openUserManager() {
+    if (!canRoleManageUsers(authSession?.role)) {
+      showToast("仅超级管理员可以管理用户");
+      return;
+    }
+    setProfileView("users");
+    void refreshManagedUsers();
+  }
+
+  function updateManagedUserForm(field: keyof ManagedUserFormState, value: string) {
+    setManagedUserForm((previous) => ({
+      ...previous,
+      [field]: field === "phone" ? normalizePhone(value).slice(0, 11) : field === "password" ? value.slice(0, passwordMaxLength) : value
+    }));
+    setManagedUsersMessage("");
+  }
+
+  async function submitManagedUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canRoleManageUsers(authSession?.role) || isManagedUserSubmitting) {
+      return;
+    }
+    const phone = normalizePhone(managedUserForm.phone);
+    if (!mainlandPhonePattern.test(phone)) {
+      setManagedUsersMessage("请输入有效的中国大陆手机号码");
+      return;
+    }
+    const nickname = managedUserForm.nickname.trim();
+    if (!nickname) {
+      setManagedUsersMessage("昵称不能为空");
+      return;
+    }
+    if (managedUserForm.password.length < passwordMinLength || managedUserForm.password.length > passwordMaxLength) {
+      setManagedUsersMessage(`密码长度需为${passwordMinLength}-${passwordMaxLength}位`);
+      return;
+    }
+
+    setIsManagedUserSubmitting(true);
+    try {
+      const response = await createManagedUser({
+        phone,
+        nickname,
+        password: managedUserForm.password,
+        role: managedUserForm.role
+      });
+      setManagedUsers((previous) => sortManagedUsers([...previous, response.user]));
+      setManagedUserForm(createEmptyManagedUserForm());
+      setManagedUsersMessage("用户已创建");
+    } catch (error) {
+      setManagedUsersMessage(error instanceof Error ? error.message : "创建用户失败");
+    } finally {
+      setIsManagedUserSubmitting(false);
+    }
+  }
+
+  async function changeManagedUserRole(user: ManagedUser, role: ManagedUserRequest["role"]) {
+    if (user.role === "super_admin" || user.role === role || !canRoleManageUsers(authSession?.role)) {
+      return;
+    }
+    try {
+      const response = await updateManagedUserRole(user.id, role);
+      setManagedUsers((previous) => previous.map((item) => (item.id === response.user.id ? response.user : item)));
+      setManagedUsersMessage("用户权限已更新");
+    } catch (error) {
+      setManagedUsersMessage(error instanceof Error ? error.message : "更新用户权限失败");
+      void refreshManagedUsers({ silent: true });
+    }
+  }
+
   function handleChooseAudioFolder() {
     if (isAudioImporting) {
       return;
@@ -2319,7 +2651,7 @@ function App() {
       return;
     }
     if (!authSession?.userId) {
-      showToast("请先登录后上传音频文件");
+      showToast("请先登录后上传服务器文件");
       return;
     }
 
@@ -2330,16 +2662,16 @@ function App() {
       const latest = await refreshAudioFiles({ silent: true });
       const latestServerAudioSet = latest.ok && "serverAudioSet" in latest && latest.serverAudioSet ? latest.serverAudioSet : serverAudioSet;
       const limits = latest.ok && "limits" in latest && latest.limits ? latest.limits : audioFileLimits;
-      const report = await buildAudioImportPreflight(selectedFiles, latestServerAudioSet, limits);
+      const report = await buildAudioImportPreflight(selectedFiles, latestServerAudioSet, limits, audioFileArea);
       if (!report.items.length) {
         setAudioFilesMessage("文件夹中没有可检查的文件");
         return;
       }
       setAudioImportPreflight(report);
       setAudioFilesMessage(
-        report.readyAudioCount > 0
-          ? `预检完成：可上传 ${report.readyAudioCount} 首歌曲${report.readyLyricCount > 0 ? `，匹配歌词 ${report.readyLyricCount} 个` : ""}`
-          : "预检完成：没有可上传的音频文件"
+        report.readyAudioCount > 0 || report.readyLyricCount > 0
+          ? `预检完成：${getAudioPreflightUploadSummary(report)}`
+          : "预检完成：没有可上传的文件"
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "生成上传报告失败";
@@ -2366,7 +2698,7 @@ function App() {
       return;
     }
     if (!audioImportPreflight.files.length) {
-      setAudioFilesMessage("没有可上传的音频文件");
+      setAudioFilesMessage("没有可上传的文件");
       return;
     }
 
@@ -2388,7 +2720,7 @@ function App() {
         const refreshMessage = refreshError instanceof Error ? refreshError.message : "刷新音频列表失败";
         setAudioFilesMessage(`导入完成，但刷新列表失败：${refreshMessage}`);
       }
-      showToast(`导入完成：成功 ${report.imported} 首，跳过 ${report.skipped} 个，失败 ${report.failed} 个`);
+      showToast(`导入完成：歌曲 ${report.imported} 首，歌词 ${report.lyrics_imported ?? 0} 个，跳过 ${report.skipped} 个，失败 ${report.failed} 个`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "上传导入失败";
       setAudioImportReport(buildAudioImportFailureReport(uploadFiles, message));
@@ -2403,7 +2735,7 @@ function App() {
 
   async function importAudioBatches(userID: number, batches: AudioImportUploadBatch[], accessToken: string, totalUploadBytes: number) {
     if (!batches.length) {
-      throw new Error("没有可上传的音频文件");
+      throw new Error("没有可上传的文件");
     }
 
     const reports: AudioFileImportReport[] = [];
@@ -2416,7 +2748,7 @@ function App() {
       }
 
       try {
-        const report = await importAudioFolder(userID, batch.files, accessToken, (snapshot) => {
+        const report = await importAudioFolder(userID, batch.files, accessToken, audioFileArea, (snapshot) => {
           updateAudioImportProgress(
             {
               loadedBytes: uploadedBeforeBatch + snapshot.loadedBytes,
@@ -2487,7 +2819,7 @@ function App() {
     });
   }
 
-  function openAudioFileMenu(track: Track, clientX: number, clientY: number) {
+  function openAudioFileMenu(track: ServerManagedFile, clientX: number, clientY: number) {
     const maxX = Math.max(contextMenuMargin, window.innerWidth - audioFileMenuWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - audioFileMenuHeight - contextMenuMargin);
     setAudioRenameDraft(null);
@@ -2499,12 +2831,12 @@ function App() {
     });
   }
 
-  function handleAudioFileContextMenu(event: ReactMouseEvent<HTMLElement>, track: Track) {
+  function handleAudioFileContextMenu(event: ReactMouseEvent<HTMLElement>, track: ServerManagedFile) {
     event.preventDefault();
     openAudioFileMenu(track, event.clientX, event.clientY);
   }
 
-  function openAudioRenameDialog(track: Track) {
+  function openAudioRenameDialog(track: ServerManagedFile) {
     setAudioFileMenu(null);
     setAudioRenameDraft({
       track,
@@ -2538,11 +2870,21 @@ function App() {
     const target = audioRenameDraft.track;
     setAudioRenameDraft((draft) => (draft ? { ...draft, isSubmitting: true } : draft));
     try {
-      await renameAudioFile(target.id, {
-        user_id: authSession.userId,
-        artist,
-        title
-      }, accessToken);
+      if (target.kind === "lyrics") {
+        await renameLyricsFile({
+          user_id: authSession.userId,
+          relative_path: target.relative_path,
+          artist,
+          title
+        }, accessToken, target.area);
+      } else {
+        const trackID = target.track_id ?? Number(target.id);
+        await renameAudioFile(trackID, {
+          user_id: authSession.userId,
+          artist,
+          title
+        }, accessToken, target.area);
+      }
       setAudioRenameDraft(null);
       await refreshAudioFiles({ silent: true });
       await refreshLibrary({ keepExistingOnError: true });
@@ -2553,7 +2895,7 @@ function App() {
     }
   }
 
-  function openAudioDeleteDialog(track: Track) {
+  function openAudioDeleteDialog(track: ServerManagedFile) {
     setAudioFileMenu(null);
     setAudioDeleteTarget(track);
   }
@@ -2570,12 +2912,16 @@ function App() {
     const target = audioDeleteTarget;
     setIsAudioFilesLoading(true);
     try {
-      await deleteAudioFile(authSession.userId, target.id, accessToken);
+      if (target.kind === "lyrics") {
+        await deleteLyricsFile(authSession.userId, target.relative_path, accessToken, target.area);
+      } else {
+        await deleteAudioFile(authSession.userId, target.track_id ?? Number(target.id), accessToken, target.area);
+      }
       setAudioDeleteTarget(null);
       await refreshAudioFiles({ silent: true });
       await refreshLibrary({ keepExistingOnError: true });
       await refreshTrackMemberships();
-      showToast("音频文件已删除");
+      showToast(target.kind === "lyrics" ? "歌词文件已删除" : "音频文件已删除");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "删除失败");
     } finally {
@@ -2728,7 +3074,7 @@ function App() {
 
     setIsSearching(true);
     try {
-      const matchedTracks = libraryTracks.filter((track) => trackMatchesQuery(track, keyword));
+      const matchedTracks = filterTracksForRole(libraryTracks, authSession?.role).filter((track) => trackMatchesQuery(track, keyword));
       if (!matchedTracks.length) {
         showToast("音乐不存在");
         return;
@@ -2739,7 +3085,7 @@ function App() {
       setIsLibraryFiltered(true);
       setIsSearchOpen(false);
       setSearchDialogPosition(null);
-      setActiveTab("音乐列表");
+      setActiveTab(getDefaultMusicTab(authSession?.role));
     } catch (error) {
       showToast(error instanceof Error ? error.message : "音乐不存在");
     } finally {
@@ -3523,9 +3869,10 @@ function App() {
   }
 
   const activeCategory = favoriteCategories.find((category) => category.id === activeCategoryId) ?? null;
-  const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : activeTab === "分类" ? "暂无分类歌曲" : "暂无本地音乐");
+  const emptyMessage = loadMessage || (activeTab === "收藏" ? "暂无收藏歌曲" : activeTab === "分类" ? "暂无分类歌曲" : activeTab === "有损音乐" ? "暂无有损音乐" : "暂无无损音乐");
   const isAuthVisible = !authSession;
   const canSubmitAuth = !isAuthSubmitting && isAuthFormReady(authForm);
+  const canCurrentUserPlayLossless = canRolePlayLossless(authSession?.role);
   const playingTrackId = isPlaying ? currentTrack?.id ?? null : null;
   const activeMenuTrack = trackContextMenu?.track ?? null;
   const isActiveMenuTrackFavorite = activeMenuTrack ? favoriteTrackIds.has(activeMenuTrack.id) : false;
@@ -3533,8 +3880,8 @@ function App() {
   const isViewingActiveCategory = activeTab === "分类" && Boolean(activeCategory);
   const lyricLines = trackLyrics?.lines ?? [];
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
-  const canSortMusicColumns = activeTab === "音乐列表";
-  const canShowTrackStatus = activeTab === "音乐列表" || activeTab === "收藏" || activeTab === "分类";
+  const canSortMusicColumns = isLibraryMusicTab(activeTab);
+  const canShowTrackStatus = isLibraryMusicTab(activeTab) || activeTab === "收藏" || activeTab === "分类";
   const statusCategory = activeTab === "分类" ? activeCategory : null;
   const isLyricsPageActive = activePage === "lyrics";
   const playerScreenClassName = [
@@ -3559,16 +3906,21 @@ function App() {
         {activePage === "music" ? (
           <section className="music-page" aria-label="音乐">
             <nav className="mode-tabs" aria-label="播放器视图">
-              <button
-                className={activeTab === "音乐列表" ? "active" : ""}
-                type="button"
-                aria-current={activeTab === "音乐列表" ? "page" : undefined}
-                aria-label={isManualLibraryRefreshing ? "正在刷新歌单" : "刷新歌单"}
-                title={manualLibraryRefreshRemainingMs > 0 ? `${manualLibraryRefreshCooldownSeconds}秒后可刷新歌单` : "刷新歌单"}
-                disabled={isManualLibraryRefreshing}
-                onClick={() => void handleLibraryTabClick()}
-              >
-                歌单
+              {canCurrentUserPlayLossless ? (
+                <button
+                  className={activeTab === "无损音乐" ? "active" : ""}
+                  type="button"
+                  aria-current={activeTab === "无损音乐" ? "page" : undefined}
+                  aria-label={isManualLibraryRefreshing ? "正在刷新无损音乐" : "刷新无损音乐"}
+                  title={manualLibraryRefreshRemainingMs > 0 ? `${manualLibraryRefreshCooldownSeconds}秒后可刷新无损音乐` : "刷新无损音乐"}
+                  disabled={isManualLibraryRefreshing}
+                  onClick={() => void handleLibraryTabClick()}
+                >
+                  无损音乐
+                </button>
+              ) : null}
+              <button className={activeTab === "有损音乐" ? "active" : ""} type="button" aria-current={activeTab === "有损音乐" ? "page" : undefined} onClick={() => handleTabClick("有损音乐")}>
+                有损音乐
               </button>
               <button className={activeTab === "收藏" ? "active" : ""} type="button" aria-current={activeTab === "收藏" ? "page" : undefined} onClick={() => handleTabClick("收藏")}>
                 我喜欢
@@ -3606,7 +3958,7 @@ function App() {
               </button>
             </nav>
 
-            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} aria-label="本地音乐列表" aria-busy={isLoading}>
+            <section className={`song-table ${canShowTrackStatus ? "with-status" : ""}`} aria-label="本地无损音乐列表" aria-busy={isLoading}>
               <div className="table-head">
                 <span />
                 {canSortMusicColumns ? (
@@ -3684,7 +4036,7 @@ function App() {
                 })}
                 {!tracks.length ? (
                   <div className="empty-table">
-                    {isLoading ? (activeTab === "收藏" ? "正在加载收藏歌曲" : activeTab === "分类" ? "正在加载分类歌曲" : "正在加载本地音乐列表") : emptyMessage}
+                    {isLoading ? (activeTab === "收藏" ? "正在加载收藏歌曲" : activeTab === "分类" ? "正在加载分类歌曲" : activeTab === "有损音乐" ? "正在加载有损音乐" : "正在加载无损音乐") : emptyMessage}
                   </div>
                 ) : null}
               </div>
@@ -4052,26 +4404,39 @@ function App() {
             onStartSleepTimer={handleStartSleepTimer}
             onStopSleepTimer={handleStopSleepTimer}
             profileView={profileView}
+            onProfileViewChange={setProfileView}
+            audioFileArea={audioFileArea}
             audioFiles={audioFiles}
             audioFileLimits={audioFileLimits}
             audioFilesMessage={audioFilesMessage}
             audioImportReport={audioImportReport}
             audioImportPreflight={audioImportPreflight}
             audioImportProgress={audioImportProgress}
+            managedUsers={managedUsers}
+            managedUsersMessage={managedUsersMessage}
+            managedUserForm={managedUserForm}
             isAudioFilesLoading={isAudioFilesLoading}
             isAudioImporting={isAudioImporting}
+            isManagedUsersLoading={isManagedUsersLoading}
+            isManagedUserSubmitting={isManagedUserSubmitting}
             audioFileMenu={audioFileMenu}
             audioRenameDraft={audioRenameDraft}
             audioDeleteTarget={audioDeleteTarget}
             audioFolderInputRef={audioFolderInputRef}
             onOpenAudioFileManager={openAudioFileManager}
             onCloseAudioFileManager={closeAudioFileManager}
+            onOpenUserManager={openUserManager}
+            onRefreshManagedUsers={() => void refreshManagedUsers()}
+            onUpdateManagedUserForm={updateManagedUserForm}
+            onSubmitManagedUser={submitManagedUser}
+            onChangeManagedUserRole={(user, role) => void changeManagedUserRole(user, role)}
             onChooseAudioFolder={handleChooseAudioFolder}
             onAudioFolderChange={handleAudioFolderChange}
             onConfirmAudioImportPreflight={() => void confirmAudioImportPreflight()}
             onCloseAudioImportPreflight={() => setAudioImportPreflight(null)}
             onCloseAudioImportReport={() => setAudioImportReport(null)}
             onRefreshAudioFiles={() => void refreshAudioFiles()}
+            onAudioFileAreaChange={changeAudioFileArea}
             onAudioFileContextMenu={handleAudioFileContextMenu}
             onOpenAudioRename={openAudioRenameDialog}
             onUpdateAudioRename={updateAudioRenameDraft}
@@ -4271,6 +4636,35 @@ function sortMusicTracks(tracks: Track[], sortKey: TrackSortKey | null) {
   });
 }
 
+function isLibraryMusicTab(tab: MusicTab) {
+  return tab === "无损音乐" || tab === "有损音乐";
+}
+
+function getTrackQuality(track: Track) {
+  if (track.quality === "lossless" || track.quality === "lossy") {
+    return track.quality;
+  }
+  const format = normalizeAudioExtension(track.format || getFileExtension(track.filename));
+  return lossyMusicFormats.has(format) ? "lossy" : "lossless";
+}
+
+function isLosslessMusicTrack(track: Track) {
+  return getTrackQuality(track) === "lossless";
+}
+
+function isLossyMusicTrack(track: Track) {
+  return getTrackQuality(track) === "lossy";
+}
+
+function filterTracksForRole(tracks: Track[], role?: UserRole | null) {
+  return canRolePlayLossless(role) ? tracks : tracks.filter(isLossyMusicTrack);
+}
+
+function getLibraryTracksForTab(tab: MusicTab, tracks: Track[], sortKey: TrackSortKey | null) {
+  const filteredTracks = tab === "有损音乐" ? tracks.filter(isLossyMusicTrack) : tracks.filter(isLosslessMusicTrack);
+  return sortMusicTracks(filteredTracks, sortKey);
+}
+
 function sortFavoriteCategories(categories: FavoriteCategory[]) {
   return [...categories].sort((left, right) => {
     if (left.sort_order !== right.sort_order) {
@@ -4278,6 +4672,10 @@ function sortFavoriteCategories(categories: FavoriteCategory[]) {
     }
     return left.id - right.id;
   });
+}
+
+function sortManagedUsers(users: ManagedUser[]) {
+  return [...users].sort((left, right) => left.id - right.id);
 }
 
 function buildTrackCategoryMembershipMap(memberships: TrackCategoryMembership[]) {
@@ -4343,6 +4741,7 @@ function areTrackListsEqual(previous: Track[], next: Track[]) {
       track.artist === nextTrack.artist &&
       track.album === nextTrack.album &&
       track.format === nextTrack.format &&
+      track.quality === nextTrack.quality &&
       track.size_bytes === nextTrack.size_bytes &&
       track.modified_at === nextTrack.modified_at
     );
@@ -4796,6 +5195,7 @@ function readAuthSession(): AuthReadResult {
     const userId = typeof parsed.userId === "number" ? parsed.userId : undefined;
     const phone = typeof parsed.phone === "string" ? parsed.phone : "";
     const nickname = typeof parsed.nickname === "string" ? parsed.nickname : "";
+    const role = normalizeUserRole(parsed.role);
     const token = typeof parsed.token === "string" ? parsed.token : "";
     const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
 
@@ -4804,7 +5204,7 @@ function readAuthSession(): AuthReadResult {
       return { session: null, expired: Boolean(expiresAt) };
     }
 
-    return { session: { userId, phone, nickname, token, expiresAt, createdAt }, expired: false };
+    return { session: { userId, phone, nickname, role, token, expiresAt, createdAt }, expired: false };
   } catch {
     removeLocalStorage(authSessionStorageKey);
     return { session: null, expired: false };
@@ -4834,6 +5234,15 @@ function createEmptyAuthForm(): AuthFormState {
     nickname: "",
     phone: "",
     password: ""
+  };
+}
+
+function createEmptyManagedUserForm(): ManagedUserFormState {
+  return {
+    phone: "",
+    nickname: "",
+    password: "",
+    role: "user"
   };
 }
 
@@ -4907,6 +5316,7 @@ function createAuthSession(response: AuthResponse): AuthSession {
     userId: response.user.id,
     phone: response.user.phone,
     nickname: response.user.nickname,
+    role: normalizeUserRole(response.user.role),
     token: response.token?.trim() || "",
     createdAt: new Date().toISOString(),
     expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + authSessionFallbackDurationMs
@@ -5048,7 +5458,7 @@ function getAudioFileSearchTokens(value: string) {
   return Array.from(new Set(tokens));
 }
 
-function doesTrackMatchAudioFileSearch(track: Track, compactQuery: string, queryTokens: string[]) {
+function doesTrackMatchAudioFileSearch(track: ServerManagedFile, compactQuery: string, queryTokens: string[]) {
   if (!compactQuery) {
     return true;
   }
@@ -5070,9 +5480,31 @@ function getUploadRelativePath(file: File) {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
 }
 
-function getUploadFileKind(file: File) {
+function isAudioFileArea(area: AudioFileArea) {
+  return area === "lossless_music" || area === "lossy_music";
+}
+
+function isLyricsFileArea(area: AudioFileArea) {
+  return !isAudioFileArea(area);
+}
+
+function isLossyAudioArea(area: AudioFileArea) {
+  return area === "lossy_music";
+}
+
+function areaSupportsUploadAudioExtension(area: AudioFileArea, extension: string) {
+  if (area === "lossy_music") {
+    return lossyAudioFileExtensionsForUpload.has(extension);
+  }
+  if (area === "lossless_music") {
+    return losslessAudioFileExtensions.has(extension);
+  }
+  return false;
+}
+
+function getUploadFileKind(file: File, area: AudioFileArea = "lossless_music") {
   const ext = getFileExtension(getUploadRelativePath(file));
-  if (supportedAudioFileExtensions.has(ext)) {
+  if (isAudioFileArea(area) && supportedAudioFileExtensions.has(ext)) {
     return "audio";
   }
   if (supportedLyricFileExtensions.has(ext)) {
@@ -5128,7 +5560,7 @@ function buildAudioImportFailureReport(files: File[], reason: string): AudioFile
   };
 }
 
-async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAudioFile[], limits: AudioFileImportLimits): Promise<AudioImportPreflightReport> {
+async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAudioFile[], limits: AudioFileImportLimits, area: AudioFileArea): Promise<AudioImportPreflightReport> {
   const items: AudioImportPreflightItem[] = [];
   const uploadFiles: File[] = [];
   const readyAudioByBase = new Map<string, boolean>();
@@ -5141,7 +5573,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
   let totalUploadBytes = 0;
 
   for (const file of files) {
-    const kind = getUploadFileKind(file);
+    const kind = getUploadFileKind(file, area);
     const relativePath = getUploadRelativePath(file);
     const displayName = getDisplayFilename(relativePath);
     if (!kind) {
@@ -5158,6 +5590,44 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
     }
 
     if (kind === "lyrics") {
+      if (isLyricsFileArea(area)) {
+        if (file.size > limits.max_lyric_file_bytes) {
+          errorCount += 1;
+          items.push({
+            relativePath,
+            displayName,
+            kind: "lyrics",
+            status: "error",
+            reason: `超过单个歌词 ${formatBytes(limits.max_lyric_file_bytes)} 的限制`,
+            sizeBytes: file.size
+          });
+          continue;
+        }
+        readyLyricCount += 1;
+        totalUploadBytes += file.size;
+        uploadFiles.push(file);
+        items.push({
+          relativePath,
+          displayName,
+          kind: "lyrics",
+          status: "ready",
+          reason: "将保存到当前歌词区域",
+          sizeBytes: file.size
+        });
+      }
+      continue;
+    }
+
+    if (!areaSupportsUploadAudioExtension(area, getFileExtension(relativePath))) {
+      ignoredCount += 1;
+      items.push({
+        relativePath,
+        displayName,
+        kind: "audio",
+        status: "ignored",
+        reason: isLossyAudioArea(area) ? "当前区域只接受有损音乐" : "当前区域只接受无损音乐",
+        sizeBytes: file.size
+      });
       continue;
     }
 
@@ -5191,7 +5661,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
       continue;
     }
 
-    const targetFilename = buildServerTargetFilenameForUpload(nameParts);
+    const targetFilename = buildServerTargetFilenameForUpload(nameParts, area, relativePath);
     const targetBaseKey = normalizeImportBase(targetFilename);
     const duplicate = findServerAudioDuplicate(serverAudioSet, relativePath);
     if (duplicate) {
@@ -5230,7 +5700,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
   }
 
   for (const file of files) {
-    if (getUploadFileKind(file) !== "lyrics") {
+    if (isLyricsFileArea(area) || getUploadFileKind(file, area) !== "lyrics") {
       continue;
     }
     const relativePath = getUploadRelativePath(file);
@@ -5413,13 +5883,16 @@ function mergeAudioImportReports(reports: AudioFileImportReport[]): AudioFileImp
   );
 }
 
-function buildServerAudioSetFromTracks(tracks: Track[], providedSet?: ServerAudioFile[]) {
+function buildServerAudioSetFromTracks(tracks: ServerManagedFile[], providedSet?: ServerAudioFile[]) {
   if (providedSet?.length) {
     return providedSet;
   }
 
   const entries: ServerAudioFile[] = [];
   for (const track of tracks) {
+    if (track.kind !== "audio") {
+      continue;
+    }
     const filename = getDisplayFilename(track.filename || track.relative_path);
     const extension = normalizeAudioExtension(getFileExtension(filename) || track.format);
     if (!filename || !extension) {
@@ -5438,7 +5911,8 @@ function buildServerAudioSetFromTracks(tracks: Track[], providedSet?: ServerAudi
       filename_hash: "",
       artist,
       title,
-      extension
+      extension,
+      area: track.area
     });
   }
   return entries;
@@ -5580,8 +6054,13 @@ function isLikelyUploadHashToken(value: string) {
   return /[a-fA-F]/.test(token) || token.length >= 12;
 }
 
-function buildServerTargetFilenameForUpload(nameParts: UploadAudioNameParts) {
+function buildServerTargetFilenameForUpload(nameParts: UploadAudioNameParts, area: AudioFileArea = "lossless_music", sourcePath = "") {
   const targetBase = sanitizeServerAudioFilename(`${nameParts.artist}-${nameParts.title}`);
+  if (isLossyAudioArea(area)) {
+    const sourceExt = getFileExtension(sourcePath);
+    const ext = lossyAudioFileExtensionsForUpload.has(sourceExt) ? sourceExt : ".mp3";
+    return sanitizeServerAudioFilename(`${targetBase}${ext}`);
+  }
   return sanitizeServerAudioFilename(`${targetBase}.flac`);
 }
 
@@ -9624,26 +10103,39 @@ function EmptyPage({
   onStartSleepTimer,
   onStopSleepTimer,
   profileView,
+  onProfileViewChange,
+  audioFileArea,
   audioFiles,
   audioFileLimits,
   audioFilesMessage,
   audioImportReport,
   audioImportPreflight,
   audioImportProgress,
+  managedUsers,
+  managedUsersMessage,
+  managedUserForm,
   isAudioFilesLoading,
   isAudioImporting,
+  isManagedUsersLoading,
+  isManagedUserSubmitting,
   audioFileMenu,
   audioRenameDraft,
   audioDeleteTarget,
   audioFolderInputRef,
   onOpenAudioFileManager,
   onCloseAudioFileManager,
+  onOpenUserManager,
+  onRefreshManagedUsers,
+  onUpdateManagedUserForm,
+  onSubmitManagedUser,
+  onChangeManagedUserRole,
   onChooseAudioFolder,
   onAudioFolderChange,
   onConfirmAudioImportPreflight,
   onCloseAudioImportPreflight,
   onCloseAudioImportReport,
   onRefreshAudioFiles,
+  onAudioFileAreaChange,
   onAudioFileContextMenu,
   onOpenAudioRename,
   onUpdateAudioRename,
@@ -9665,32 +10157,45 @@ function EmptyPage({
   onStartSleepTimer: (minutes?: number) => void;
   onStopSleepTimer: () => void;
   profileView: ProfileView;
-  audioFiles: Track[];
+  onProfileViewChange: (view: ProfileView) => void;
+  audioFileArea: AudioFileArea;
+  audioFiles: ServerManagedFile[];
   audioFileLimits: AudioFileImportLimits;
   audioFilesMessage: string;
   audioImportReport: AudioFileImportReport | null;
   audioImportPreflight: AudioImportPreflightReport | null;
   audioImportProgress: AudioImportProgress | null;
+  managedUsers: ManagedUser[];
+  managedUsersMessage: string;
+  managedUserForm: ManagedUserFormState;
   isAudioFilesLoading: boolean;
   isAudioImporting: boolean;
+  isManagedUsersLoading: boolean;
+  isManagedUserSubmitting: boolean;
   audioFileMenu: AudioFileContextMenu | null;
   audioRenameDraft: AudioFileRenameDraft | null;
-  audioDeleteTarget: Track | null;
+  audioDeleteTarget: ServerManagedFile | null;
   audioFolderInputRef: RefObject<HTMLInputElement | null>;
   onOpenAudioFileManager: () => void;
   onCloseAudioFileManager: () => void;
+  onOpenUserManager: () => void;
+  onRefreshManagedUsers: () => void;
+  onUpdateManagedUserForm: (field: keyof ManagedUserFormState, value: string) => void;
+  onSubmitManagedUser: (event: FormEvent<HTMLFormElement>) => void;
+  onChangeManagedUserRole: (user: ManagedUser, role: ManagedUserRequest["role"]) => void;
   onChooseAudioFolder: () => void;
   onAudioFolderChange: (files: FileList | null) => void;
   onConfirmAudioImportPreflight: () => void;
   onCloseAudioImportPreflight: () => void;
   onCloseAudioImportReport: () => void;
   onRefreshAudioFiles: () => void;
-  onAudioFileContextMenu: (event: ReactMouseEvent<HTMLElement>, track: Track) => void;
-  onOpenAudioRename: (track: Track) => void;
+  onAudioFileAreaChange: (area: AudioFileArea) => void;
+  onAudioFileContextMenu: (event: ReactMouseEvent<HTMLElement>, track: ServerManagedFile) => void;
+  onOpenAudioRename: (track: ServerManagedFile) => void;
   onUpdateAudioRename: (field: "artist" | "title", value: string) => void;
   onSubmitAudioRename: (event: FormEvent<HTMLFormElement>) => void;
   onCloseAudioRename: () => void;
-  onOpenAudioDelete: (track: Track) => void;
+  onOpenAudioDelete: (track: ServerManagedFile) => void;
   onCloseAudioDelete: () => void;
   onConfirmAudioDelete: () => void;
   onCloseAudioFileMenu: () => void;
@@ -9705,84 +10210,145 @@ function EmptyPage({
   const profilePhone = authSession ? formatProfilePhone(authSession.phone) : "";
   const profileAvatarText = authSession ? getProfileAvatarText(authSession) : "";
   const onlineSummary = formatOnlinePresence(onlineUsers, onlineCount);
+  const profileViewTabs: { id: ProfileView; label: string }[] = [
+    ...baseProfileViewTabs.slice(0, 2),
+    ...(canRoleManageAudioFiles(authSession?.role) ? [{ id: "audioFiles" as const, label: "管理" }] : []),
+    ...(canRoleManageUsers(authSession?.role) ? [{ id: "users" as const, label: "用户" }] : []),
+    ...baseProfileViewTabs.slice(2)
+  ];
+  const profileSummaryCard = (
+    <div className="profile-summary-card" aria-label="用户信息">
+      <div className="profile-summary-avatar" aria-hidden="true">
+        {profileAvatarText}
+      </div>
+      <div className="profile-summary-copy">
+        <div className="profile-summary-name">{profileDisplayName}</div>
+        <div className="profile-summary-phone">手机号 {profilePhone}</div>
+        <div className="profile-summary-role">{userRoleLabels[normalizeUserRole(authSession?.role)]}</div>
+      </div>
+    </div>
+  );
+  const profileTabs = (
+    <nav className="profile-tabs" aria-label="我的页面分类" role="tablist">
+      {profileViewTabs.map((tab) => (
+        <button
+          key={tab.id}
+          className={profileView === tab.id ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={profileView === tab.id}
+          aria-current={profileView === tab.id ? "page" : undefined}
+          onClick={() => {
+            if (tab.id === "audioFiles") {
+              onOpenAudioFileManager();
+              return;
+            }
+            if (tab.id === "users") {
+              onOpenUserManager();
+              return;
+            }
+            onProfileViewChange(tab.id);
+          }}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+  );
 
   return (
     <section className="simple-page" aria-label={content.title}>
       {page === "profile" && authSession ? (
-        profileView === "audioFiles" ? (
-          <AudioFileManagerPage
-            files={audioFiles}
-            limits={audioFileLimits}
-            message={audioFilesMessage}
-            report={audioImportReport}
-            preflight={audioImportPreflight}
-            progress={audioImportProgress}
-            isLoading={isAudioFilesLoading}
-            isImporting={isAudioImporting}
-            menu={audioFileMenu}
-            renameDraft={audioRenameDraft}
-            deleteTarget={audioDeleteTarget}
-            folderInputRef={audioFolderInputRef}
-            onBack={onCloseAudioFileManager}
-            onChooseFolder={onChooseAudioFolder}
-            onFolderChange={onAudioFolderChange}
-            onConfirmPreflight={onConfirmAudioImportPreflight}
-            onClosePreflight={onCloseAudioImportPreflight}
-            onCloseReport={onCloseAudioImportReport}
-            onRefresh={onRefreshAudioFiles}
-            onContextMenu={onAudioFileContextMenu}
-            onOpenRename={onOpenAudioRename}
-            onUpdateRename={onUpdateAudioRename}
-            onSubmitRename={onSubmitAudioRename}
-            onCloseRename={onCloseAudioRename}
-            onOpenDelete={onOpenAudioDelete}
-            onCloseDelete={onCloseAudioDelete}
-            onConfirmDelete={onConfirmAudioDelete}
-            onCloseMenu={onCloseAudioFileMenu}
-          />
-        ) : (
-          <div className="profile-page-content">
-            <div className="profile-summary-card" aria-label="用户信息">
-              <div className="profile-summary-avatar" aria-hidden="true">
-                {profileAvatarText}
+        <div className="profile-page-content profile-paged-content">
+          <aside className="profile-sidebar">
+            {profileSummaryCard}
+            {profileTabs}
+          </aside>
+          <section className="profile-content-panel" aria-label="我的页面内容">
+            {profileView === "audioFiles" ? (
+              <AudioFileManagerPage
+                embedded
+                area={audioFileArea}
+                files={audioFiles}
+                limits={audioFileLimits}
+                message={audioFilesMessage}
+                report={audioImportReport}
+                preflight={audioImportPreflight}
+                progress={audioImportProgress}
+                isLoading={isAudioFilesLoading}
+                isImporting={isAudioImporting}
+                menu={audioFileMenu}
+                renameDraft={audioRenameDraft}
+                deleteTarget={audioDeleteTarget}
+                folderInputRef={audioFolderInputRef}
+                onBack={onCloseAudioFileManager}
+                onChooseFolder={onChooseAudioFolder}
+                onFolderChange={onAudioFolderChange}
+                onConfirmPreflight={onConfirmAudioImportPreflight}
+                onClosePreflight={onCloseAudioImportPreflight}
+                onCloseReport={onCloseAudioImportReport}
+                onRefresh={onRefreshAudioFiles}
+                onAreaChange={onAudioFileAreaChange}
+                onContextMenu={onAudioFileContextMenu}
+                onOpenRename={onOpenAudioRename}
+                onUpdateRename={onUpdateAudioRename}
+                onSubmitRename={onSubmitAudioRename}
+                onCloseRename={onCloseAudioRename}
+                onOpenDelete={onOpenAudioDelete}
+                onCloseDelete={onCloseAudioDelete}
+                onConfirmDelete={onConfirmAudioDelete}
+                onCloseMenu={onCloseAudioFileMenu}
+              />
+            ) : profileView === "users" ? (
+              <UserManagementPage
+                users={managedUsers}
+                form={managedUserForm}
+                message={managedUsersMessage}
+                isLoading={isManagedUsersLoading}
+                isSubmitting={isManagedUserSubmitting}
+                onRefresh={onRefreshManagedUsers}
+                onChangeForm={onUpdateManagedUserForm}
+                onSubmit={onSubmitManagedUser}
+                onChangeRole={onChangeManagedUserRole}
+              />
+            ) : profileView === "settings" ? (
+              <div className="profile-tab-panel">
+                <SleepTimerPanel
+                  minutes={sleepTimerMinutes}
+                  remainingSeconds={sleepTimerRemainingSeconds}
+                  onSetMinutes={onSetSleepTimerMinutes}
+                  onStart={onStartSleepTimer}
+                  onStop={onStopSleepTimer}
+                />
               </div>
-              <div className="profile-summary-copy">
-                <div className="profile-summary-name">{profileDisplayName}</div>
-                <div className="profile-summary-phone">手机号 {profilePhone}</div>
+            ) : profileView === "about" ? (
+              <div className="profile-tab-panel">
+                <div className="profile-row app-version-row" aria-label="软件版本">
+                  <span className="profile-row-title">版本号</span>
+                  <span className="profile-row-value app-version-value">v{appVersion}</span>
+                </div>
+                <div className="profile-row app-version-row" aria-label="发布日期">
+                  <span className="profile-row-title">发布日期</span>
+                  <span className="profile-row-value app-version-value">{appReleaseDate}</span>
+                </div>
               </div>
-            </div>
-            <SleepTimerPanel
-              minutes={sleepTimerMinutes}
-              remainingSeconds={sleepTimerRemainingSeconds}
-              onSetMinutes={onSetSleepTimerMinutes}
-              onStart={onStartSleepTimer}
-              onStop={onStopSleepTimer}
-            />
-            <div className="profile-row online-count-row" aria-label="在线人数">
-              <span className="profile-row-title">在线人数</span>
-              <span className="profile-row-value online-count-value" aria-live="polite" title={onlineSummary}>
-                {onlineSummary}
-              </span>
-            </div>
-            <div className="profile-row file-manager-row">
-              <span className="profile-row-title">文件管理</span>
-              <button className="profile-action-button file-manager-open-button" type="button" onClick={onOpenAudioFileManager}>
-                服务器音频文件管理
-              </button>
-            </div>
-            <div className="profile-row app-version-row" aria-label="软件版本">
-              <span className="profile-row-title">软件信息</span>
-              <span className="profile-row-value app-version-value">
-                v{appVersion} · 发布 {appReleaseDate}
-              </span>
-            </div>
-            <div className="profile-logout-area">
-              <button className="profile-action-button logout-button" type="button" onClick={onLogout}>
-                退出登录
-              </button>
-            </div>
-          </div>
-        )
+            ) : (
+              <div className="profile-tab-panel profile-tab-personal">
+                <div className="profile-row online-count-row" aria-label="在线人数">
+                  <span className="profile-row-title">在线人数</span>
+                  <span className="profile-row-value online-count-value" aria-live="polite" title={onlineSummary}>
+                    {onlineSummary}
+                  </span>
+                </div>
+                <div className="profile-logout-area">
+                  <button className="profile-action-button logout-button" type="button" onClick={onLogout}>
+                    退出登录
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       ) : (
         <div className="simple-page-empty">{content.message}</div>
       )}
@@ -9790,7 +10356,120 @@ function EmptyPage({
   );
 }
 
+function UserManagementPage({
+  users,
+  form,
+  message,
+  isLoading,
+  isSubmitting,
+  onRefresh,
+  onChangeForm,
+  onSubmit,
+  onChangeRole
+}: {
+  users: ManagedUser[];
+  form: ManagedUserFormState;
+  message: string;
+  isLoading: boolean;
+  isSubmitting: boolean;
+  onRefresh: () => void;
+  onChangeForm: (field: keyof ManagedUserFormState, value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onChangeRole: (user: ManagedUser, role: ManagedUserRequest["role"]) => void;
+}) {
+  return (
+    <div className="user-manager-page profile-tab-panel">
+      <header className="user-manager-header">
+        <div>
+          <h2>用户管理</h2>
+          <p>创建普通管理员、VIP用户或普通用户</p>
+        </div>
+        <button type="button" disabled={isLoading || isSubmitting} onClick={onRefresh}>
+          {isLoading ? "刷新中" : "刷新"}
+        </button>
+      </header>
+
+      <form className="user-manager-form" onSubmit={onSubmit}>
+        <input
+          type="tel"
+          inputMode="tel"
+          value={form.phone}
+          maxLength={11}
+          placeholder="手机号"
+          aria-label="手机号"
+          onChange={(event) => onChangeForm("phone", event.target.value)}
+        />
+        <input
+          type="text"
+          value={form.nickname}
+          maxLength={24}
+          placeholder="昵称"
+          aria-label="昵称"
+          onChange={(event) => onChangeForm("nickname", event.target.value)}
+        />
+        <input
+          type="password"
+          value={form.password}
+          maxLength={passwordMaxLength}
+          placeholder="初始密码"
+          aria-label="初始密码"
+          onChange={(event) => onChangeForm("password", event.target.value)}
+        />
+        <select value={form.role} aria-label="用户角色" onChange={(event) => onChangeForm("role", event.target.value)}>
+          {assignableUserRoles.map((option) => (
+            <option key={option.role} value={option.role}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <button className="user-manager-primary" type="submit" disabled={isSubmitting}>
+          {isSubmitting ? "创建中" : "添加用户"}
+        </button>
+      </form>
+
+      {message ? <div className="user-manager-message" role="status">{message}</div> : null}
+
+      <section className="user-manager-list" aria-label="用户列表" aria-busy={isLoading}>
+        <div className="user-manager-list-head" role="row">
+          <span>用户</span>
+          <span>角色</span>
+          <span>创建时间</span>
+        </div>
+        <div className="user-manager-list-body">
+          {users.map((user) => (
+            <div key={user.id} className="user-manager-row" role="row">
+              <div className="user-manager-user">
+                <strong>{user.nickname}</strong>
+                <span>{formatProfilePhone(user.phone)}</span>
+              </div>
+              {user.role === "super_admin" ? (
+                <span className="user-role-badge">{userRoleLabels[user.role]}</span>
+              ) : (
+                <select
+                  value={user.role}
+                  aria-label={`${user.nickname} 的角色`}
+                  onChange={(event) => onChangeRole(user, event.target.value as ManagedUserRequest["role"])}
+                >
+                  {assignableUserRoles.map((option) => (
+                    <option key={option.role} value={option.role}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <time dateTime={user.created_at}>{formatDateTime(user.created_at)}</time>
+            </div>
+          ))}
+          {!users.length ? <div className="user-manager-empty">{isLoading ? "正在读取用户" : "暂无用户"}</div> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AudioFileManagerPage({
+  embedded = false,
+  area,
   files,
   limits,
   message,
@@ -9810,6 +10489,7 @@ function AudioFileManagerPage({
   onClosePreflight,
   onCloseReport,
   onRefresh,
+  onAreaChange,
   onContextMenu,
   onOpenRename,
   onUpdateRename,
@@ -9820,7 +10500,9 @@ function AudioFileManagerPage({
   onConfirmDelete,
   onCloseMenu
 }: {
-  files: Track[];
+  embedded?: boolean;
+  area: AudioFileArea;
+  files: ServerManagedFile[];
   limits: AudioFileImportLimits;
   message: string;
   report: AudioFileImportReport | null;
@@ -9830,7 +10512,7 @@ function AudioFileManagerPage({
   isImporting: boolean;
   menu: AudioFileContextMenu | null;
   renameDraft: AudioFileRenameDraft | null;
-  deleteTarget: Track | null;
+  deleteTarget: ServerManagedFile | null;
   folderInputRef: RefObject<HTMLInputElement | null>;
   onBack: () => void;
   onChooseFolder: () => void;
@@ -9839,12 +10521,13 @@ function AudioFileManagerPage({
   onClosePreflight: () => void;
   onCloseReport: () => void;
   onRefresh: () => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLElement>, track: Track) => void;
-  onOpenRename: (track: Track) => void;
+  onAreaChange: (area: AudioFileArea) => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>, track: ServerManagedFile) => void;
+  onOpenRename: (track: ServerManagedFile) => void;
   onUpdateRename: (field: "artist" | "title", value: string) => void;
   onSubmitRename: (event: FormEvent<HTMLFormElement>) => void;
   onCloseRename: () => void;
-  onOpenDelete: (track: Track) => void;
+  onOpenDelete: (track: ServerManagedFile) => void;
   onCloseDelete: () => void;
   onConfirmDelete: () => void;
   onCloseMenu: () => void;
@@ -9862,10 +10545,11 @@ function AudioFileManagerPage({
     return files.filter((track) => doesTrackMatchAudioFileSearch(track, compactAudioSearchQuery, audioSearchTokens));
   }, [audioSearchTokens, compactAudioSearchQuery, files, hasAudioSearch]);
   const audioFileCountLabel = hasAudioSearch
-    ? `搜索“${audioSearchQuery.trim()}”：${visibleFiles.length} / ${files.length} 个音频文件`
+    ? `搜索“${audioSearchQuery.trim()}”：${visibleFiles.length} / ${files.length} 个文件`
     : files.length
-      ? `当前 ${files.length} 个音频文件`
-      : "管理服务器音乐目录中的无损音频";
+      ? `当前 ${files.length} 个文件`
+      : "管理服务器文件目录";
+  const activeArea = audioFileAreas.find((item) => item.id === area) ?? audioFileAreas[0];
 
   function openAudioSearchDialog() {
     setAudioSearchDraft(audioSearchQuery);
@@ -9890,16 +10574,31 @@ function AudioFileManagerPage({
   }
 
   return (
-    <div className="profile-page-content audio-manager-page">
+    <div className={embedded ? "audio-manager-page profile-tab-panel" : "profile-page-content audio-manager-page"}>
       <header className="audio-manager-header">
         <button className="audio-manager-back-button" type="button" aria-label="返回" onClick={onBack}>
           ‹
         </button>
         <div className="audio-manager-heading">
-          <h2>服务器音频文件管理</h2>
+          <h2>服务器文件管理</h2>
           <p title={audioFileCountLabel}>{audioFileCountLabel}</p>
         </div>
       </header>
+
+      <nav className="audio-manager-area-tabs" aria-label="服务器文件区域">
+        {audioFileAreas.map((item) => (
+          <button
+            key={item.id}
+            className={area === item.id ? "active" : ""}
+            type="button"
+            aria-current={area === item.id ? "page" : undefined}
+            disabled={isImporting}
+            onClick={() => onAreaChange(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
 
       <div className="audio-manager-toolbar">
         <input
@@ -9914,7 +10613,7 @@ function AudioFileManagerPage({
           }}
         />
         <button className="audio-manager-primary-button" type="button" disabled={isImporting} onClick={onChooseFolder}>
-          {isImporting ? "导入中" : "选择文件夹"}
+          {isImporting ? "导入中" : activeArea.kind === "lyrics" ? "选择歌词文件夹" : "选择音乐文件夹"}
         </button>
         <button className="audio-manager-secondary-button" type="button" disabled={isLoading || isImporting} onClick={refreshAndClearAudioSearch}>
           刷新
@@ -9932,6 +10631,7 @@ function AudioFileManagerPage({
       </div>
 
       <div className="audio-manager-limits">
+        <span>{activeArea.label}</span>
         <span>音频 {formatBytes(limits.max_audio_file_bytes)}</span>
         <span>歌词 {formatBytes(limits.max_lyric_file_bytes)}</span>
         <span>单次 {formatBytes(limits.max_total_bytes)} / {limits.max_file_count} 个</span>
@@ -9950,7 +10650,7 @@ function AudioFileManagerPage({
 
       {report ? <AudioImportResultDialog report={report} onClose={onCloseReport} /> : null}
 
-      <section className="audio-file-list" aria-label="服务器音频文件列表" aria-busy={isLoading || isImporting}>
+      <section className="audio-file-list" aria-label="服务器文件列表" aria-busy={isLoading || isImporting}>
         <div className="audio-file-list-head" role="row">
           <span>文件</span>
           <span>格式</span>
@@ -9984,7 +10684,7 @@ function AudioFileManagerPage({
           ))}
           {!visibleFiles.length ? (
             <div className="audio-file-empty">
-              {isLoading ? "正在读取服务器文件" : hasAudioSearch ? "未找到匹配的音频文件" : "暂无服务器音频文件"}
+              {isLoading ? "正在读取服务器文件" : hasAudioSearch ? "未找到匹配文件" : "当前区域暂无文件"}
             </div>
           ) : null}
         </div>
@@ -9992,14 +10692,14 @@ function AudioFileManagerPage({
 
       {isSearchDialogOpen ? (
         <div className="search-dialog-backdrop" role="presentation" onClick={closeAudioSearchDialog}>
-          <form className="search-dialog audio-file-dialog audio-file-search-dialog" role="dialog" aria-modal="true" aria-label="搜索服务器音频文件" onClick={(event) => event.stopPropagation()} onSubmit={submitAudioSearch}>
-            <h2>搜索音频</h2>
+          <form className="search-dialog audio-file-dialog audio-file-search-dialog" role="dialog" aria-modal="true" aria-label="搜索服务器文件" onClick={(event) => event.stopPropagation()} onSubmit={submitAudioSearch}>
+            <h2>搜索文件</h2>
             <input
               className="search-input"
               type="search"
               value={audioSearchDraft}
               placeholder="歌曲、歌手或文件名"
-              aria-label="搜索服务器音频文件"
+              aria-label="搜索服务器文件"
               autoFocus
               onChange={(event) => setAudioSearchDraft(event.target.value)}
             />
@@ -10020,7 +10720,7 @@ function AudioFileManagerPage({
           <div
             className="track-context-menu audio-file-context-menu"
             role="menu"
-            aria-label="音频文件操作"
+            aria-label="服务器文件操作"
             style={{ left: menu.x, top: menu.y }}
             onPointerDown={(event) => event.stopPropagation()}
           >
@@ -10036,7 +10736,7 @@ function AudioFileManagerPage({
 
       {renameDraft ? (
         <div className="search-dialog-backdrop" role="presentation" onClick={onCloseRename}>
-          <form className="search-dialog audio-file-dialog" role="dialog" aria-modal="true" aria-label="重命名音频文件" onClick={(event) => event.stopPropagation()} onSubmit={onSubmitRename}>
+          <form className="search-dialog audio-file-dialog" role="dialog" aria-modal="true" aria-label="重命名服务器文件" onClick={(event) => event.stopPropagation()} onSubmit={onSubmitRename}>
             <h2>重命名</h2>
             <input
               className="search-input"
@@ -10068,7 +10768,7 @@ function AudioFileManagerPage({
 
       {deleteTarget ? (
         <div className="search-dialog-backdrop" role="presentation" onClick={onCloseDelete}>
-          <div className="search-dialog audio-file-dialog audio-delete-dialog" role="dialog" aria-modal="true" aria-label="删除音频文件" onClick={(event) => event.stopPropagation()}>
+          <div className="search-dialog audio-file-dialog audio-delete-dialog" role="dialog" aria-modal="true" aria-label="删除服务器文件" onClick={(event) => event.stopPropagation()}>
             <h2>删除文件</h2>
             <p>{deleteTarget.artist} - {deleteTarget.title}</p>
             <div className="search-actions">
@@ -10101,7 +10801,7 @@ function AudioImportPreflightDialog({
 }) {
   const canUpload = report.files.length > 0 && !report.blockingMessage && !isImporting;
   const activeProgress = isImporting ? progress : null;
-  const [activeFilter, setActiveFilter] = useState<AudioImportPreflightFilter>("readyAudio");
+  const [activeFilter, setActiveFilter] = useState<AudioImportPreflightFilter>(() => (report.readyAudioCount > 0 ? "readyAudio" : "readyLyrics"));
   const filterOptions = getAudioPreflightFilterOptions(report);
   const visibleItems = filterAudioPreflightItems(report.items, activeFilter);
 
@@ -10370,7 +11070,7 @@ function AudioFileAccessModal({
   const message = lockoutSeconds > 0 ? `密码错误次数过多，请${lockoutSeconds}秒后再试` : dialog.message;
 
   return (
-    <section className="audio-access-gate" role="dialog" aria-modal="true" aria-label="服务器音频文件管理身份验证">
+    <section className="audio-access-gate" role="dialog" aria-modal="true" aria-label="服务器文件管理身份验证">
       <form className="audio-access-panel" onSubmit={onSubmit}>
         <button className="auth-close-button" type="button" aria-label="关闭身份验证" onClick={onClose}>
           <CloseIcon />

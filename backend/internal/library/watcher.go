@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -24,6 +25,7 @@ var watchedLyricFormats = map[string]bool{
 type WatcherOptions struct {
 	MusicRoot    string
 	LyricsRoot   string
+	LyricsRoots  []string
 	PollInterval time.Duration
 	Debounce     time.Duration
 	OnChange     func(context.Context, string)
@@ -54,13 +56,14 @@ func StartLibraryWatcher(ctx context.Context, options WatcherOptions) error {
 		debounce = DefaultWatchDebounce
 	}
 
-	current, err := snapshotLibraryRoots(musicRoot, options.LyricsRoot)
+	lyricsRoots := watcherLyricsRoots(options)
+	current, err := snapshotLibraryRoots(musicRoot, lyricsRoots)
 	if err != nil {
 		return err
 	}
 
 	go watchLibraryRoots(ctx, current, options, pollInterval, debounce)
-	log.Printf("library watcher enabled: music=%s lyrics=%s poll=%s debounce=%s", musicRoot, strings.TrimSpace(options.LyricsRoot), pollInterval, debounce)
+	log.Printf("library watcher enabled: music=%s lyrics=%s poll=%s debounce=%s", musicRoot, strings.Join(lyricsRoots, ","), pollInterval, debounce)
 	return nil
 }
 
@@ -96,7 +99,7 @@ func watchLibraryRoots(ctx context.Context, current fileSnapshot, options Watche
 			}
 			return
 		case <-ticker.C:
-			next, err := snapshotLibraryRoots(options.MusicRoot, options.LyricsRoot)
+			next, err := snapshotLibraryRoots(options.MusicRoot, watcherLyricsRoots(options))
 			if err != nil {
 				log.Printf("library watcher snapshot failed: %v", err)
 				continue
@@ -119,14 +122,26 @@ func watchLibraryRoots(ctx context.Context, current fileSnapshot, options Watche
 	}
 }
 
-func snapshotLibraryRoots(musicRoot, lyricsRoot string) (fileSnapshot, error) {
+func watcherLyricsRoots(options WatcherOptions) []string {
+	roots := make([]string, 0, len(options.LyricsRoots)+1)
+	if strings.TrimSpace(options.LyricsRoot) != "" {
+		roots = append(roots, options.LyricsRoot)
+	}
+	roots = append(roots, options.LyricsRoots...)
+	return roots
+}
+
+func snapshotLibraryRoots(musicRoot string, lyricsRoots []string) (fileSnapshot, error) {
 	snapshot := make(fileSnapshot)
 	if err := addRootSnapshot(snapshot, "music", musicRoot, true); err != nil {
 		return nil, err
 	}
-	lyricsRoot = strings.TrimSpace(lyricsRoot)
-	if lyricsRoot != "" {
-		if err := addRootSnapshot(snapshot, "lyrics", lyricsRoot, false); err != nil {
+	for index, lyricsRoot := range lyricsRoots {
+		lyricsRoot = strings.TrimSpace(lyricsRoot)
+		if lyricsRoot == "" {
+			continue
+		}
+		if err := addRootSnapshot(snapshot, fmt.Sprintf("lyrics%d", index), lyricsRoot, false); err != nil {
 			log.Printf("library watcher skipped lyrics root: %v", err)
 		}
 	}

@@ -11,6 +11,7 @@ export type Track = {
   artist: string;
   album: string;
   format: string;
+  quality: "lossless" | "lossy";
   size_bytes: number;
   duration_seconds: number | null;
   modified_at: string;
@@ -27,6 +28,8 @@ export type TrackLyrics = {
   source: string;
   updated_at: string | null;
 };
+
+export type UserRole = "super_admin" | "admin" | "vip" | "user";
 
 export type LibrarySetting = {
   path: string;
@@ -50,6 +53,7 @@ export type AuthUser = {
   phone: string;
   country_code: string;
   nickname: string;
+  role: UserRole;
   created_at: string;
 };
 
@@ -62,6 +66,23 @@ export type AuthResponse = {
 export type LoginRequest = {
   phone: string;
   password: string;
+};
+
+export type ManagedUser = {
+  id: number;
+  phone: string;
+  country_code: string;
+  nickname: string;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ManagedUserRequest = {
+  phone: string;
+  nickname: string;
+  password: string;
+  role: Exclude<UserRole, "super_admin">;
 };
 
 export type FavoriteRequest = {
@@ -128,10 +149,30 @@ export type ServerAudioFile = {
   artist: string;
   title: string;
   extension: string;
+  area?: AudioFileArea;
+};
+
+export type AudioFileArea = "lossless_music" | "lossy_music" | "lossless_lyrics" | "lossy_lyrics" | "shared_lyrics";
+
+export type ServerManagedFile = {
+  id: string;
+  track_id?: number;
+  area: AudioFileArea;
+  kind: "audio" | "lyrics";
+  quality?: "lossless" | "lossy";
+  relative_path: string;
+  filename: string;
+  title: string;
+  artist: string;
+  album?: string;
+  format: string;
+  size_bytes: number;
+  modified_at: string;
 };
 
 export type AudioFilesResponse = {
-  files: Track[];
+  area: AudioFileArea;
+  files: ServerManagedFile[];
   server_audio_set?: ServerAudioFile[];
   limits: AudioFileImportLimits;
 };
@@ -163,6 +204,7 @@ export type AudioFileImportReport = {
 
 export type AudioFileRenameRequest = {
   user_id: number;
+  relative_path?: string;
   artist: string;
   title: string;
 };

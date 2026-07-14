@@ -47,7 +47,7 @@ func TestBuildServerAudioSetUsesCompleteFilenameHashAndFilenameParts(t *testing.
 		Artist:   "元数据歌手",
 		Title:    "元数据歌曲",
 		Format:   "mp3",
-	}})
+	}}, "lossy_music")
 	if len(entries) != 1 {
 		t.Fatalf("len(entries) = %d, want 1", len(entries))
 	}
@@ -64,5 +64,8 @@ func TestBuildServerAudioSetUsesCompleteFilenameHashAndFilenameParts(t *testing.
 	}
 	if entries[0].Extension != "mp3" {
 		t.Fatalf("extension = %q, want %q", entries[0].Extension, "mp3")
+	}
+	if entries[0].Area != "lossy_music" {
+		t.Fatalf("area = %q, want %q", entries[0].Area, "lossy_music")
 	}
 }

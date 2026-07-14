@@ -11,7 +11,7 @@ func TestSnapshotLibraryRootsDetectsAudioAndLyricChanges(t *testing.T) {
 	root := t.TempDir()
 	lyricsRoot := t.TempDir()
 
-	initial, err := snapshotLibraryRoots(root, lyricsRoot)
+	initial, err := snapshotLibraryRoots(root, []string{lyricsRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestSnapshotLibraryRootsDetectsAudioAndLyricChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, err := snapshotLibraryRoots(root, lyricsRoot)
+	changed, err := snapshotLibraryRoots(root, []string{lyricsRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestSnapshotLibraryRootsDetectsAudioAndLyricChanges(t *testing.T) {
 	if err := os.WriteFile(audioPath, []byte("audio changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	modified, err := snapshotLibraryRoots(root, lyricsRoot)
+	modified, err := snapshotLibraryRoots(root, []string{lyricsRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,14 +49,14 @@ func TestSnapshotLibraryRootsDetectsAudioAndLyricChanges(t *testing.T) {
 func TestSnapshotLibraryRootsIgnoresUnsupportedFiles(t *testing.T) {
 	root := t.TempDir()
 
-	initial, err := snapshotLibraryRoots(root, "")
+	initial, err := snapshotLibraryRoots(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("ignore me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	next, err := snapshotLibraryRoots(root, "")
+	next, err := snapshotLibraryRoots(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

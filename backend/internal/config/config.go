@@ -16,6 +16,11 @@ type Config struct {
 	CORSOrigin               string
 	MusicDirectory           string
 	LyricsDirectory          string
+	SharedLyricsDirectory    string
+	LosslessMusicDirectory   string
+	LosslessLyricsDirectory  string
+	LossyMusicDirectory      string
+	LossyLyricsDirectory     string
 	LibraryAutoScanInterval  time.Duration
 	LibraryWatchPollInterval time.Duration
 	LibraryWatchDebounce     time.Duration
@@ -45,6 +50,17 @@ func Load() (Config, error) {
 	cfg.CORSOrigin = getenv("CORS_ORIGIN", cfg.CORSOrigin)
 	cfg.MusicDirectory = getenv("MUSIC_DIRECTORY", cfg.MusicDirectory)
 	cfg.LyricsDirectory = getenv("LYRICS_DIRECTORY", cfg.LyricsDirectory)
+	cfg.SharedLyricsDirectory = getenv("SHARED_LYRICS_DIRECTORY", cfg.SharedLyricsDirectory)
+	cfg.LosslessMusicDirectory = getenv("LOSSLESS_MUSIC_DIRECTORY", cfg.LosslessMusicDirectory)
+	cfg.LosslessLyricsDirectory = getenv("LOSSLESS_LYRICS_DIRECTORY", cfg.LosslessLyricsDirectory)
+	cfg.LossyMusicDirectory = getenv("LOSSY_MUSIC_DIRECTORY", cfg.LossyMusicDirectory)
+	cfg.LossyLyricsDirectory = getenv("LOSSY_LYRICS_DIRECTORY", cfg.LossyLyricsDirectory)
+	if cfg.LosslessMusicDirectory == "" {
+		cfg.LosslessMusicDirectory = cfg.MusicDirectory
+	}
+	if cfg.LosslessLyricsDirectory == "" {
+		cfg.LosslessLyricsDirectory = cfg.LyricsDirectory
+	}
 	if value := strings.TrimSpace(os.Getenv("LIBRARY_AUTO_SCAN_INTERVAL")); value != "" {
 		interval, err := parseDurationValue(value)
 		if err != nil {
@@ -105,11 +121,16 @@ func configCandidates() []string {
 func parseSimpleYAML(content string) (map[string]string, error) {
 	values := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(content))
-	section := ""
+	type sectionFrame struct {
+		indent int
+		key    string
+	}
+	sections := make([]sectionFrame, 0)
 
 	for scanner.Scan() {
 		raw := scanner.Text()
-		line := strings.TrimSpace(stripComment(raw))
+		withoutComment := stripComment(raw)
+		line := strings.TrimSpace(withoutComment)
 		if line == "" {
 			continue
 		}
@@ -120,20 +141,42 @@ func parseSimpleYAML(content string) (map[string]string, error) {
 		}
 		key = normalizeKey(key)
 		value = cleanValue(value)
+		indent := leadingIndent(withoutComment)
+		for len(sections) > 0 && indent <= sections[len(sections)-1].indent {
+			sections = sections[:len(sections)-1]
+		}
 
-		isNested := len(raw) > 0 && (raw[0] == ' ' || raw[0] == '\t')
-		if value == "" && !isNested {
-			section = key
+		fullKey := key
+		if len(sections) > 0 {
+			parts := make([]string, 0, len(sections)+1)
+			for _, section := range sections {
+				parts = append(parts, section.key)
+			}
+			parts = append(parts, key)
+			fullKey = strings.Join(parts, ".")
+		}
+		if value == "" {
+			sections = append(sections, sectionFrame{indent: indent, key: key})
 			continue
 		}
-		if isNested && section != "" {
-			key = section + "." + key
-		} else if !isNested {
-			section = ""
-		}
-		values[key] = value
+		values[fullKey] = value
 	}
 	return values, scanner.Err()
+}
+
+func leadingIndent(line string) int {
+	indent := 0
+	for _, char := range line {
+		switch char {
+		case ' ':
+			indent++
+		case '\t':
+			indent += 2
+		default:
+			return indent
+		}
+	}
+	return indent
 }
 
 func stripComment(line string) string {
@@ -186,6 +229,16 @@ func applyYAML(cfg *Config, values map[string]string) error {
 			cfg.MusicDirectory = value
 		case "lyrics_directory", "library.lyrics_directory":
 			cfg.LyricsDirectory = value
+		case "shared_lyrics_directory", "library.shared_lyrics_directory", "library.common_lyrics_directory":
+			cfg.SharedLyricsDirectory = value
+		case "lossless_music_directory", "library.lossless_music_directory", "library.lossless.music_directory", "library.lossless.music":
+			cfg.LosslessMusicDirectory = value
+		case "lossless_lyrics_directory", "library.lossless_lyrics_directory", "library.lossless.lyrics_directory", "library.lossless.lyrics":
+			cfg.LosslessLyricsDirectory = value
+		case "lossy_music_directory", "library.lossy_music_directory", "library.lossy.music_directory", "library.lossy.music":
+			cfg.LossyMusicDirectory = value
+		case "lossy_lyrics_directory", "library.lossy_lyrics_directory", "library.lossy.lyrics_directory", "library.lossy.lyrics":
+			cfg.LossyLyricsDirectory = value
 		case "library.auto_scan_interval", "auto_scan_interval":
 			interval, err := parseDurationValue(value)
 			if err != nil {

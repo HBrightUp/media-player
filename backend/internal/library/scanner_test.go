@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hml/media-player/backend/internal/models"
 )
 
 func TestBuildTrackReadsID3v22Album(t *testing.T) {
@@ -17,7 +19,7 @@ func TestBuildTrackReadsID3v22Album(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, _, err := buildTrack(root, path, ".mp3", "")
+	track, _, err := buildTrack(root, path, ".mp3", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ func TestBuildTrackReadsID3v23Cover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, _, err := buildTrack(root, path, ".mp3", "")
+	track, _, err := buildTrack(root, path, ".mp3", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +75,7 @@ func TestBuildTrackFallsBackToID3v1Album(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, _, err := buildTrack(root, path, ".mp3", "")
+	track, _, err := buildTrack(root, path, ".mp3", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func TestBuildTrackDoesNotUseFilenameAsAlbum(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	track, _, err := buildTrack(root, path, ".mp3", "")
+	track, _, err := buildTrack(root, path, ".mp3", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +180,7 @@ func TestBuildTrackReadsLyricsFromConfiguredDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, lyrics, err := buildTrack(root, path, ".flac", lyricsRoot)
+	_, lyrics, err := buildTrack(root, path, ".flac", []string{lyricsRoot}, models.TrackQualityLossless)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +199,34 @@ func TestBuildTrackReadsLyricsFromConfiguredDirectory(t *testing.T) {
 	}
 	if lyrics.Lines[0].Text != "第一句" {
 		t.Fatalf("first line = %q, want %q", lyrics.Lines[0].Text, "第一句")
+	}
+}
+
+func TestBuildTrackReadsLyricsWithArtistPrefix(t *testing.T) {
+	root := t.TempDir()
+	lyricsRoot := t.TempDir()
+	path := filepath.Join(root, "如果这就是爱情.mp3")
+	if err := os.WriteFile(path, []byte("not a real mp3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lyricsPath := filepath.Join(lyricsRoot, "张靓颖-如果这就是爱情.lrc")
+	if err := os.WriteFile(lyricsPath, []byte("[00:02.00]如果这就是爱情"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, lyrics, err := buildTrack(root, path, ".mp3", []string{lyricsRoot}, models.TrackQualityLossy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lyrics == nil {
+		t.Fatal("lyrics = nil, want prefixed LRC lyrics")
+	}
+	if len(lyrics.Lines) != 1 {
+		t.Fatalf("lines = %d, want 1", len(lyrics.Lines))
+	}
+	if lyrics.Lines[0].Text != "如果这就是爱情" {
+		t.Fatalf("first line = %q, want %q", lyrics.Lines[0].Text, "如果这就是爱情")
 	}
 }
 

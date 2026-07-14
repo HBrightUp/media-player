@@ -11,6 +11,7 @@ type Track struct {
 	Artist          string      `json:"artist"`
 	Album           string      `json:"album"`
 	Format          string      `json:"format"`
+	Quality         string      `json:"quality"`
 	SizeBytes       int64       `json:"size_bytes"`
 	DurationSeconds *int        `json:"duration_seconds"`
 	ModifiedAt      time.Time   `json:"modified_at"`
@@ -69,3 +70,8 @@ type ScanResult struct {
 	Skipped  int      `json:"skipped"`
 	Errors   []string `json:"errors,omitempty"`
 }
+
+const (
+	TrackQualityLossless = "lossless"
+	TrackQualityLossy    = "lossy"
+)

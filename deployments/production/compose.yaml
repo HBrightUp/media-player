@@ -43,16 +43,24 @@ services:
       SERVER_ADDR: ":8080"
       DATABASE_URL: "postgres://${POSTGRES_USER:-media_player}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_player}?sslmode=disable"
       CORS_ORIGIN: "${MEDIA_PLAYER_PUBLIC_ORIGIN:?MEDIA_PLAYER_PUBLIC_ORIGIN is required}"
-      MUSIC_DIRECTORY: "/music"
-      LYRICS_DIRECTORY: "/lyrics"
+      MUSIC_DIRECTORY: "/lossless-music"
+      LYRICS_DIRECTORY: "/lossless-lyrics"
+      LOSSLESS_MUSIC_DIRECTORY: "/lossless-music"
+      LOSSLESS_LYRICS_DIRECTORY: "/lossless-lyrics"
+      LOSSY_MUSIC_DIRECTORY: "/lossy-music"
+      LOSSY_LYRICS_DIRECTORY: "/lossy-lyrics"
+      SHARED_LYRICS_DIRECTORY: "/shared-lyrics"
       LIBRARY_WATCH_POLL_INTERVAL: "${LIBRARY_WATCH_POLL_INTERVAL:-1m}"
       LIBRARY_WATCH_DEBOUNCE: "${LIBRARY_WATCH_DEBOUNCE:-30s}"
       LIBRARY_AUTO_SCAN_INTERVAL: "${LIBRARY_AUTO_SCAN_INTERVAL:-0}"
     ports:
       - "127.0.0.1:18080:8080"
     volumes:
-      - ${MUSIC_DIRECTORY:-/opt/media-player/music}:/music:rw
-      - ${LYRICS_DIRECTORY:-/opt/media-player/lyrics}:/lyrics:rw
+      - ${LOSSLESS_MUSIC_DIRECTORY:-/opt/media-player/music}:/lossless-music:rw
+      - ${LOSSLESS_LYRICS_DIRECTORY:-/opt/media-player/lyrics}:/lossless-lyrics:rw
+      - ${LOSSY_MUSIC_DIRECTORY:-/opt/media-player/lossy-music}:/lossy-music:rw
+      - ${LOSSY_LYRICS_DIRECTORY:-/opt/media-player/lossy-lyrics}:/lossy-lyrics:rw
+      - ${SHARED_LYRICS_DIRECTORY:-/opt/media-player/shared-lyrics}:/shared-lyrics:rw
 
 volumes:
   media_player_caddy_data:

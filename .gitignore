@@ -18,3 +18,4 @@ frontend/vite.config.d.ts
 
 .cache/
 .local-postgres/
+.codex-run/

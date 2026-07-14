@@ -32,7 +32,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const musicDirectoryKey = "music_directory"
+const (
+	musicDirectoryKey          = "music_directory"
+	losslessMusicDirectoryKey  = "lossless_music_directory"
+	losslessLyricsDirectoryKey = "lossless_lyrics_directory"
+	lossyMusicDirectoryKey     = "lossy_music_directory"
+	lossyLyricsDirectoryKey    = "lossy_lyrics_directory"
+	sharedLyricsDirectoryKey   = "shared_lyrics_directory"
+)
 const (
 	favoriteCategoryMaxRunes = 16
 	passwordMinLength        = 6
@@ -178,7 +185,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/auth/register", s.handleRegister)
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
+	mux.HandleFunc("/api/auth/me", s.handleAuthMe)
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
+	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
+	mux.HandleFunc("/api/admin/users/", s.handleAdminUserRoute)
 	mux.HandleFunc("/api/presence/heartbeat", s.handlePresenceHeartbeat)
 	mux.HandleFunc("/api/presence/offline", s.handlePresenceOffline)
 	mux.HandleFunc("/api/settings/library", s.handleLibrarySetting)
@@ -318,6 +328,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"user":       publicUser(user),
 		"token":      token,
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	user, ok := s.requireSessionUser(w, r, "请先登录")
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": publicUser(user),
 	})
 }
 
@@ -579,6 +603,10 @@ func writePresenceResponse(w http.ResponseWriter, snapshot presenceSnapshot, inc
 }
 
 func (s *Server) handleLibrarySetting(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAudioManager(w, r, "请先登录后管理服务器音频文件"); !ok {
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		setting, err := s.store.GetSetting(r.Context(), musicDirectoryKey)
@@ -631,17 +659,11 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	if _, ok := s.requireAudioManager(w, r, "请先登录后管理服务器音频文件"); !ok {
+		return
+	}
 
-	setting, err := s.store.GetSetting(r.Context(), musicDirectoryKey)
-	if errors.Is(err, sql.ErrNoRows) || setting.Path == "" {
-		writeError(w, http.StatusBadRequest, "请先设置音乐目录")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取音乐目录失败")
-		return
-	}
-	result, err := s.scanner.Scan(r.Context(), setting.Path)
+	result, err := s.scanManagedLibrary(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("扫描音乐目录失败: %v", err))
 		return
@@ -654,7 +676,29 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	tracks, err := s.store.ListTracks(r.Context())
+	quality := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("quality")))
+	user, hasUser := s.optionalSessionUser(r)
+	var tracks []models.Track
+	var err error
+	switch quality {
+	case "":
+		if hasUser && models.UserCanPlayLossless(user.Role) {
+			tracks, err = s.store.ListTracks(r.Context())
+		} else {
+			tracks, err = s.store.ListTracksByQuality(r.Context(), models.TrackQualityLossy)
+		}
+	case models.TrackQualityLossless:
+		if !hasUser || !models.UserCanPlayLossless(user.Role) {
+			writeError(w, http.StatusForbidden, "当前用户无权播放无损音乐")
+			return
+		}
+		tracks, err = s.store.ListTracksByQuality(r.Context(), quality)
+	case models.TrackQualityLossy:
+		tracks, err = s.store.ListTracksByQuality(r.Context(), quality)
+	default:
+		writeError(w, http.StatusBadRequest, "音乐类型不正确")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取歌曲列表失败")
 		return
@@ -679,7 +723,8 @@ func (s *Server) handleTrackRefresh(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.store.GetUserByID(r.Context(), userID); err != nil {
+	user, err := s.store.GetUserByID(r.Context(), userID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "请先登录后刷新歌单")
 			return
@@ -700,6 +745,7 @@ func (s *Server) handleTrackRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "读取歌曲列表失败")
 		return
 	}
+	tracks = filterTracksForUser(user, tracks)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tracks": tracks,
 	})
@@ -715,6 +761,11 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 		}
 		userID, ok := s.requireMatchingSessionUserID(w, r, userID, "请先登录后读取收藏列表")
 		if !ok {
+			return
+		}
+		user, err := s.store.GetUserByID(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取用户失败")
 			return
 		}
 		var tracks []models.Track
@@ -733,6 +784,7 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "读取收藏列表失败")
 			return
 		}
+		tracks = filterTracksForUser(user, tracks)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tracks": tracks,
 		})
@@ -753,6 +805,24 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 		}
 		if request.TrackID <= 0 {
 			writeError(w, http.StatusBadRequest, "歌曲标识不正确")
+			return
+		}
+		user, err := s.store.GetUserByID(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取用户失败")
+			return
+		}
+		track, err := s.store.GetTrack(r.Context(), request.TrackID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "歌曲不存在")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取歌曲失败")
+			return
+		}
+		if !userCanAccessTrack(user, track) {
+			writeError(w, http.StatusForbidden, "当前用户无权收藏无损音乐")
 			return
 		}
 		if err := s.store.AddFavoriteTrack(r.Context(), userID, request.TrackID); err != nil {
@@ -931,6 +1001,24 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "歌曲标识不正确")
 			return
 		}
+		user, err := s.store.GetUserByID(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取用户失败")
+			return
+		}
+		track, err := s.store.GetTrack(r.Context(), request.TrackID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "歌曲不存在")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取歌曲失败")
+			return
+		}
+		if !userCanAccessTrack(user, track) {
+			writeError(w, http.StatusForbidden, "当前用户无权加入无损音乐")
+			return
+		}
 		if err := s.store.AddFavoriteTrackToCategory(r.Context(), userID, categoryID, request.TrackID); err != nil {
 			if isForeignKeyViolation(err) {
 				writeError(w, http.StatusNotFound, "用户、歌曲或分类不存在")
@@ -989,6 +1077,24 @@ func (s *Server) handleTrackRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTrackLyrics(w http.ResponseWriter, r *http.Request, id int64) {
+	track, err := s.store.GetTrack(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取歌曲失败")
+		return
+	}
+	user, ok := s.requireSessionUser(w, r, "请先登录后读取歌词")
+	if !ok {
+		return
+	}
+	if !userCanAccessTrack(user, track) {
+		writeError(w, http.StatusForbidden, "当前用户无权读取无损音乐歌词")
+		return
+	}
+
 	lyrics, err := s.store.GetTrackLyrics(r.Context(), id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
@@ -1034,6 +1140,14 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取歌曲失败")
+		return
+	}
+	user, ok := s.requireSessionUser(w, r, "请先登录后播放音乐")
+	if !ok {
+		return
+	}
+	if !userCanAccessTrack(user, track) {
+		writeError(w, http.StatusForbidden, "当前用户无权播放无损音乐")
 		return
 	}
 
@@ -1564,6 +1678,7 @@ func publicUser(user models.User) map[string]any {
 		"phone":        user.Phone,
 		"country_code": user.CountryCode,
 		"nickname":     user.Nickname,
+		"role":         models.NormalizeUserRole(user.Role),
 		"created_at":   user.CreatedAt,
 	}
 }

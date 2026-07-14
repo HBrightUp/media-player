@@ -55,7 +55,17 @@ POSTGRES_USER=media_player
 POSTGRES_PASSWORD=<use-a-strong-password>
 MUSIC_DIRECTORY=/opt/media-player/music
 LYRICS_DIRECTORY=/opt/media-player/lyrics
+LOSSLESS_MUSIC_DIRECTORY=/opt/media-player/music
+LOSSLESS_LYRICS_DIRECTORY=/opt/media-player/lyrics
+LOSSY_MUSIC_DIRECTORY=/opt/media-player/lossy-music
+LOSSY_LYRICS_DIRECTORY=/opt/media-player/lossy-lyrics
+SHARED_LYRICS_DIRECTORY=/opt/media-player/shared-lyrics
 ```
+
+`MUSIC_DIRECTORY` and `LYRICS_DIRECTORY` remain as legacy aliases. The default
+production mapping keeps existing files compatible by treating
+`/opt/media-player/music` as lossless music and `/opt/media-player/lyrics` as
+lossless lyrics.
 
 For IP-only HTTP deployment:
 
@@ -69,15 +79,24 @@ MEDIA_PLAYER_PUBLIC_ORIGIN=http://<ECS_PUBLIC_IP>
 ```bash
 mkdir -p /opt/media-player/music
 mkdir -p /opt/media-player/lyrics
+mkdir -p /opt/media-player/lossy-music
+mkdir -p /opt/media-player/lossy-lyrics
+mkdir -p /opt/media-player/shared-lyrics
 ```
 
-Upload audio files into `/opt/media-player/music`. Put optional same-name `.lrc`
-lyric files into `/opt/media-player/lyrics` using the same relative path, for
-example:
+Upload lossless audio files into `/opt/media-player/music` and lossless lyrics
+into `/opt/media-player/lyrics`. Upload lossy audio files into
+`/opt/media-player/lossy-music` and lossy lyrics into
+`/opt/media-player/lossy-lyrics`. Lyrics shared by both versions can be placed
+in `/opt/media-player/shared-lyrics`. Use the same relative path where
+possible, for example:
 
 ```text
 /opt/media-player/music/artist/song.flac
 /opt/media-player/lyrics/artist/song.lrc
+/opt/media-player/lossy-music/artist/song.mp3
+/opt/media-player/lossy-lyrics/artist/song.lrc
+/opt/media-player/shared-lyrics/artist/song.lrc
 ```
 
 ## 5. Deploy
@@ -88,8 +107,8 @@ Run from the repository root on the server:
 sh deployments/production/deploy.sh
 ```
 
-The script validates the environment file, creates the music directory, builds
-the frontend/backend images, and starts all services.
+The script validates the environment file, creates the configured music and
+lyrics directories, builds the frontend/backend images, and starts all services.
 
 Manual equivalent:
 

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   artist TEXT NOT NULL,
   album TEXT NOT NULL,
   format TEXT NOT NULL,
+  quality TEXT NOT NULL DEFAULT 'lossless' CHECK (quality IN ('lossless', 'lossy')),
   size_bytes BIGINT NOT NULL,
   duration_seconds INTEGER,
   modified_at TIMESTAMPTZ NOT NULL,
@@ -26,18 +27,43 @@ CREATE TABLE IF NOT EXISTS tracks (
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_mime_type TEXT;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_data BYTEA;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_hash TEXT;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS quality TEXT NOT NULL DEFAULT 'lossless';
+ALTER TABLE tracks DROP CONSTRAINT IF EXISTS tracks_quality_check;
+ALTER TABLE tracks ADD CONSTRAINT tracks_quality_check CHECK (quality IN ('lossless', 'lossy'));
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   phone TEXT NOT NULL UNIQUE,
   country_code TEXT NOT NULL DEFAULT '+86',
   nickname TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('super_admin', 'admin', 'vip', 'user')),
   password_hash TEXT NOT NULL,
   password_salt TEXT NOT NULL,
   terms_accepted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
+UPDATE users
+SET role = 'user'
+WHERE role NOT IN ('super_admin', 'admin', 'vip', 'user');
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin', 'admin', 'vip', 'user'));
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE role = 'super_admin') THEN
+    UPDATE users
+    SET role = 'super_admin'
+    WHERE id = (
+      SELECT id
+      FROM users
+      ORDER BY id
+      LIMIT 1
+    );
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS favorite_tracks (
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -114,11 +140,14 @@ END $$;
 ALTER TABLE tracks DROP COLUMN IF EXISTS lyrics;
 DROP TABLE IF EXISTS chat_messages;
 DROP TABLE IF EXISTS chat_rooms;
+DROP TABLE IF EXISTS note_comments;
 
 CREATE INDEX IF NOT EXISTS tracks_title_idx ON tracks (lower(title));
 CREATE INDEX IF NOT EXISTS tracks_artist_idx ON tracks (lower(artist));
 CREATE INDEX IF NOT EXISTS tracks_album_idx ON tracks (lower(album));
+CREATE INDEX IF NOT EXISTS tracks_quality_title_idx ON tracks (quality, lower(title), lower(artist), id);
 CREATE INDEX IF NOT EXISTS users_phone_idx ON users (phone);
+CREATE INDEX IF NOT EXISTS users_role_idx ON users (role, id);
 CREATE INDEX IF NOT EXISTS favorite_tracks_user_created_idx ON favorite_tracks (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS favorite_tracks_track_id_idx ON favorite_tracks (track_id);
 CREATE UNIQUE INDEX IF NOT EXISTS favorite_categories_user_name_unique_idx ON favorite_categories (user_id, lower(name));
