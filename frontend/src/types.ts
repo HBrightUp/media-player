@@ -137,6 +137,34 @@ export type PresenceResponse = {
   online_users?: OnlineUser[];
 };
 
+export type PlaybackSessionState = "playing" | "paused";
+
+export type PlaybackSessionRequest = {
+  track_id: number;
+  device_id: string;
+  tab_id: string;
+  device_name: string;
+};
+
+export type PlaybackSessionHeartbeatRequest = {
+  token: string;
+  track_id?: number;
+  device_id: string;
+  tab_id: string;
+  state: PlaybackSessionState;
+};
+
+export type PlaybackSessionResponse = {
+  ok: boolean;
+  token: string;
+  expires_at: string;
+  state: PlaybackSessionState;
+  track_id: number;
+  device_id: string;
+  tab_id: string;
+  device_name: string;
+};
+
 export type AudioFileImportLimits = {
   max_audio_file_bytes: number;
   max_total_bytes: number;

@@ -57,6 +57,9 @@ const (
 	audioFileAccessMaxFails  = 5
 	audioFileAccessLockout   = time.Minute
 	audioFileAccessTokenSize = 32
+	playbackSessionTTL       = 45 * time.Second
+	playbackPauseTTL         = 5 * time.Minute
+	playbackSessionTokenSize = 32
 )
 
 var mainlandPhonePattern = regexp.MustCompile(`^1[3-9]\d{9}$`)
@@ -191,6 +194,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/admin/users/", s.handleAdminUserRoute)
 	mux.HandleFunc("/api/presence/heartbeat", s.handlePresenceHeartbeat)
 	mux.HandleFunc("/api/presence/offline", s.handlePresenceOffline)
+	mux.HandleFunc("/api/playback/session", s.handlePlaybackSession)
+	mux.HandleFunc("/api/playback/heartbeat", s.handlePlaybackHeartbeat)
+	mux.HandleFunc("/api/playback/release", s.handlePlaybackRelease)
 	mux.HandleFunc("/api/settings/library", s.handleLibrarySetting)
 	mux.HandleFunc("/api/library/scan", s.handleScan)
 	mux.HandleFunc("/api/favorites", s.handleFavorites)
@@ -358,6 +364,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		tokenHash := hashAuthSessionToken(token)
 		session, err := s.store.EndAuthSession(r.Context(), tokenHash, "explicit_logout", now)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "退出登录失败")
+			return
+		}
+		if err := s.store.RevokePlaybackSessionsForAuthSession(r.Context(), tokenHash, now, "explicit_logout"); err != nil {
 			writeError(w, http.StatusInternalServerError, "退出登录失败")
 			return
 		}
@@ -1158,6 +1168,9 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 		writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
 		return
 	}
+	if !s.requirePlaybackSessionForStream(w, r, user.ID) {
+		return
+	}
 
 	file, err := os.Open(track.Path)
 	if err != nil {
@@ -1700,7 +1713,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			origin = "*"
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Token, X-Audio-Access-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Token, X-Audio-Access-Token, X-Playback-Session-Token")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 		if r.Method == http.MethodOptions {

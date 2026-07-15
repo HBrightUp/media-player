@@ -19,6 +19,9 @@ import type {
   ManagedUserRequest,
   NoteFolder,
   NoteFolderRequest,
+  PlaybackSessionHeartbeatRequest,
+  PlaybackSessionRequest,
+  PlaybackSessionResponse,
   PresenceRequest,
   PresenceResponse,
   ScanResult,
@@ -172,14 +175,23 @@ function parseRetryAfterSeconds(value: string | null) {
   return Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
-export function streamURL(track: Track, sessionToken?: string): string {
+export function streamURL(track: Track, sessionToken?: string, playbackToken?: string): string {
   const url = `${API_BASE}${track.stream_url}`;
+  const params = new URLSearchParams();
   const token = sessionToken?.trim();
-  if (!token) {
+  const playback = playbackToken?.trim();
+  if (token) {
+    params.set("session_token", token);
+  }
+  if (playback) {
+    params.set("playback_token", playback);
+  }
+  const query = params.toString();
+  if (!query) {
     return url;
   }
   const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}session_token=${encodeURIComponent(token)}`;
+  return `${url}${separator}${query}`;
 }
 
 export function coverURL(track: Track): string {
@@ -495,6 +507,33 @@ export function sendPresenceOffline(payload: PresenceRequest): Promise<PresenceR
   return request<PresenceResponse>("/api/presence/offline", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export function claimPlaybackSession(payload: PlaybackSessionRequest): Promise<PlaybackSessionResponse> {
+  return request<PlaybackSessionResponse>("/api/playback/session", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }, {
+    timeoutMs: authRequestTimeoutMs
+  });
+}
+
+export function heartbeatPlaybackSession(payload: PlaybackSessionHeartbeatRequest): Promise<PlaybackSessionResponse> {
+  return request<PlaybackSessionResponse>("/api/playback/heartbeat", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }, {
+    timeoutMs: authRequestTimeoutMs
+  });
+}
+
+export function releasePlaybackSession(token: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("/api/playback/release", {
+    method: "POST",
+    body: JSON.stringify({ token })
+  }, {
+    timeoutMs: authRequestTimeoutMs
   });
 }
 

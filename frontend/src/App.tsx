@@ -46,7 +46,10 @@ import {
   getTrackMemberships,
   getTrackLyrics,
   getTracks,
+  heartbeatPlaybackSession,
   importAudioFolder,
+  claimPlaybackSession,
+  releasePlaybackSession,
   loginUser,
   logoutUser,
   refreshTracks,
@@ -63,7 +66,7 @@ import {
   updateNoteFolder
 } from "./api";
 import type { UploadProgressSnapshot } from "./api";
-import type { AudioFileArea, AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, ManagedUser, ManagedUserRequest, NoteFolder, OnlineUser, ServerAudioFile, ServerManagedFile, Track, TrackCategoryMembership, TrackLyrics, UserRole } from "./types";
+import type { AudioFileArea, AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, ManagedUser, ManagedUserRequest, NoteFolder, OnlineUser, PlaybackSessionResponse, ServerAudioFile, ServerManagedFile, Track, TrackCategoryMembership, TrackLyrics, UserRole } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -79,6 +82,12 @@ type AuthSession = {
 type AuthReadResult = {
   session: AuthSession | null;
   expired: boolean;
+};
+type PlaybackSessionState = {
+  token: string;
+  expiresAt: number;
+  trackID: number;
+  state: "playing" | "paused";
 };
 type AuthFormState = {
   nickname: string;
@@ -288,10 +297,14 @@ const baseProfileViewTabs: { id: ProfileView; label: string }[] = [
 const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
+const playbackDeviceStorageKey = "media-player-playback-device";
+const playbackBroadcastStorageKey = "media-player-playback-broadcast";
 const manualLibraryRefreshStorageKey = "media-player-manual-library-refresh-at";
 const authSessionFallbackDurationMs = 3 * 24 * 60 * 60 * 1000;
 const audioFileAccessUploadExtensionMs = 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
+const playbackHeartbeatIntervalMs = 5_000;
+const playbackSessionRefreshWindowMs = 15_000;
 const manualLibraryRefreshCooldownMs = 60_000;
 const lyricsChromeAutoHideMs = 2800;
 const passwordMinLength = 6;
@@ -673,6 +686,10 @@ function App() {
   const initialAuthRef = useRef<AuthReadResult | null>(null);
   const initialAuthProfileRef = useRef<AuthFormState | null>(null);
   const presenceSessionIdRef = useRef<string | null>(null);
+  const playbackDeviceIdRef = useRef<string | null>(null);
+  const playbackTabIdRef = useRef<string | null>(null);
+  const playbackBroadcastRef = useRef<BroadcastChannel | null>(null);
+  const playbackRequestIdRef = useRef(0);
   const lyricsScrollStateRef = useRef<LyricsScrollState>({ trackID: null, top: 0, activeLineIndex: -1 });
   const lyricsChromeTimerRef = useRef<number | null>(null);
   const musicListRef = useRef<HTMLDivElement | null>(null);
@@ -707,11 +724,18 @@ function App() {
   if (!presenceSessionIdRef.current) {
     presenceSessionIdRef.current = readPresenceSessionID();
   }
+  if (!playbackDeviceIdRef.current) {
+    playbackDeviceIdRef.current = readPlaybackDeviceID();
+  }
+  if (!playbackTabIdRef.current) {
+    playbackTabIdRef.current = createPlaybackTabID();
+  }
   const [libraryTracks, setLibraryTracks] = useState<Track[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [playbackQueueScope, setPlaybackQueueScope] = useState<PlaybackQueueScope>({ kind: "library" });
   const [currentTrackId, setCurrentTrackId] = useState<number | null>(null);
+  const [playbackSession, setPlaybackSession] = useState<PlaybackSessionState | null>(null);
   const [detachedCurrentTrack, setDetachedCurrentTrack] = useState<DetachedCurrentTrack | null>(null);
   const [trackLyrics, setTrackLyrics] = useState<TrackLyrics | null>(null);
   const [lyricsStatus, setLyricsStatus] = useState<LyricsStatus>("idle");
@@ -810,7 +834,8 @@ function App() {
     }
     return playbackQueue[0];
   }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
-  const currentTrackStreamURL = currentTrack?.stream_url ? streamURL(currentTrack, authSession?.token) : "";
+  const currentPlaybackToken = playbackSession?.token ?? "";
+  const currentTrackStreamURL = currentTrack?.stream_url && currentPlaybackToken ? streamURL(currentTrack, authSession?.token, currentPlaybackToken) : "";
   const nextTrackToPreload = useMemo(() => {
     if (!isPlaying || playbackMode !== "all" || !currentTrack?.stream_url || playbackQueue.length < 2) {
       return null;
@@ -818,7 +843,7 @@ function App() {
     const nextTrack = getAdjacentQueuedTrack(1);
     return nextTrack?.id === currentTrack.id ? null : nextTrack;
   }, [currentTrack, detachedCurrentTrack, isPlaying, playbackMode, playbackQueue]);
-  const nextTrackPreloadURL = nextTrackToPreload?.stream_url ? streamURL(nextTrackToPreload, authSession?.token) : "";
+  const nextTrackPreloadURL = nextTrackToPreload?.stream_url && currentPlaybackToken ? streamURL(nextTrackToPreload, authSession?.token, currentPlaybackToken) : "";
 
   const hasTransientPopup = Boolean(
     trackContextMenu ||
@@ -867,6 +892,43 @@ function App() {
   }, [authSession?.token]);
 
   useEffect(() => {
+    if (!authSession?.userId) {
+      return;
+    }
+    const handlePlaybackMessage = (message: { type?: string; userId?: number; tabId?: string }) => {
+      if (message.type !== "playback-claimed" || message.userId !== authSession.userId || message.tabId === playbackTabIdRef.current) {
+        return;
+      }
+      handlePlaybackTakenOver("音乐已切换到其它页面播放");
+    };
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel("media-player-playback");
+      playbackBroadcastRef.current = channel;
+      channel.onmessage = (event: MessageEvent) => handlePlaybackMessage(event.data as { type?: string; userId?: number; tabId?: string });
+      return () => {
+        if (playbackBroadcastRef.current === channel) {
+          playbackBroadcastRef.current = null;
+        }
+        channel.close();
+      };
+    }
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== playbackBroadcastStorageKey || !event.newValue) {
+        return;
+      }
+      try {
+        handlePlaybackMessage(JSON.parse(event.newValue) as { type?: string; userId?: number; tabId?: string });
+      } catch {
+        // Ignore malformed cross-tab messages.
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [authSession?.userId]);
+
+  useEffect(() => {
     if (activeTab !== "高品质" || canRolePlayLossless(authSession?.role)) {
       return;
     }
@@ -894,6 +956,10 @@ function App() {
   useEffect(() => {
     if (!authSession) {
       loadedLibrarySessionKeyRef.current = null;
+      setPlaybackSession(null);
+      playbackIntentRef.current = false;
+      setIsAudioLoading(false);
+      setIsPlaying(false);
       setAudioFileAccess(null);
       setAudioFileAccessDialog(createClosedAudioFileAccessDialog());
       setManagedUsers([]);
@@ -931,6 +997,20 @@ function App() {
       categoryId: activeTab === "分类" ? activeCategoryId : undefined
     });
   }, [authSession?.userId]);
+
+  useEffect(() => {
+    if (!authSession?.userId || !playbackSession?.token || !currentTrack?.id || !isPlaying) {
+      return;
+    }
+
+    const intervalID = window.setInterval(() => {
+      void sendPlaybackHeartbeat("playing");
+    }, playbackHeartbeatIntervalMs);
+
+    return () => {
+      window.clearInterval(intervalID);
+    };
+  }, [authSession?.userId, playbackSession?.token, currentTrack?.id, isPlaying]);
 
   useEffect(() => {
     if (manualLibraryRefreshRemainingMs <= 0) {
@@ -1142,7 +1222,7 @@ function App() {
   }, [sleepTimerEndsAt, sleepTimerNow]);
 
   useLayoutEffect(() => {
-    if (activePage !== "music" || !isLibraryMusicTab(activeTab) || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
+    if (activePage !== "music" || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
       return;
     }
 
@@ -1152,6 +1232,7 @@ function App() {
       return;
     }
 
+    clearMusicListScrollSettleTimer();
     scrollElementToListCenter(musicList, row);
     shouldRevealCurrentTrackRef.current = false;
   }, [activePage, activeTab, currentTrack?.id, tracks]);
@@ -1598,6 +1679,7 @@ function App() {
 
   function clearDetachedPlayback() {
     setIsPlaying(false);
+    void sendPlaybackHeartbeat("paused");
     if (detachedCurrentTrack) {
       setDetachedCurrentTrack(null);
       setCurrentTrackId(null);
@@ -1899,6 +1981,7 @@ function App() {
 
   function clearCurrentLibrary() {
     audioPlayRequestIdRef.current += 1;
+    releaseCurrentPlaybackSession();
     clearTrackLyricsCache();
     if (nextTrackPreloadTimerRef.current !== null) {
       window.clearTimeout(nextTrackPreloadTimerRef.current);
@@ -2334,6 +2417,7 @@ function App() {
       persistAuthSession(nextSession);
       persistAuthProfile(response.user);
       setApiSessionToken(nextSession.token);
+      setPlaybackSession(null);
       setFavoriteTracksCache(null);
       setCategoryTracksCache(new Map());
       setAuthSession(nextSession);
@@ -3076,6 +3160,144 @@ function App() {
     musicListScrollSettleTimerRef.current = null;
   }
 
+  function revealCurrentTrackInMusicList() {
+    shouldRevealCurrentTrackRef.current = true;
+  }
+
+  function applyPlaybackSession(response: PlaybackSessionResponse) {
+    const expiresAt = Date.parse(response.expires_at);
+    setPlaybackSession({
+      token: response.token,
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + playbackHeartbeatIntervalMs,
+      trackID: response.track_id,
+      state: response.state
+    });
+  }
+
+  function broadcastPlaybackClaim() {
+    if (!authSession?.userId) {
+      return;
+    }
+    playbackBroadcastRef.current?.postMessage({
+      type: "playback-claimed",
+      userId: authSession.userId,
+      tabId: playbackTabIdRef.current
+    });
+    if (!playbackBroadcastRef.current) {
+      writeLocalStorage(playbackBroadcastStorageKey, JSON.stringify({
+        type: "playback-claimed",
+        userId: authSession.userId,
+        tabId: playbackTabIdRef.current,
+        sentAt: Date.now()
+      }));
+    }
+  }
+
+  function handlePlaybackTakenOver(message = "音乐已在其它设备或页面播放") {
+    const wasActive = Boolean(isPlaying || isAudioLoading || playbackSession?.token);
+    playbackRequestIdRef.current += 1;
+    setPlaybackSession(null);
+    playbackIntentRef.current = false;
+    ignoreAudioPauseUntilRef.current = 0;
+    setIsAudioLoading(false);
+    setIsPlaying(false);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+    }
+    if (wasActive) {
+      showToast(message);
+    }
+  }
+
+  async function ensurePlaybackSessionForTrack(track: Track, { allowTakeover = true }: { allowTakeover?: boolean } = {}) {
+    if (!authSession?.userId) {
+      showToast("请先登录后播放音乐");
+      return false;
+    }
+    if (!track.stream_url) {
+      return false;
+    }
+
+    const deviceID = playbackDeviceIdRef.current ?? readPlaybackDeviceID();
+    const tabID = playbackTabIdRef.current ?? createPlaybackTabID();
+    playbackDeviceIdRef.current = deviceID;
+    playbackTabIdRef.current = tabID;
+
+    if (playbackSession?.token && playbackSession.expiresAt - Date.now() > playbackSessionRefreshWindowMs) {
+      try {
+        const response = await heartbeatPlaybackSession({
+          token: playbackSession.token,
+          track_id: track.id,
+          device_id: deviceID,
+          tab_id: tabID,
+          state: "playing"
+        });
+        applyPlaybackSession(response);
+        return true;
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409) {
+          showToast(error instanceof Error ? error.message : "播放会话续期失败");
+          return false;
+        }
+        setPlaybackSession(null);
+        if (!allowTakeover) {
+          handlePlaybackTakenOver();
+          return false;
+        }
+      }
+    }
+
+    try {
+      const response = await claimPlaybackSession({
+        track_id: track.id,
+        device_id: deviceID,
+        tab_id: tabID,
+        device_name: getPlaybackDeviceName()
+      });
+      applyPlaybackSession(response);
+      broadcastPlaybackClaim();
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "申请播放权失败");
+      return false;
+    }
+  }
+
+  async function sendPlaybackHeartbeat(state: "playing" | "paused") {
+    if (!authSession?.userId || !playbackSession?.token) {
+      return false;
+    }
+    try {
+      const response = await heartbeatPlaybackSession({
+        token: playbackSession.token,
+        track_id: currentTrack?.id,
+        device_id: playbackDeviceIdRef.current ?? readPlaybackDeviceID(),
+        tab_id: playbackTabIdRef.current ?? createPlaybackTabID(),
+        state
+      });
+      applyPlaybackSession(response);
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        handlePlaybackTakenOver();
+        return false;
+      }
+      if (state === "playing") {
+        showToast(error instanceof Error ? error.message : "播放会话续期失败");
+      }
+      return false;
+    }
+  }
+
+  function releaseCurrentPlaybackSession() {
+    const token = playbackSession?.token;
+    setPlaybackSession(null);
+    if (token) {
+      void releasePlaybackSession(token).catch(() => undefined);
+    }
+  }
+
   function handleMusicListScroll(event: ReactUIEvent<HTMLDivElement>) {
     const listElement = event.currentTarget;
     clearMusicListScrollSettleTimer();
@@ -3535,27 +3757,64 @@ function App() {
   }
 
   function playTrack(track: Track) {
-    clearPendingTrackPlay();
-    setDetachedCurrentTrack(null);
-    setPlaybackQueue(tracks.length ? tracks : [track]);
-    setPlaybackQueueScope(getActivePlaybackQueueScope());
-    setCurrentTrackId(track.id);
-    if (track.stream_url) {
-      prepareEqualizerForPlayback();
-    }
-    setIsAudioLoading(Boolean(track.stream_url));
-    setIsPlaying(Boolean(track.stream_url));
+    void startTrackPlayback(track, {
+      queue: tracks.length ? tracks : [track],
+      scope: getActivePlaybackQueueScope(),
+      allowTakeover: true
+    });
   }
 
-  function playTrackFromQueue(track: Track) {
+  function playTrackFromQueue(track: Track, { allowTakeover = true }: { allowTakeover?: boolean } = {}) {
+    void startTrackPlayback(track, {
+      reveal: true,
+      allowTakeover
+    });
+  }
+
+  async function startTrackPlayback(
+    track: Track,
+    {
+      queue,
+      scope,
+      reveal = false,
+      allowTakeover = true
+    }: { queue?: Track[]; scope?: PlaybackQueueScope; reveal?: boolean; allowTakeover?: boolean } = {}
+  ) {
+    const requestID = playbackRequestIdRef.current + 1;
+    playbackRequestIdRef.current = requestID;
     clearPendingTrackPlay();
     setDetachedCurrentTrack(null);
-    setCurrentTrackId(track.id);
-    if (track.stream_url) {
-      prepareEqualizerForPlayback();
+    if (queue) {
+      setPlaybackQueue(queue);
     }
-    setIsAudioLoading(Boolean(track.stream_url));
-    setIsPlaying(Boolean(track.stream_url));
+    if (scope) {
+      setPlaybackQueueScope(scope);
+    }
+    if (reveal) {
+      revealCurrentTrackInMusicList();
+    }
+    setCurrentTrackId(track.id);
+
+    if (!track.stream_url) {
+      setIsAudioLoading(false);
+      setIsPlaying(false);
+      return;
+    }
+
+    setIsAudioLoading(true);
+    setIsPlaying(false);
+    const canPlay = await ensurePlaybackSessionForTrack(track, { allowTakeover });
+    if (playbackRequestIdRef.current !== requestID) {
+      return;
+    }
+    if (!canPlay) {
+      setIsAudioLoading(false);
+      setIsPlaying(false);
+      return;
+    }
+    prepareEqualizerForPlayback();
+    setIsAudioLoading(true);
+    setIsPlaying(true);
   }
 
   function togglePlay() {
@@ -3565,40 +3824,35 @@ function App() {
       setIsPlaying(false);
       return;
     }
-    if (!currentTrack) {
-      if (!playbackQueue.length && tracks.length) {
-        setPlaybackQueue(tracks);
-        setPlaybackQueueScope(getActivePlaybackQueueScope());
-      }
-      setDetachedCurrentTrack(null);
-      setCurrentTrackId(trackToPlay.id);
-    }
-    if (!trackToPlay.stream_url) {
+    if (isPlaying) {
+      playbackIntentRef.current = false;
       setIsAudioLoading(false);
       setIsPlaying(false);
+      void sendPlaybackHeartbeat("paused");
       return;
     }
-    if (!isPlaying) {
-      prepareEqualizerForPlayback();
-      setIsAudioLoading(true);
-    }
-    setIsPlaying((value) => !value);
+    const queue = !currentTrack && !playbackQueue.length && tracks.length ? tracks : undefined;
+    void startTrackPlayback(trackToPlay, {
+      queue,
+      scope: queue ? getActivePlaybackQueueScope() : undefined,
+      allowTakeover: true
+    });
   }
 
-  function stepTrack(direction: 1 | -1) {
+  function stepTrack(direction: 1 | -1, { allowTakeover = true }: { allowTakeover?: boolean } = {}) {
     const nextTrack = getAdjacentQueuedTrack(direction);
     if (!nextTrack) {
       clearDetachedPlayback();
       return;
     }
     if (direction === 1 && playbackMode === "shuffle") {
-      playRandomTrack();
+      playRandomTrack({ allowTakeover });
       return;
     }
-    playTrackFromQueue(nextTrack);
+    playTrackFromQueue(nextTrack, { allowTakeover });
   }
 
-  function playRandomTrack() {
+  function playRandomTrack({ allowTakeover = true }: { allowTakeover?: boolean } = {}) {
     if (!playbackQueue.length) {
       clearDetachedPlayback();
       return;
@@ -3610,7 +3864,7 @@ function App() {
     }
 
     const nextIndex = Math.floor(Math.random() * randomCandidates.length);
-    playTrackFromQueue(randomCandidates[nextIndex]);
+    playTrackFromQueue(randomCandidates[nextIndex], { allowTakeover });
   }
 
   function selectPlaybackMode(mode: PlaybackMode) {
@@ -3831,10 +4085,10 @@ function App() {
       return;
     }
     if (playbackMode === "shuffle") {
-      playRandomTrack();
+      playRandomTrack({ allowTakeover: false });
       return;
     }
-    stepTrack(1);
+    stepTrack(1, { allowTakeover: false });
   }
 
   function handleSeek(value: string) {
@@ -5002,6 +5256,9 @@ function FullLyricsPage({
   const ignoreScrollRef = useRef(false);
   const ignoreScrollTimerRef = useRef<number | null>(null);
   const followResumeTimerRef = useRef<number | null>(null);
+  const lyricsTapStartRef = useRef<{ pointerId: number; x: number; y: number; at: number } | null>(null);
+  const lastLyricsTapRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const lyricsFullscreenLockUntilRef = useRef(0);
   const userScrollPausedUntilRef = useRef(0);
   const [isUserBrowsingLyrics, setIsUserBrowsingLyrics] = useState(false);
   const scenePalette = useMemo(() => getLyricsScenePalette(currentTrack), [currentTrack?.album, currentTrack?.artist, currentTrack?.id, currentTrack?.title]);
@@ -5204,18 +5461,103 @@ function FullLyricsPage({
 
   function handleLyricsDoubleClick(event: ReactMouseEvent<HTMLElement>) {
     event.preventDefault();
+    requestLyricsFullscreenToggle();
+  }
+
+  function requestLyricsFullscreenToggle() {
+    const now = Date.now();
+    if (now < lyricsFullscreenLockUntilRef.current) {
+      return;
+    }
+    lyricsFullscreenLockUntilRef.current = now + 650;
     void onToggleFullscreen();
+  }
+
+  function handleLyricsPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch") {
+      return;
+    }
+    lyricsTapStartRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      at: Date.now()
+    };
+  }
+
+  function handleLyricsPointerUp(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch") {
+      return;
+    }
+    const tapStart = lyricsTapStartRef.current;
+    lyricsTapStartRef.current = null;
+    if (!tapStart || tapStart.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const now = Date.now();
+    const movement = Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y);
+    if (now - tapStart.at > 260 || movement > 12) {
+      lastLyricsTapRef.current = null;
+      return;
+    }
+
+    const lastTap = lastLyricsTapRef.current;
+    if (lastTap && now - lastTap.at <= 340 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= 32) {
+      event.preventDefault();
+      lastLyricsTapRef.current = null;
+      requestLyricsFullscreenToggle();
+      return;
+    }
+
+    lastLyricsTapRef.current = { x: event.clientX, y: event.clientY, at: now };
   }
 
   let content: ReactNode;
   if (!currentTrack) {
-    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>请选择歌曲</div>;
+    content = (
+      <div
+        className="full-lyrics-empty"
+        onPointerDown={handleLyricsPointerDown}
+        onPointerUp={handleLyricsPointerUp}
+        onDoubleClick={handleLyricsDoubleClick}
+      >
+        请选择歌曲
+      </div>
+    );
   } else if (status === "loading") {
-    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>正在加载歌词</div>;
+    content = (
+      <div
+        className="full-lyrics-empty"
+        onPointerDown={handleLyricsPointerDown}
+        onPointerUp={handleLyricsPointerUp}
+        onDoubleClick={handleLyricsDoubleClick}
+      >
+        正在加载歌词
+      </div>
+    );
   } else if (status === "error") {
-    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>歌词加载失败</div>;
+    content = (
+      <div
+        className="full-lyrics-empty"
+        onPointerDown={handleLyricsPointerDown}
+        onPointerUp={handleLyricsPointerUp}
+        onDoubleClick={handleLyricsDoubleClick}
+      >
+        歌词加载失败
+      </div>
+    );
   } else if (!lines.length) {
-    content = <div className="full-lyrics-empty" onDoubleClick={handleLyricsDoubleClick}>暂无歌词</div>;
+    content = (
+      <div
+        className="full-lyrics-empty"
+        onPointerDown={handleLyricsPointerDown}
+        onPointerUp={handleLyricsPointerUp}
+        onDoubleClick={handleLyricsDoubleClick}
+      >
+        暂无歌词
+      </div>
+    );
   } else {
     content = (
       <div
@@ -5226,6 +5568,8 @@ function FullLyricsPage({
         tabIndex={0}
         onScroll={(event) => handleLyricsScroll(event.currentTarget.scrollTop)}
         onKeyDown={handleLyricsKeyDown}
+        onPointerDown={handleLyricsPointerDown}
+        onPointerUp={handleLyricsPointerUp}
         onDoubleClick={handleLyricsDoubleClick}
       >
         {lines.map((line, index) => {
@@ -5429,6 +5773,45 @@ function readPresenceSessionID() {
   const sessionID = createPresenceSessionID();
   writeLocalStorage(presenceSessionStorageKey, sessionID);
   return sessionID;
+}
+
+function readPlaybackDeviceID() {
+  const existing = readLocalStorage(playbackDeviceStorageKey);
+  if (existing && existing.length <= 128) {
+    return existing;
+  }
+  const deviceID = createPlaybackClientID("device");
+  writeLocalStorage(playbackDeviceStorageKey, deviceID);
+  return deviceID;
+}
+
+function createPlaybackTabID() {
+  return createPlaybackClientID("tab");
+}
+
+function createPlaybackClientID(prefix: string) {
+  if (window.crypto?.randomUUID) {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getPlaybackDeviceName() {
+  if (typeof navigator === "undefined") {
+    return "浏览器";
+  }
+  const platform = navigator.platform?.trim();
+  const userAgent = navigator.userAgent || "";
+  if (/iPad/i.test(userAgent) || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1)) {
+    return "iPad";
+  }
+  if (/iPhone/i.test(userAgent)) {
+    return "iPhone";
+  }
+  if (/Android/i.test(userAgent)) {
+    return /Mobile/i.test(userAgent) ? "Android 手机" : "Android 平板";
+  }
+  return platform || "浏览器";
 }
 
 function createPresenceSessionID() {
