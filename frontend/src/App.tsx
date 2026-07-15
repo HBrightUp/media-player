@@ -304,7 +304,6 @@ const authSessionFallbackDurationMs = 3 * 24 * 60 * 60 * 1000;
 const audioFileAccessUploadExtensionMs = 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
 const playbackHeartbeatIntervalMs = 5_000;
-const playbackSessionRefreshWindowMs = 15_000;
 const manualLibraryRefreshCooldownMs = 60_000;
 const lyricsChromeAutoHideMs = 2800;
 const passwordMinLength = 6;
@@ -3224,7 +3223,7 @@ function App() {
     playbackDeviceIdRef.current = deviceID;
     playbackTabIdRef.current = tabID;
 
-    if (playbackSession?.token && playbackSession.expiresAt - Date.now() > playbackSessionRefreshWindowMs) {
+    if (playbackSession?.token) {
       try {
         const response = await heartbeatPlaybackSession({
           token: playbackSession.token,
@@ -3246,6 +3245,11 @@ function App() {
           return false;
         }
       }
+    }
+
+    if (!allowTakeover) {
+      handlePlaybackTakenOver();
+      return false;
     }
 
     try {
