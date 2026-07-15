@@ -836,12 +836,13 @@ function App() {
   const currentPlaybackToken = playbackSession?.token ?? "";
   const currentTrackStreamURL = currentTrack?.stream_url && currentPlaybackToken ? streamURL(currentTrack, authSession?.token, currentPlaybackToken) : "";
   const nextTrackToPreload = useMemo(() => {
-    if (!isPlaying || playbackMode !== "all" || !currentTrack?.stream_url || playbackQueue.length < 2) {
+    const currentTrackInQueue = Boolean(currentTrack?.id && playbackQueue.some((track) => track.id === currentTrack.id));
+    if (!isPlaying || playbackMode !== "all" || !currentTrack?.stream_url || playbackQueue.length < 2 || !currentTrackInQueue) {
       return null;
     }
     const nextTrack = getAdjacentQueuedTrack(1);
     return nextTrack?.id === currentTrack.id ? null : nextTrack;
-  }, [currentTrack, detachedCurrentTrack, isPlaying, playbackMode, playbackQueue]);
+  }, [currentTrack, isPlaying, playbackMode, playbackQueue]);
   const nextTrackPreloadURL = nextTrackToPreload?.stream_url && currentPlaybackToken ? streamURL(nextTrackToPreload, authSession?.token, currentPlaybackToken) : "";
 
   const hasTransientPopup = Boolean(
@@ -5263,6 +5264,7 @@ function FullLyricsPage({
   const lyricsTapStartRef = useRef<{ pointerId: number; x: number; y: number; at: number } | null>(null);
   const lastLyricsTapRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const lyricsFullscreenLockUntilRef = useRef(0);
+  const lyricsSyntheticMouseBlockUntilRef = useRef(0);
   const userScrollPausedUntilRef = useRef(0);
   const [isUserBrowsingLyrics, setIsUserBrowsingLyrics] = useState(false);
   const scenePalette = useMemo(() => getLyricsScenePalette(currentTrack), [currentTrack?.album, currentTrack?.artist, currentTrack?.id, currentTrack?.title]);
@@ -5465,7 +5467,19 @@ function FullLyricsPage({
 
   function handleLyricsDoubleClick(event: ReactMouseEvent<HTMLElement>) {
     event.preventDefault();
+    event.stopPropagation();
+    if (Date.now() < lyricsSyntheticMouseBlockUntilRef.current) {
+      return;
+    }
     requestLyricsFullscreenToggle();
+  }
+
+  function handleLyricsClickCapture(event: ReactMouseEvent<HTMLElement>) {
+    if (Date.now() >= lyricsSyntheticMouseBlockUntilRef.current) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function requestLyricsFullscreenToggle() {
@@ -5473,13 +5487,18 @@ function FullLyricsPage({
     if (now < lyricsFullscreenLockUntilRef.current) {
       return;
     }
-    lyricsFullscreenLockUntilRef.current = now + 650;
+    lyricsFullscreenLockUntilRef.current = now + 1200;
     void onToggleFullscreen();
   }
 
   function handleLyricsPointerDown(event: ReactPointerEvent<HTMLElement>) {
     if (event.pointerType !== "touch") {
       return;
+    }
+    const lastTap = lastLyricsTapRef.current;
+    if (lastTap && Date.now() - lastTap.at <= 360 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= 34) {
+      event.preventDefault();
+      event.stopPropagation();
     }
     lyricsTapStartRef.current = {
       pointerId: event.pointerId,
@@ -5509,12 +5528,22 @@ function FullLyricsPage({
     const lastTap = lastLyricsTapRef.current;
     if (lastTap && now - lastTap.at <= 340 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= 32) {
       event.preventDefault();
+      event.stopPropagation();
+      lyricsSyntheticMouseBlockUntilRef.current = now + 1200;
       lastLyricsTapRef.current = null;
       requestLyricsFullscreenToggle();
       return;
     }
 
     lastLyricsTapRef.current = { x: event.clientX, y: event.clientY, at: now };
+  }
+
+  function handleLyricsPointerCancel(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch") {
+      return;
+    }
+    lyricsTapStartRef.current = null;
+    lastLyricsTapRef.current = null;
   }
 
   let content: ReactNode;
@@ -5524,6 +5553,8 @@ function FullLyricsPage({
         className="full-lyrics-empty"
         onPointerDown={handleLyricsPointerDown}
         onPointerUp={handleLyricsPointerUp}
+        onPointerCancel={handleLyricsPointerCancel}
+        onClickCapture={handleLyricsClickCapture}
         onDoubleClick={handleLyricsDoubleClick}
       >
         请选择歌曲
@@ -5535,6 +5566,8 @@ function FullLyricsPage({
         className="full-lyrics-empty"
         onPointerDown={handleLyricsPointerDown}
         onPointerUp={handleLyricsPointerUp}
+        onPointerCancel={handleLyricsPointerCancel}
+        onClickCapture={handleLyricsClickCapture}
         onDoubleClick={handleLyricsDoubleClick}
       >
         正在加载歌词
@@ -5546,6 +5579,8 @@ function FullLyricsPage({
         className="full-lyrics-empty"
         onPointerDown={handleLyricsPointerDown}
         onPointerUp={handleLyricsPointerUp}
+        onPointerCancel={handleLyricsPointerCancel}
+        onClickCapture={handleLyricsClickCapture}
         onDoubleClick={handleLyricsDoubleClick}
       >
         歌词加载失败
@@ -5557,6 +5592,8 @@ function FullLyricsPage({
         className="full-lyrics-empty"
         onPointerDown={handleLyricsPointerDown}
         onPointerUp={handleLyricsPointerUp}
+        onPointerCancel={handleLyricsPointerCancel}
+        onClickCapture={handleLyricsClickCapture}
         onDoubleClick={handleLyricsDoubleClick}
       >
         暂无歌词
@@ -5574,6 +5611,8 @@ function FullLyricsPage({
         onKeyDown={handleLyricsKeyDown}
         onPointerDown={handleLyricsPointerDown}
         onPointerUp={handleLyricsPointerUp}
+        onPointerCancel={handleLyricsPointerCancel}
+        onClickCapture={handleLyricsClickCapture}
         onDoubleClick={handleLyricsDoubleClick}
       >
         {lines.map((line, index) => {
