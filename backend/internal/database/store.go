@@ -662,37 +662,48 @@ func (s *Store) ReplaceTrackLyrics(ctx context.Context, trackID int64, lyrics *m
 }
 
 func (s *Store) GetTrackLyrics(ctx context.Context, trackID int64) (models.TrackLyrics, error) {
+	lyrics, _, err := s.GetTrackLyricsWithQuality(ctx, trackID)
+	return lyrics, err
+}
+
+func (s *Store) GetTrackLyricsWithQuality(ctx context.Context, trackID int64) (models.TrackLyrics, string, error) {
 	var lyrics models.TrackLyrics
+	var quality string
 	var format sql.NullString
 	var content sql.NullString
 	var source sql.NullString
 	var sourcePath sql.NullString
+	var contentHash sql.NullString
 	var updatedAt sql.NullTime
 	var lines []byte
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			t.id,
+			t.quality,
 			tl.format,
 			tl.content,
 			tl.lines,
 			tl.source,
 			tl.source_path,
+			tl.content_hash,
 			tl.updated_at
 		FROM tracks t
 		LEFT JOIN track_lyrics tl ON tl.track_id = t.id
 		WHERE t.id = $1
 	`, trackID).Scan(
 		&lyrics.TrackID,
+		&quality,
 		&format,
 		&content,
 		&lines,
 		&source,
 		&sourcePath,
+		&contentHash,
 		&updatedAt,
 	)
 	if err != nil {
-		return models.TrackLyrics{}, err
+		return models.TrackLyrics{}, "", err
 	}
 	if format.Valid {
 		lyrics.Format = format.String
@@ -708,18 +719,21 @@ func (s *Store) GetTrackLyrics(ctx context.Context, trackID int64) (models.Track
 	if sourcePath.Valid {
 		lyrics.SourcePath = &sourcePath.String
 	}
+	if contentHash.Valid {
+		lyrics.ContentHash = contentHash.String
+	}
 	if updatedAt.Valid {
 		lyrics.UpdatedAt = &updatedAt.Time
 	}
 	if len(lines) > 0 {
 		if err := json.Unmarshal(lines, &lyrics.Lines); err != nil {
-			return models.TrackLyrics{}, fmt.Errorf("decode lyrics: %w", err)
+			return models.TrackLyrics{}, "", fmt.Errorf("decode lyrics: %w", err)
 		}
 	}
 	if lyrics.Lines == nil {
 		lyrics.Lines = []models.LyricLine{}
 	}
-	return lyrics, nil
+	return lyrics, normalizedTrackQuality(quality), nil
 }
 
 func (s *Store) GetTrackCover(ctx context.Context, trackID int64) (models.TrackCover, error) {

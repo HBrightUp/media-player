@@ -239,6 +239,8 @@ const currentTimeCommitIntervalMs = 250;
 const audioReadyStateHasFutureData = 3;
 const unexpectedPauseResumeDelayMs = 120;
 const nextTrackPreloadDelayMs = 700;
+const lyricsPrefetchDelayMs = 180;
+const trackLyricsCacheMaxEntries = 80;
 const fullyBufferedRanges: BufferedAudioRange[] = [{ startPercent: 0, endPercent: 100 }];
 const equalizerStorageKey = "media-player-equalizer-gains";
 const equalizerGainMin = -9;
@@ -288,6 +290,7 @@ const authProfileStorageKey = "media-player-auth-profile";
 const presenceSessionStorageKey = "media-player-presence-session";
 const manualLibraryRefreshStorageKey = "media-player-manual-library-refresh-at";
 const authSessionFallbackDurationMs = 3 * 24 * 60 * 60 * 1000;
+const audioFileAccessUploadExtensionMs = 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
 const manualLibraryRefreshCooldownMs = 60_000;
 const lyricsChromeAutoHideMs = 2800;
@@ -685,7 +688,7 @@ function App() {
   const nextTrackPreloadURLRef = useRef("");
   const nextTrackPreloadTimerRef = useRef<number | null>(null);
   const trackLyricsCacheRef = useRef<Map<number, TrackLyrics>>(new Map());
-  const trackLyricsAbortControllerRef = useRef<AbortController | null>(null);
+  const trackLyricsRequestRef = useRef<Map<number, Promise<TrackLyrics>>>(new Map());
   const shouldRevealCurrentTrackRef = useRef(false);
   const loadedLibrarySessionKeyRef = useRef<string | null>(null);
   const seekPointerIdRef = useRef<number | null>(null);
@@ -1287,8 +1290,6 @@ function App() {
 
   useEffect(() => {
     if (activePage !== "lyrics" || !currentTrack?.id) {
-      trackLyricsAbortControllerRef.current?.abort();
-      trackLyricsAbortControllerRef.current = null;
       setTrackLyrics(null);
       setLyricsStatus("idle");
       return;
@@ -1302,27 +1303,19 @@ function App() {
       return;
     }
 
-    trackLyricsAbortControllerRef.current?.abort();
-    const controller = new AbortController();
-    trackLyricsAbortControllerRef.current = controller;
+    let isStale = false;
     setLyricsStatus("loading");
     setTrackLyrics(null);
-    void getTrackLyrics(trackID, { signal: controller.signal })
-      .then((payload) => {
-        if (controller.signal.aborted || trackLyricsAbortControllerRef.current !== controller) {
+    void loadTrackLyrics(trackID)
+      .then((lyrics) => {
+        if (isStale) {
           return;
         }
-        const lines = normalizeLyricLines(payload.lines);
-        const normalizedLyrics = { ...payload, lines };
-        trackLyricsCacheRef.current.set(trackID, normalizedLyrics);
-        setTrackLyrics(normalizedLyrics);
-        setLyricsStatus(lines.length ? "ready" : "empty");
+        setTrackLyrics(lyrics);
+        setLyricsStatus(lyrics.lines.length ? "ready" : "empty");
       })
       .catch((error) => {
-        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-          return;
-        }
-        if (trackLyricsAbortControllerRef.current !== controller) {
+        if (isStale || (error instanceof DOMException && error.name === "AbortError")) {
           return;
         }
         setTrackLyrics(null);
@@ -1330,12 +1323,21 @@ function App() {
       });
 
     return () => {
-      if (trackLyricsAbortControllerRef.current === controller) {
-        trackLyricsAbortControllerRef.current = null;
-      }
-      controller.abort();
+      isStale = true;
     };
   }, [activePage, currentTrack?.id]);
+
+  useEffect(() => {
+    if (!authSession?.token || !currentTrack?.id) {
+      return;
+    }
+    const delay = activePage === "lyrics" ? 0 : lyricsPrefetchDelayMs;
+    const timerID = window.setTimeout(() => {
+      prefetchTrackLyrics(currentTrack);
+      prefetchTrackLyrics(nextTrackToPreload);
+    }, delay);
+    return () => window.clearTimeout(timerID);
+  }, [activePage, authSession?.token, currentTrack?.id, nextTrackToPreload?.id]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -1897,8 +1899,7 @@ function App() {
 
   function clearCurrentLibrary() {
     audioPlayRequestIdRef.current += 1;
-    trackLyricsAbortControllerRef.current?.abort();
-    trackLyricsAbortControllerRef.current = null;
+    clearTrackLyricsCache();
     if (nextTrackPreloadTimerRef.current !== null) {
       window.clearTimeout(nextTrackPreloadTimerRef.current);
       nextTrackPreloadTimerRef.current = null;
@@ -2112,6 +2113,22 @@ function App() {
       return null;
     }
     return audioFileAccess.token;
+  }
+
+  function extendAudioFileAccessDuringUpload(token: string) {
+    if (!authSession?.userId || !token) {
+      return;
+    }
+    const nextExpiresAt = Date.now() + audioFileAccessUploadExtensionMs;
+    setAudioFileAccess((previous) => {
+      if (!previous || previous.userId !== authSession.userId || previous.token !== token) {
+        return previous;
+      }
+      if (previous.expiresAt >= nextExpiresAt) {
+        return previous;
+      }
+      return { ...previous, expiresAt: nextExpiresAt };
+    });
   }
 
   function openAudioFileAccessDialog(message = "") {
@@ -2402,6 +2419,67 @@ function App() {
       setToastMessage("");
       toastTimerRef.current = null;
     }, 3000);
+  }
+
+  function cacheTrackLyrics(trackID: number, lyrics: TrackLyrics) {
+    const cache = trackLyricsCacheRef.current;
+    if (cache.has(trackID)) {
+      cache.delete(trackID);
+    }
+    cache.set(trackID, lyrics);
+    while (cache.size > trackLyricsCacheMaxEntries) {
+      const oldestKey = cache.keys().next().value;
+      if (typeof oldestKey !== "number") {
+        break;
+      }
+      cache.delete(oldestKey);
+    }
+  }
+
+  function clearTrackLyricsCache(trackID?: number | null) {
+    if (typeof trackID === "number") {
+      trackLyricsCacheRef.current.delete(trackID);
+      trackLyricsRequestRef.current.delete(trackID);
+      return;
+    }
+    trackLyricsCacheRef.current.clear();
+    trackLyricsRequestRef.current.clear();
+  }
+
+  function normalizeTrackLyricsPayload(payload: TrackLyrics): TrackLyrics {
+    return { ...payload, lines: normalizeLyricLines(payload.lines) };
+  }
+
+  function loadTrackLyrics(trackID: number, options: { signal?: AbortSignal } = {}) {
+    const cachedLyrics = trackLyricsCacheRef.current.get(trackID);
+    if (cachedLyrics) {
+      return Promise.resolve(cachedLyrics);
+    }
+    const pendingLyrics = trackLyricsRequestRef.current.get(trackID);
+    if (pendingLyrics) {
+      return pendingLyrics;
+    }
+    let request: Promise<TrackLyrics>;
+    request = getTrackLyrics(trackID, { signal: options.signal })
+      .then((payload) => {
+        const normalizedLyrics = normalizeTrackLyricsPayload(payload);
+        cacheTrackLyrics(trackID, normalizedLyrics);
+        return normalizedLyrics;
+      })
+      .finally(() => {
+        if (trackLyricsRequestRef.current.get(trackID) === request) {
+          trackLyricsRequestRef.current.delete(trackID);
+        }
+      });
+    trackLyricsRequestRef.current.set(trackID, request);
+    return request;
+  }
+
+  function prefetchTrackLyrics(track?: Track | null) {
+    if (!track?.id || !track.stream_url || trackLyricsCacheRef.current.has(track.id) || trackLyricsRequestRef.current.has(track.id)) {
+      return;
+    }
+    void loadTrackLyrics(track.id).catch(() => undefined);
   }
 
   async function refreshAudioFiles({
@@ -2750,6 +2828,7 @@ function App() {
     setIsAudioImporting(true);
     setAudioFilesMessage("");
     setAudioImportReport(null);
+    extendAudioFileAccessDuringUpload(accessToken);
     beginAudioImportProgress(audioImportPreflight.totalUploadBytes);
     try {
       const uploadBatches = buildAudioImportUploadBatches(audioImportPreflight, audioFileLimits);
@@ -2757,6 +2836,9 @@ function App() {
       setAudioImportReport(report);
       setAudioImportPreflight(null);
       setAudioImportProgress(null);
+      if ((report.lyrics_imported ?? 0) > 0 || report.imported > 0 || report.converted > 0) {
+        clearTrackLyricsCache();
+      }
       try {
         await refreshAudioFiles({ silent: true });
         await refreshLibrary({ keepExistingOnError: true });
@@ -2791,6 +2873,7 @@ function App() {
       if (batches.length > 1) {
         setAudioFilesMessage(`正在上传第 ${index + 1} / ${batches.length} 批`);
       }
+      extendAudioFileAccessDuringUpload(accessToken);
 
       try {
         const report = await importAudioFolder(userID, batch.files, accessToken, audioFileArea, (snapshot) => {
@@ -2804,6 +2887,7 @@ function App() {
           );
         });
         reports.push(report);
+        extendAudioFileAccessDuringUpload(accessToken);
         uploadedBeforeBatch += batch.bytes;
         updateAudioImportProgress(
           {
@@ -2931,6 +3015,11 @@ function App() {
         }, accessToken, target.area);
       }
       setAudioRenameDraft(null);
+      if (target.kind === "lyrics") {
+        clearTrackLyricsCache();
+      } else if (target.track_id) {
+        clearTrackLyricsCache(target.track_id);
+      }
       await refreshAudioFiles({ silent: true });
       await refreshLibrary({ keepExistingOnError: true });
       showToast("文件已重命名");
@@ -2963,6 +3052,11 @@ function App() {
         await deleteAudioFile(authSession.userId, target.track_id ?? Number(target.id), accessToken, target.area);
       }
       setAudioDeleteTarget(null);
+      if (target.kind === "lyrics") {
+        clearTrackLyricsCache();
+      } else if (target.track_id) {
+        clearTrackLyricsCache(target.track_id);
+      }
       await refreshAudioFiles({ silent: true });
       await refreshLibrary({ keepExistingOnError: true });
       await refreshTrackMemberships();

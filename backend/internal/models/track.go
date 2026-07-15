@@ -29,13 +29,14 @@ type TrackCover struct {
 }
 
 type TrackLyrics struct {
-	TrackID    int64       `json:"track_id"`
-	Format     string      `json:"format"`
-	Content    string      `json:"content"`
-	Lines      []LyricLine `json:"lines"`
-	Source     string      `json:"source"`
-	SourcePath *string     `json:"-"`
-	UpdatedAt  *time.Time  `json:"updated_at"`
+	TrackID     int64       `json:"track_id"`
+	Format      string      `json:"format"`
+	Content     string      `json:"content"`
+	Lines       []LyricLine `json:"lines"`
+	Source      string      `json:"source"`
+	SourcePath  *string     `json:"-"`
+	ContentHash string      `json:"-"`
+	UpdatedAt   *time.Time  `json:"updated_at"`
 }
 
 type LyricLine struct {

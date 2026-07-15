@@ -1077,25 +1077,12 @@ func (s *Server) handleTrackRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTrackLyrics(w http.ResponseWriter, r *http.Request, id int64) {
-	track, err := s.store.GetTrack(r.Context(), id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取歌曲失败")
-		return
-	}
 	user, ok := s.requireSessionUser(w, r, "请先登录后读取歌词")
 	if !ok {
 		return
 	}
-	if !userCanAccessTrack(user, track) {
-		writeError(w, http.StatusForbidden, "当前用户无权读取高品质歌词")
-		return
-	}
 
-	lyrics, err := s.store.GetTrackLyrics(r.Context(), id)
+	lyrics, quality, err := s.store.GetTrackLyricsWithQuality(r.Context(), id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -1104,7 +1091,28 @@ func (s *Server) handleTrackLyrics(w http.ResponseWriter, r *http.Request, id in
 		writeError(w, http.StatusInternalServerError, "读取歌词失败")
 		return
 	}
+	if quality == models.TrackQualityLossless && !models.UserCanPlayLossless(user.Role) {
+		writeError(w, http.StatusForbidden, "当前用户无权读取高品质歌词")
+		return
+	}
+
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Vary", "Authorization, X-Session-Token")
+	etag := trackLyricsETag(lyrics)
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	writeJSON(w, http.StatusOK, lyrics)
+}
+
+func trackLyricsETag(lyrics models.TrackLyrics) string {
+	hash := strings.TrimSpace(lyrics.ContentHash)
+	if hash == "" {
+		hash = fmt.Sprintf("empty-%d", lyrics.TrackID)
+	}
+	return `"` + hash + `"`
 }
 
 func (s *Server) handleTrackCover(w http.ResponseWriter, r *http.Request, id int64) {
@@ -1523,6 +1531,8 @@ func (m *audioFileAccessManager) Validate(userID int64, token string, now time.T
 		delete(m.tokens, token)
 		return false
 	}
+	grant.ExpiresAt = now.Add(m.ttl)
+	m.tokens[token] = grant
 	return true
 }
 
