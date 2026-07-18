@@ -22,3 +22,10 @@ server:
 
 database:
   url: "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"
+
+redis:
+  # 本地 Docker Compose 暴露到 127.0.0.1:16379。
+  # Redis 可用时会承接播放会话、stream ticket 等短生命周期状态。
+  addr: "127.0.0.1:16379"
+  db: 0
+  key_prefix: "media-player"

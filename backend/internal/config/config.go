@@ -13,6 +13,11 @@ import (
 type Config struct {
 	Addr                     string
 	DatabaseURL              string
+	RedisURL                 string
+	RedisAddr                string
+	RedisPassword            string
+	RedisDB                  int
+	RedisKeyPrefix           string
 	CORSOrigin               string
 	MusicDirectory           string
 	LyricsDirectory          string
@@ -31,6 +36,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:                     getenv("SERVER_ADDR", ":8080"),
 		DatabaseURL:              getenv("DATABASE_URL", "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"),
+		RedisAddr:                getenv("REDIS_ADDR", ""),
+		RedisKeyPrefix:           "media-player",
 		CORSOrigin:               getenv("CORS_ORIGIN", "http://localhost:5173"),
 		LibraryWatchPollInterval: time.Minute,
 		LibraryWatchDebounce:     30 * time.Second,
@@ -47,6 +54,10 @@ func Load() (Config, error) {
 
 	cfg.Addr = getenv("SERVER_ADDR", cfg.Addr)
 	cfg.DatabaseURL = getenv("DATABASE_URL", cfg.DatabaseURL)
+	cfg.RedisURL = getenv("REDIS_URL", cfg.RedisURL)
+	cfg.RedisAddr = getenv("REDIS_ADDR", cfg.RedisAddr)
+	cfg.RedisPassword = getenv("REDIS_PASSWORD", cfg.RedisPassword)
+	cfg.RedisKeyPrefix = getenv("REDIS_KEY_PREFIX", cfg.RedisKeyPrefix)
 	cfg.CORSOrigin = getenv("CORS_ORIGIN", cfg.CORSOrigin)
 	cfg.MusicDirectory = getenv("MUSIC_DIRECTORY", cfg.MusicDirectory)
 	cfg.LyricsDirectory = getenv("LYRICS_DIRECTORY", cfg.LyricsDirectory)
@@ -81,6 +92,13 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.LibraryWatchDebounce = interval
+	}
+	if value := strings.TrimSpace(os.Getenv("REDIS_DB")); value != "" {
+		db, err := strconv.Atoi(value)
+		if err != nil || db < 0 {
+			return Config{}, errors.New("REDIS_DB 必须是非负整数")
+		}
+		cfg.RedisDB = db
 	}
 	return cfg, nil
 }
@@ -223,6 +241,20 @@ func applyYAML(cfg *Config, values map[string]string) error {
 			cfg.Addr = value
 		case "database_url", "database.url", "db_url":
 			cfg.DatabaseURL = value
+		case "redis_url", "redis.url":
+			cfg.RedisURL = value
+		case "redis_addr", "redis.addr", "redis.address":
+			cfg.RedisAddr = value
+		case "redis_password", "redis.password":
+			cfg.RedisPassword = value
+		case "redis_key_prefix", "redis.key_prefix", "redis.prefix":
+			cfg.RedisKeyPrefix = value
+		case "redis_db", "redis.db":
+			db, err := strconv.Atoi(value)
+			if err != nil || db < 0 {
+				return errors.New("redis.db 必须是非负整数")
+			}
+			cfg.RedisDB = db
 		case "cors_origin", "server.cors_origin":
 			cfg.CORSOrigin = value
 		case "music_directory", "default_music_directory", "songs_directory", "library.music_directory", "library.default_directory":

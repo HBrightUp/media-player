@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/hml/media-player/backend/internal/database"
@@ -34,7 +36,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		users, err := s.store.ListUsersWithLastActive(r.Context())
+		users, err := s.listUsersWithLastActive(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "读取用户列表失败")
 			return
@@ -93,6 +95,28 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (s *Server) listUsersWithLastActive(ctx context.Context) ([]models.User, error) {
+	users, err := s.store.ListUsersWithLastActive(ctx)
+	if err != nil || s.redisRuntime == nil {
+		return users, err
+	}
+	lastSeenByUser, err := s.redisRuntime.AuthSessionLastSeenByUser(ctx, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	for index := range users {
+		lastSeen, ok := lastSeenByUser[users[index].ID]
+		if !ok {
+			continue
+		}
+		if users[index].LastActiveAt == nil || lastSeen.After(*users[index].LastActiveAt) {
+			value := lastSeen
+			users[index].LastActiveAt = &value
+		}
+	}
+	return users, nil
 }
 
 func (s *Server) handleAdminUserRoute(w http.ResponseWriter, r *http.Request) {

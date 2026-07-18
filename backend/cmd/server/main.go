@@ -18,6 +18,8 @@ import (
 	"github.com/hml/media-player/backend/internal/httpapi"
 	"github.com/hml/media-player/backend/internal/library"
 	"github.com/hml/media-player/backend/internal/models"
+	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
 func main() {
@@ -55,7 +57,20 @@ func main() {
 	scanRoots := configuredScanRoots(cfg)
 	saveConfiguredDirectories(ctx, store, cfg)
 
-	api := httpapi.New(store, scanner, cfg.CORSOrigin)
+	redisClient, err := connectRedis(ctx, cfg)
+	if err != nil {
+		log.Printf("redis disabled: %v", err)
+	}
+	if redisClient != nil {
+		defer redisClient.Close()
+		log.Printf("redis runtime cache enabled: addr=%s prefix=%s", redisClient.Options().Addr, cfg.RedisKeyPrefix)
+	}
+
+	apiOptions := make([]httpapi.Option, 0, 1)
+	if redisClient != nil {
+		apiOptions = append(apiOptions, httpapi.WithRedis(redisClient, cfg.RedisKeyPrefix))
+	}
+	api := httpapi.New(store, scanner, cfg.CORSOrigin, apiOptions...)
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Routes(),
@@ -93,6 +108,40 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+}
+
+func connectRedis(ctx context.Context, cfg config.Config) (*redis.Client, error) {
+	if strings.TrimSpace(cfg.RedisURL) == "" && strings.TrimSpace(cfg.RedisAddr) == "" {
+		return nil, nil
+	}
+	var options *redis.Options
+	var err error
+	if strings.TrimSpace(cfg.RedisURL) != "" {
+		options, err = redis.ParseURL(strings.TrimSpace(cfg.RedisURL))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		options = &redis.Options{
+			Addr:     strings.TrimSpace(cfg.RedisAddr),
+			Password: cfg.RedisPassword,
+			DB:       cfg.RedisDB,
+		}
+	}
+	options.DialTimeout = time.Second
+	options.ReadTimeout = time.Second
+	options.WriteTimeout = time.Second
+	options.DisableIdentity = true
+	options.MaintNotificationsConfig = &maintnotifications.Config{Mode: maintnotifications.ModeDisabled}
+
+	client := redis.NewClient(options)
+	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx).Err(); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return client, nil
 }
 
 func configuredScanRoots(cfg config.Config) []library.ScanRoot {

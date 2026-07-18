@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -161,7 +162,7 @@ func (s *Server) handlePlaybackSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "生成播放会话失败")
 		return
 	}
-	record, err := s.store.CreatePlaybackSession(r.Context(), database.PlaybackSessionCreate{
+	record, err := s.createPlaybackSession(r.Context(), database.PlaybackSessionCreate{
 		TokenHash:            tokenHash,
 		UserID:               user.ID,
 		AuthSessionTokenHash: hashAuthSessionToken(authSessionToken(r)),
@@ -177,9 +178,9 @@ func (s *Server) handlePlaybackSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "申请播放权失败")
 		return
 	}
-	streamTicket, streamTicketExpiresAt, err := s.streamTickets.Grant(user.ID, tokenHash, now)
+	streamTicket, streamTicketExpiresAt, err := s.grantStreamTicket(r.Context(), user.ID, tokenHash, now)
 	if err != nil {
-		_, _ = s.store.ReleasePlaybackSession(r.Context(), tokenHash, user.ID, "stream_ticket_failed", time.Now())
+		_, _ = s.releasePlaybackSession(r.Context(), tokenHash, user.ID, "stream_ticket_failed", time.Now())
 		writeError(w, http.StatusInternalServerError, "生成播放链接失败")
 		return
 	}
@@ -223,7 +224,7 @@ func (s *Server) handlePlaybackHeartbeat(w http.ResponseWriter, r *http.Request)
 	if state == database.PlaybackStatePaused {
 		ttl = playbackPauseTTL
 	}
-	record, err := s.store.HeartbeatPlaybackSession(r.Context(), database.PlaybackSessionHeartbeat{
+	record, err := s.heartbeatPlaybackSession(r.Context(), database.PlaybackSessionHeartbeat{
 		TokenHash: tokenHash,
 		UserID:    user.ID,
 		DeviceID:  deviceID,
@@ -241,7 +242,7 @@ func (s *Server) handlePlaybackHeartbeat(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "续期播放会话失败")
 		return
 	}
-	streamTicket, streamTicketExpiresAt, err := s.streamTickets.Grant(user.ID, tokenHash, now)
+	streamTicket, streamTicketExpiresAt, err := s.grantStreamTicket(r.Context(), user.ID, tokenHash, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "生成播放链接失败")
 		return
@@ -267,12 +268,12 @@ func (s *Server) handlePlaybackRelease(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(request.Token)
 	if token != "" {
 		tokenHash := hashAuthSessionToken(token)
-		_, err := s.store.ReleasePlaybackSession(r.Context(), tokenHash, user.ID, "released", time.Now())
+		_, err := s.releasePlaybackSession(r.Context(), tokenHash, user.ID, "released", time.Now())
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "释放播放会话失败")
 			return
 		}
-		s.streamTickets.RevokePlayback(tokenHash)
+		_ = s.revokeStreamTicket(r.Context(), tokenHash)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
@@ -286,7 +287,7 @@ func (s *Server) requirePlaybackSessionForStream(w http.ResponseWriter, r *http.
 		return false
 	}
 	now := time.Now()
-	_, err := s.store.TouchPlaybackSession(r.Context(), hashAuthSessionToken(token), userID, now, now.Add(playbackSessionTTL))
+	_, err := s.touchPlaybackSession(r.Context(), hashAuthSessionToken(token), userID, now, now.Add(playbackSessionTTL))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusConflict, "音乐已在其它设备或页面播放")
 		return false
@@ -296,6 +297,64 @@ func (s *Server) requirePlaybackSessionForStream(w http.ResponseWriter, r *http.
 		return false
 	}
 	return true
+}
+
+func (s *Server) createPlaybackSession(ctx context.Context, create database.PlaybackSessionCreate) (database.PlaybackSessionRecord, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.CreatePlaybackSession(ctx, create)
+	}
+	return s.store.CreatePlaybackSession(ctx, create)
+}
+
+func (s *Server) heartbeatPlaybackSession(ctx context.Context, heartbeat database.PlaybackSessionHeartbeat) (database.PlaybackSessionRecord, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.HeartbeatPlaybackSession(ctx, heartbeat)
+	}
+	return s.store.HeartbeatPlaybackSession(ctx, heartbeat)
+}
+
+func (s *Server) touchPlaybackSession(ctx context.Context, tokenHash string, userID int64, now time.Time, expiresAt time.Time) (database.PlaybackSessionRecord, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.TouchPlaybackSession(ctx, tokenHash, userID, now, expiresAt)
+	}
+	return s.store.TouchPlaybackSession(ctx, tokenHash, userID, now, expiresAt)
+}
+
+func (s *Server) releasePlaybackSession(ctx context.Context, tokenHash string, userID int64, reason string, now time.Time) (database.PlaybackSessionRecord, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.ReleasePlaybackSession(ctx, tokenHash, userID)
+	}
+	return s.store.ReleasePlaybackSession(ctx, tokenHash, userID, reason, now)
+}
+
+func (s *Server) revokePlaybackSessionsForAuthSession(ctx context.Context, authSessionTokenHash string, now time.Time, reason string) error {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.RevokePlaybackSessionsForAuthSession(ctx, authSessionTokenHash)
+	}
+	return s.store.RevokePlaybackSessionsForAuthSession(ctx, authSessionTokenHash, now, reason)
+}
+
+func (s *Server) grantStreamTicket(ctx context.Context, userID int64, playbackTokenHash string, now time.Time) (string, time.Time, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.GrantStreamTicket(ctx, userID, playbackTokenHash, now)
+	}
+	return s.streamTickets.Grant(userID, playbackTokenHash, now)
+}
+
+func (s *Server) validateStreamTicket(ctx context.Context, token string, now time.Time) (streamTicketGrant, bool, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.ValidateStreamTicket(ctx, token, now)
+	}
+	grant, ok := s.streamTickets.Validate(token, now)
+	return grant, ok, nil
+}
+
+func (s *Server) revokeStreamTicket(ctx context.Context, playbackTokenHash string) error {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.RevokeStreamTicket(ctx, playbackTokenHash)
+	}
+	s.streamTickets.RevokePlayback(playbackTokenHash)
+	return nil
 }
 
 func (s *Server) requirePlayableTrack(w http.ResponseWriter, r *http.Request, user models.User, trackID int64) (models.Track, bool) {

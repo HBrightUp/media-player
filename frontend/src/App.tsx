@@ -5412,7 +5412,6 @@ function FullLyricsPage({
   const lyricsSyntheticMouseBlockUntilRef = useRef(0);
   const lyricsSideControlsHideTimerRef = useRef<number | null>(null);
   const lyricsSideControlsVisibleRef = useRef(false);
-  const lyricsSideRevealOnlyClickRef = useRef(false);
   const userScrollPausedUntilRef = useRef(0);
   const [isUserBrowsingLyrics, setIsUserBrowsingLyrics] = useState(false);
   const [lyricsSideControlsVisible, setLyricsSideControlsVisible] = useState(false);
@@ -5668,7 +5667,6 @@ function FullLyricsPage({
   function hideLyricsSideControls() {
     clearLyricsSideControlsHideTimer();
     lyricsSideControlsVisibleRef.current = false;
-    lyricsSideRevealOnlyClickRef.current = false;
     setLyricsSideControlsVisible(false);
   }
 
@@ -5689,9 +5687,6 @@ function FullLyricsPage({
   function handleLyricsSidePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     event.stopPropagation();
     lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 900;
-    if (event.pointerType === "touch" && !lyricsSideControlsVisibleRef.current) {
-      lyricsSideRevealOnlyClickRef.current = true;
-    }
     revealLyricsSideControls(event.pointerType === "touch");
   }
 
@@ -5700,10 +5695,6 @@ function FullLyricsPage({
     event.stopPropagation();
     lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 900;
     revealLyricsSideControls(true);
-    if (lyricsSideRevealOnlyClickRef.current) {
-      lyricsSideRevealOnlyClickRef.current = false;
-      return;
-    }
     if (direction === -1) {
       onPreviousTrack();
       return;

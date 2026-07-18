@@ -62,7 +62,7 @@ COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
 export DOCKER_BUILDKIT COMPOSE_DOCKER_CLI_BUILD
 
 if [ "$FRONTEND_MODE" = "host_caddy" ]; then
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build postgres backend
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build postgres redis backend
   docker rm -f media-player-frontend >/dev/null 2>&1 || true
 
   docker build -t production-frontend:latest "$ROOT_DIR/frontend"

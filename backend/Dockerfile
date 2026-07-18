@@ -7,7 +7,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/media-player-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOMAXPROCS=1 go build -p=1 -o /out/media-player-server ./cmd/server
 
 FROM alpine:3.22
 

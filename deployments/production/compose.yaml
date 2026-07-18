@@ -31,6 +31,19 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: media-player-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - media_player_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ../../backend
@@ -39,9 +52,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       SERVER_ADDR: ":8080"
       DATABASE_URL: "postgres://${POSTGRES_USER:-media_player}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_player}?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_KEY_PREFIX: "${REDIS_KEY_PREFIX:-media-player}"
       CORS_ORIGIN: "${MEDIA_PLAYER_PUBLIC_ORIGIN:?MEDIA_PLAYER_PUBLIC_ORIGIN is required}"
       MUSIC_DIRECTORY: "/lossless-music"
       LYRICS_DIRECTORY: "/lossless-lyrics"
@@ -66,3 +83,4 @@ volumes:
   media_player_caddy_data:
   media_player_caddy_config:
   media_player_pgdata:
+  media_player_redisdata:

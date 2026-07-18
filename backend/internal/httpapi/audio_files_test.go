@@ -69,3 +69,22 @@ func TestBuildServerAudioSetUsesCompleteFilenameHashAndFilenameParts(t *testing.
 		t.Fatalf("area = %q, want %q", entries[0].Area, "lossy_music")
 	}
 }
+
+func TestAudioTargetBaseRejectsNamesThatBecomeIncompleteAfterSanitizing(t *testing.T) {
+	if _, err := audioTargetBase("朋友在", "///"); err == nil {
+		t.Fatal("audioTargetBase accepted a title that sanitizes to empty")
+	}
+	if _, err := audioTargetBase("///", "冬季来台北看雨"); err == nil {
+		t.Fatal("audioTargetBase accepted an artist that sanitizes to empty")
+	}
+}
+
+func TestAudioTargetBaseBuildsSafeArtistTitleFilename(t *testing.T) {
+	targetBase, err := audioTargetBase("孟庭苇", "冬季来台北看雨")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetBase != "孟庭苇-冬季来台北看雨" {
+		t.Fatalf("target base = %q", targetBase)
+	}
+}

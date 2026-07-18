@@ -27,13 +27,15 @@
 
 ## 本地启动
 
-要求：Go 1.26、Node.js 24、Docker（用于本地 PostgreSQL）。
+要求：Go 1.26、Node.js 24、Docker（用于本地 PostgreSQL 和 Redis）。
 
-1. 启动 PostgreSQL：
+1. 启动 PostgreSQL 和 Redis：
 
 ```bash
 docker compose -f deployments/local/compose.yaml up -d
 ```
+
+Redis 默认暴露在 `127.0.0.1:16379`，用于播放会话、stream ticket 等短生命周期状态；音频文件不会写入 Redis。
 
 2. 配置曲库。可以编辑根目录 `config.yaml`，也可以复制 `.env.example` 后按环境注入变量：
 
@@ -123,6 +125,7 @@ make test
 生产部署使用 Caddy、Go 后端和 PostgreSQL 三个容器。完整步骤见 `deployments/production/README.md`。
 
 后端启动时执行嵌入的 `backend/internal/database/schema.sql`；`backend/migrations/001_init.sql` 与其保持功能一致，供外部迁移流程使用。
+生产 Compose 会同时启动 Redis，后端默认通过 `redis:6379` 使用它来存储播放运行态数据。
 
 ## 目录
 

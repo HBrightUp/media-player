@@ -73,6 +73,7 @@ type Server struct {
 	trackRefreshLimiter *manualRefreshLimiter
 	audioFileAccess     *audioFileAccessManager
 	streamTickets       *streamTicketManager
+	redisRuntime        *redisRuntimeStore
 	authAuditSweeper    *authAuditSweeper
 }
 
@@ -169,8 +170,8 @@ type audioFileAccessFailure struct {
 	LockedUntil time.Time
 }
 
-func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Server {
-	return &Server{
+func New(store *database.Store, scanner *library.Scanner, corsOrigin string, options ...Option) *Server {
+	server := &Server{
 		store:               store,
 		scanner:             scanner,
 		corsOrigin:          corsOrigin,
@@ -181,6 +182,12 @@ func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Se
 		streamTickets:       newStreamTicketManager(streamTicketTTL),
 		authAuditSweeper:    &authAuditSweeper{},
 	}
+	for _, option := range options {
+		if option != nil {
+			option(server)
+		}
+	}
+	return server
 }
 
 func (s *Server) Routes() http.Handler {
@@ -313,7 +320,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.loginFailures.Clear(failureKey)
-	token, tokenHash, expiresAt, err := s.grantAuthSession(r.Context(), user.ID, now, clientIP, userAgent)
+	token, tokenHash, expiresAt, err := s.grantAuthSession(r.Context(), user, now, clientIP, userAgent)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "生成登录会话失败")
 		return
@@ -362,12 +369,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	token := authSessionToken(r)
 	if strings.TrimSpace(token) != "" {
 		tokenHash := hashAuthSessionToken(token)
-		session, err := s.store.EndAuthSession(r.Context(), tokenHash, "explicit_logout", now)
+		session, err := s.endAuthSession(r.Context(), tokenHash, "explicit_logout", now)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "退出登录失败")
 			return
 		}
-		if err := s.store.RevokePlaybackSessionsForAuthSession(r.Context(), tokenHash, now, "explicit_logout"); err != nil {
+		if err := s.revokePlaybackSessionsForAuthSession(r.Context(), tokenHash, now, "explicit_logout"); err != nil {
 			writeError(w, http.StatusInternalServerError, "退出登录失败")
 			return
 		}
@@ -470,13 +477,13 @@ func (s *Server) requiredSessionQueryUserID(w http.ResponseWriter, r *http.Reque
 	return s.requireMatchingSessionUserID(w, r, userID, message)
 }
 
-func (s *Server) grantAuthSession(ctx context.Context, userID int64, now time.Time, ipAddress string, userAgent string) (string, string, time.Time, error) {
+func (s *Server) grantAuthSession(ctx context.Context, user models.User, now time.Time, ipAddress string, userAgent string) (string, string, time.Time, error) {
 	token, tokenHash, err := newAuthSessionToken(authSessionTokenSize)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
 	expiresAt := now.Add(authSessionTTL)
-	if err := s.store.CreateAuthSession(ctx, userID, tokenHash, expiresAt, ipAddress, userAgent); err != nil {
+	if err := s.createAuthSession(ctx, user, tokenHash, now, expiresAt, ipAddress, userAgent); err != nil {
 		return "", "", time.Time{}, err
 	}
 	return token, tokenHash, expiresAt, nil
@@ -488,8 +495,29 @@ func (s *Server) authSessionUserID(ctx context.Context, token string, now time.T
 		return 0, false
 	}
 	s.sweepAuthSessions(ctx, now)
-	userID, err := s.store.TouchAuthSession(ctx, hashAuthSessionToken(token), now)
+	userID, err := s.touchAuthSession(ctx, hashAuthSessionToken(token), now)
 	return userID, err == nil
+}
+
+func (s *Server) createAuthSession(ctx context.Context, user models.User, tokenHash string, now time.Time, expiresAt time.Time, ipAddress string, userAgent string) error {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.CreateAuthSession(ctx, user.ID, user.Phone, tokenHash, now, expiresAt, ipAddress, userAgent)
+	}
+	return s.store.CreateAuthSession(ctx, user.ID, tokenHash, expiresAt, ipAddress, userAgent)
+}
+
+func (s *Server) touchAuthSession(ctx context.Context, tokenHash string, now time.Time) (int64, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.TouchAuthSession(ctx, tokenHash, now)
+	}
+	return s.store.TouchAuthSession(ctx, tokenHash, now)
+}
+
+func (s *Server) endAuthSession(ctx context.Context, tokenHash string, reason string, now time.Time) (database.AuthSessionRecord, error) {
+	if s.redisRuntime != nil {
+		return s.redisRuntime.EndAuthSession(ctx, tokenHash, now)
+	}
+	return s.store.EndAuthSession(ctx, tokenHash, reason, now)
 }
 
 func authSessionToken(r *http.Request) string {
@@ -519,6 +547,9 @@ func hashAuthSessionToken(token string) string {
 }
 
 func (s *Server) sweepAuthSessions(ctx context.Context, now time.Time) {
+	if s.redisRuntime != nil {
+		return
+	}
 	if s.authAuditSweeper == nil || !s.authAuditSweeper.Allow(now, authAuditSweepInterval) {
 		return
 	}
@@ -1153,7 +1184,12 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 
 func (s *Server) authorizeTrackStream(w http.ResponseWriter, r *http.Request, track models.Track) bool {
 	if ticket := strings.TrimSpace(r.URL.Query().Get("stream_ticket")); ticket != "" {
-		grant, ok := s.streamTickets.Validate(ticket, time.Now())
+		now := time.Now()
+		grant, ok, err := s.validateStreamTicket(r.Context(), ticket, now)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "校验播放链接失败")
+			return false
+		}
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "播放链接已失效，请重新点击播放")
 			return false
@@ -1167,8 +1203,7 @@ func (s *Server) authorizeTrackStream(w http.ResponseWriter, r *http.Request, tr
 			writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
 			return false
 		}
-		now := time.Now()
-		if _, err := s.store.TouchPlaybackSession(r.Context(), grant.PlaybackTokenHash, user.ID, now, now.Add(playbackSessionTTL)); err != nil {
+		if _, err := s.touchPlaybackSession(r.Context(), grant.PlaybackTokenHash, user.ID, now, now.Add(playbackSessionTTL)); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusConflict, "音乐已在其它设备或页面播放")
 			} else {

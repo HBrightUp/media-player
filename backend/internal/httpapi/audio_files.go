@@ -519,7 +519,11 @@ func (s *Server) renameAudioFile(w http.ResponseWriter, r *http.Request, area au
 	if currentExt == "" {
 		currentExt = "." + strings.ToLower(track.Format)
 	}
-	targetBase := sanitizeAudioFilename(artist + "-" + title)
+	targetBase, err := audioTargetBase(artist, title)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	targetPath, err := safeMusicPath(filepath.Dir(track.Path), targetBase+currentExt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "文件名不符合规范")
@@ -535,6 +539,7 @@ func (s *Server) renameAudioFile(w http.ResponseWriter, r *http.Request, area au
 			return
 		}
 		if err := os.Rename(track.Path, targetPath); err != nil {
+			log.Printf("rename audio file failed: user_id=%d track_id=%d area=%s old_path=%q new_path=%q error=%v", userID, trackID, area.ID, track.Path, targetPath, err)
 			writeError(w, http.StatusInternalServerError, "重命名音频文件失败")
 			return
 		}
@@ -624,7 +629,11 @@ func (s *Server) renameLyricsFile(w http.ResponseWriter, r *http.Request, area a
 	if currentExt != ".txt" {
 		currentExt = ".lrc"
 	}
-	targetBase := sanitizeAudioFilename(artist + "-" + title)
+	targetBase, err := audioTargetBase(artist, title)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	targetPath, err := safeMusicPath(filepath.Dir(sourcePath), targetBase+currentExt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "文件名不符合规范")
@@ -640,6 +649,7 @@ func (s *Server) renameLyricsFile(w http.ResponseWriter, r *http.Request, area a
 			return
 		}
 		if err := os.Rename(sourcePath, targetPath); err != nil {
+			log.Printf("rename lyrics file failed: user_id=%d area=%s old_path=%q new_path=%q error=%v", userID, area.ID, sourcePath, targetPath, err)
 			writeError(w, http.StatusInternalServerError, "重命名歌词文件失败")
 			return
 		}
@@ -1443,6 +1453,19 @@ func validateAudioNameParts(artist, title string) (string, string, error) {
 		return "", "", errors.New("请提供歌手和歌曲名")
 	}
 	return artist, title, nil
+}
+
+func audioTargetBase(artist string, title string) (string, error) {
+	artist = sanitizeAudioFilename(artist)
+	title = sanitizeAudioFilename(title)
+	if artist == "" || title == "" {
+		return "", errors.New("歌手和歌曲名不能只包含特殊字符")
+	}
+	targetBase := sanitizeAudioFilename(artist + "-" + title)
+	if targetBase == "" || strings.HasPrefix(targetBase, "-") || strings.HasSuffix(targetBase, "-") {
+		return "", errors.New("文件名不符合规范")
+	}
+	return targetBase, nil
 }
 
 func audioImportFileKind(ext string) string {

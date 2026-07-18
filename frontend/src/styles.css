@@ -3678,6 +3678,33 @@ form.search-dialog .search-actions button {
   transform: translateX(0) scale(0.94);
 }
 
+@media (hover: none), (pointer: coarse) {
+  .lyrics-side-control {
+    top: 16%;
+    bottom: 16%;
+    width: clamp(58px, 9vw, 96px);
+  }
+
+  .lyrics-side-control::before {
+    opacity: 0.18;
+  }
+
+  .lyrics-side-control-icon {
+    border-color: rgba(var(--lyrics-thread), 0.34);
+    background:
+      radial-gradient(circle at 42% 28%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 48%),
+      rgba(8, 38, 78, 0.44);
+    opacity: 0.72;
+    transform: translateX(0) scale(0.98);
+  }
+
+  .lyrics-side-controls.is-visible .lyrics-side-control-icon,
+  .lyrics-side-control:active .lyrics-side-control-icon,
+  .lyrics-side-control:focus-visible .lyrics-side-control-icon {
+    opacity: 1;
+  }
+}
+
 .full-lyrics-list {
   height: 100%;
   min-height: 0;

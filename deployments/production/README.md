@@ -6,6 +6,7 @@ Compose. It starts three services:
 - `frontend`: Caddy serving the React build and proxying API requests
 - `backend`: Go API server
 - `postgres`: PostgreSQL data store
+- `redis`: runtime cache for playback sessions and stream tickets
 
 ## 1. Prepare ECS
 
@@ -54,6 +55,7 @@ MEDIA_PLAYER_FRONTEND_MODE=container
 POSTGRES_DB=media_player
 POSTGRES_USER=media_player
 POSTGRES_PASSWORD=<use-a-strong-password>
+REDIS_KEY_PREFIX=media-player
 MUSIC_DIRECTORY=/opt/media-player/music
 LYRICS_DIRECTORY=/opt/media-player/lyrics
 LOSSLESS_MUSIC_DIRECTORY=/opt/media-player/music
@@ -148,5 +150,6 @@ Open `MEDIA_PLAYER_PUBLIC_ORIGIN` in a browser.
   use `deployments/production/Caddyfile.media-player` with your existing host
   Caddy setup instead of the bundled `frontend` service.
 - Database data is stored in Docker volume `media_player_pgdata`.
+- Redis runtime data is stored in Docker volume `media_player_redisdata`.
 - Caddy certificate/config data is stored in Docker volumes
   `media_player_caddy_data` and `media_player_caddy_config`.
