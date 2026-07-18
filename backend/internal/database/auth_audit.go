@@ -88,6 +88,33 @@ func (s *Store) TouchAuthSession(ctx context.Context, tokenHash string, now time
 	return userID, err
 }
 
+func (s *Store) TouchAuthSessionRecord(ctx context.Context, tokenHash string, now time.Time) (AuthSessionRecord, error) {
+	row := s.pool.QueryRow(ctx, `
+		WITH touched AS (
+			UPDATE auth_sessions
+			SET last_seen_at = $2,
+				offline_recorded_at = NULL,
+				updated_at = $2
+			WHERE token_hash = $1
+				AND expires_at > $2
+				AND ended_at IS NULL
+			RETURNING token_hash, user_id, expires_at, created_at, last_seen_at, ip_address, user_agent
+		)
+		SELECT
+			t.token_hash,
+			t.user_id,
+			u.phone,
+			t.expires_at,
+			t.created_at,
+			t.last_seen_at,
+			COALESCE(t.ip_address, ''),
+			COALESCE(t.user_agent, '')
+		FROM touched t
+		JOIN users u ON u.id = t.user_id
+	`, tokenHash, now)
+	return scanAuthSessionRecord(row)
+}
+
 func (s *Store) EndAuthSession(ctx context.Context, tokenHash string, reason string, now time.Time) (AuthSessionRecord, error) {
 	row := s.pool.QueryRow(ctx, `
 		WITH ended AS (

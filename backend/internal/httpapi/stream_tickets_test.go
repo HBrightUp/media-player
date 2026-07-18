@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -22,6 +23,30 @@ func TestLongLivedSessionTokensAreNotAcceptedFromQueryString(t *testing.T) {
 	}
 	if token := playbackSessionToken(request); token != "playback-header" {
 		t.Fatalf("playback token from header = %q, want playback-header", token)
+	}
+}
+
+func TestTrackRouteMethodAllowedSupportsMediaHeadProbes(t *testing.T) {
+	tests := []struct {
+		name     string
+		resource string
+		method   string
+		want     bool
+	}{
+		{name: "stream get", resource: "stream", method: http.MethodGet, want: true},
+		{name: "stream head", resource: "stream", method: http.MethodHead, want: true},
+		{name: "cover head", resource: "cover", method: http.MethodHead, want: true},
+		{name: "lyrics get", resource: "lyrics", method: http.MethodGet, want: true},
+		{name: "lyrics head", resource: "lyrics", method: http.MethodHead, want: false},
+		{name: "stream post", resource: "stream", method: http.MethodPost, want: false},
+		{name: "unknown get", resource: "unknown", method: http.MethodGet, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := trackRouteMethodAllowed(tt.resource, tt.method); got != tt.want {
+				t.Fatalf("trackRouteMethodAllowed(%q, %q) = %v, want %v", tt.resource, tt.method, got, tt.want)
+			}
+		})
 	}
 }
 

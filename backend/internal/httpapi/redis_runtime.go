@@ -113,6 +113,29 @@ func (s *redisRuntimeStore) CreateAuthSession(ctx context.Context, userID int64,
 	return err
 }
 
+func (s *redisRuntimeStore) StoreAuthSessionRecord(ctx context.Context, record database.AuthSessionRecord, now time.Time) error {
+	record.TokenHash = strings.TrimSpace(record.TokenHash)
+	if record.TokenHash == "" || record.UserID <= 0 || !now.Before(record.ExpiresAt) {
+		return sql.ErrNoRows
+	}
+	fields := map[string]any{
+		"token_hash":   record.TokenHash,
+		"user_id":      strconv.FormatInt(record.UserID, 10),
+		"phone":        strings.TrimSpace(record.Phone),
+		"expires_at":   redisUnixMilli(record.ExpiresAt),
+		"created_at":   redisUnixMilli(record.CreatedAt),
+		"last_seen_at": redisUnixMilli(record.LastSeenAt),
+		"ip_address":   strings.TrimSpace(record.IPAddress),
+		"user_agent":   strings.TrimSpace(record.UserAgent),
+	}
+	ttl := redisTTL(now, record.ExpiresAt)
+	pipe := s.client.Pipeline()
+	pipe.HSet(ctx, s.authSessionKey(record.TokenHash), fields)
+	pipe.Expire(ctx, s.authSessionKey(record.TokenHash), ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (s *redisRuntimeStore) TouchAuthSession(ctx context.Context, tokenHash string, now time.Time) (int64, error) {
 	tokenHash = strings.TrimSpace(tokenHash)
 	if tokenHash == "" {

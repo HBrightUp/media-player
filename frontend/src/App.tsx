@@ -1505,6 +1505,7 @@ function App() {
         if (errorName === "AbortError") {
           return;
         }
+        showToast(describeAudioPlayFailure(error, audio, currentTrack));
         setIsAudioLoading(false);
         setIsPlaying(false);
       });
@@ -3392,18 +3393,21 @@ function App() {
   }
 
   function handleAudioError() {
+    const audioErrorMessage = describeAudioElementError(audioRef.current, currentTrack);
     if (playbackIntentRef.current && currentTrack?.stream_url) {
       setIsAudioLoading(true);
       void recoverPlaybackSessionAfterAudioError().then((recovered) => {
         if (recovered) {
           return;
         }
+        showToast(audioErrorMessage);
         playbackIntentRef.current = false;
         setIsAudioLoading(false);
         setIsPlaying(false);
       });
       return;
     }
+    showToast(audioErrorMessage);
     playbackIntentRef.current = false;
     setIsAudioLoading(false);
     setIsPlaying(false);
@@ -5188,6 +5192,86 @@ function getTrackQuality(track: Track) {
   }
   const format = normalizeAudioExtension(track.format || getFileExtension(track.filename));
   return lossyMusicFormats.has(format) ? "lossy" : "lossless";
+}
+
+function describeAudioPlayFailure(error: unknown, audio: HTMLAudioElement | null, track: Track | null | undefined) {
+  const errorName = error instanceof Error ? error.name : "";
+  if (errorName === "NotAllowedError") {
+    return "浏览器阻止了自动播放，请再点击一次播放";
+  }
+  if (errorName === "NotSupportedError") {
+    return describeUnsupportedAudioFormat(track) || "当前浏览器不支持播放这个音频格式";
+  }
+  return describeAudioElementError(audio, track);
+}
+
+function describeAudioElementError(audio: HTMLAudioElement | null, track: Track | null | undefined) {
+  const unsupportedMessage = describeUnsupportedAudioFormat(track);
+  const code = audio?.error?.code ?? 0;
+  switch (code) {
+    case 1:
+      return "音频加载已中断，请重新点击播放";
+    case 2:
+      return "音频网络加载失败，请检查网络后重试";
+    case 3:
+      return unsupportedMessage || "音频解码失败，可能是文件损坏或当前浏览器不支持";
+    case 4:
+      return unsupportedMessage || "播放链接不可用，请重新点击播放；如果仍失败，请重新登录";
+    default:
+      return unsupportedMessage || "播放失败，请重新点击播放";
+  }
+}
+
+function describeUnsupportedAudioFormat(track: Track | null | undefined) {
+  const format = getPlayableAudioFormat(track);
+  if (!format || canBrowserPlayAudioFormat(format)) {
+    return "";
+  }
+  if (format === "flac") {
+    return "当前浏览器不支持 FLAC 高品质播放，请先切到轻音乐或换用支持 FLAC 的浏览器";
+  }
+  return `当前浏览器不支持 ${format.toUpperCase()} 音频播放`;
+}
+
+function getPlayableAudioFormat(track: Track | null | undefined) {
+  if (!track) {
+    return "";
+  }
+  return normalizeAudioExtension(track.format || getFileExtension(track.filename));
+}
+
+function canBrowserPlayAudioFormat(format: string) {
+  if (typeof Audio === "undefined") {
+    return true;
+  }
+  const mimeTypes = browserAudioMimeTypes(format);
+  if (!mimeTypes.length) {
+    return true;
+  }
+  const probe = new Audio();
+  return mimeTypes.some((mimeType) => probe.canPlayType(mimeType) !== "");
+}
+
+function browserAudioMimeTypes(format: string) {
+  switch (normalizeAudioExtension(format)) {
+    case "aac":
+      return ["audio/aac", "audio/mp4"];
+    case "aif":
+    case "aiff":
+      return ["audio/aiff", "audio/x-aiff"];
+    case "flac":
+      return ["audio/flac", "audio/x-flac"];
+    case "m4a":
+      return ["audio/mp4", "audio/x-m4a"];
+    case "mp3":
+      return ["audio/mpeg", "audio/mp3"];
+    case "ogg":
+      return ["audio/ogg"];
+    case "wav":
+      return ["audio/wav", "audio/x-wav"];
+    default:
+      return [];
+  }
 }
 
 function isLosslessMusicTrack(track: Track) {

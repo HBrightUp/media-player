@@ -508,7 +508,19 @@ func (s *Server) createAuthSession(ctx context.Context, user models.User, tokenH
 
 func (s *Server) touchAuthSession(ctx context.Context, tokenHash string, now time.Time) (int64, error) {
 	if s.redisRuntime != nil {
-		return s.redisRuntime.TouchAuthSession(ctx, tokenHash, now)
+		userID, err := s.redisRuntime.TouchAuthSession(ctx, tokenHash, now)
+		if err == nil {
+			return userID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, err
+		}
+		record, err := s.store.TouchAuthSessionRecord(ctx, tokenHash, now)
+		if err != nil {
+			return 0, err
+		}
+		_ = s.redisRuntime.StoreAuthSessionRecord(ctx, record, now)
+		return record.UserID, nil
 	}
 	return s.store.TouchAuthSession(ctx, tokenHash, now)
 }
@@ -1063,13 +1075,13 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleTrackRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
 	id, resource, ok := parseTrackRoute(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !trackRouteMethodAllowed(resource, r.Method) {
+		methodNotAllowed(w)
 		return
 	}
 	switch resource {
@@ -1081,6 +1093,17 @@ func (s *Server) handleTrackRoute(w http.ResponseWriter, r *http.Request) {
 		s.handleTrackCover(w, r, id)
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func trackRouteMethodAllowed(resource string, method string) bool {
+	switch resource {
+	case "stream", "cover":
+		return method == http.MethodGet || method == http.MethodHead
+	case "lyrics":
+		return method == http.MethodGet
+	default:
+		return false
 	}
 }
 
@@ -1743,7 +1766,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Token, X-Audio-Access-Token, X-Playback-Session-Token")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
