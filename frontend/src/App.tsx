@@ -1089,6 +1089,42 @@ function App() {
   }, [activePage]);
 
   useEffect(() => {
+    if (activePage !== "lyrics") {
+      return;
+    }
+
+    const pauseOnSpaceKeyDown = (event: KeyboardEvent) => {
+      const isSpaceKey = event.key === " " || event.key === "Spacebar" || event.code === "Space";
+      if (
+        !isSpaceKey ||
+        event.defaultPrevented ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isLyricsShortcutSuppressedTarget(event.target)
+      ) {
+        return;
+      }
+      if (!isPlaying) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      playbackIntentRef.current = false;
+      setIsAudioLoading(false);
+      setIsPlaying(false);
+      void sendPlaybackHeartbeat("paused");
+    };
+
+    window.addEventListener("keydown", pauseOnSpaceKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", pauseOnSpaceKeyDown, true);
+    };
+  }, [activePage, isPlaying]);
+
+  useEffect(() => {
     if (!audioFileAccessDialog.isOpen || !audioFileAccessDialog.lockoutUntil) {
       return;
     }
@@ -5305,6 +5341,35 @@ function browserAudioMimeTypes(format: string) {
     default:
       return [];
   }
+}
+
+function isLyricsShortcutSuppressedTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  if (target instanceof HTMLElement && target.isContentEditable) {
+    return true;
+  }
+  const tagName = target.tagName.toLowerCase();
+  if (["input", "textarea", "select", "button"].includes(tagName)) {
+    return true;
+  }
+  return Boolean(
+    target.closest(
+      [
+        "a[href]",
+        "[contenteditable='true']",
+        "[role='button']",
+        "[role='checkbox']",
+        "[role='menuitem']",
+        "[role='option']",
+        "[role='radio']",
+        "[role='switch']",
+        "[role='tab']",
+        "[role='textbox']"
+      ].join(",")
+    )
+  );
 }
 
 function isLosslessMusicTrack(track: Track) {
