@@ -46,11 +46,11 @@ function Ensure-FirewallRule {
 
 if ($OpenFirewall) {
   Ensure-FirewallRule "Media Player Frontend 5173" 5173
-  Ensure-FirewallRule "Media Player Backend 8080" 8080
+  Ensure-FirewallRule "Media Player Backend 9000" 9000
 }
 
 $env:DATABASE_URL = "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"
-$env:SERVER_ADDR = ":8080"
+$env:SERVER_ADDR = ":9000"
 $env:CORS_ORIGIN = "*"
 if ($MusicDirectory -ne "") {
   $env:MUSIC_DIRECTORY = $MusicDirectory
@@ -80,5 +80,5 @@ Write-Host "Frontend PID: $($frontend.Id)"
 Write-Host "Backend PID:  $($backend.Id)"
 Write-Host "Local:        http://localhost:5173"
 Write-Host "LAN:          http://$lanAddress`:5173"
-Write-Host "Health:       http://$lanAddress`:8080/healthz"
+Write-Host "Health:       http://$lanAddress`:9000/healthz"
 Write-Host "Logs:         $logDir"

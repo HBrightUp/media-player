@@ -19,3 +19,11 @@ frontend/vite.config.d.ts
 .cache/
 .local-postgres/
 .codex-run/
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+android/**/build/
+android/captures/

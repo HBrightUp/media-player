@@ -75,7 +75,7 @@ npm ci
 npm run dev
 ```
 
-访问 `http://localhost:5173`。前端开发服务会把 `/api` 和 `/healthz` 代理到 `127.0.0.1:8080`。
+访问 `http://localhost:5173`。前端开发服务会把 `/api` 和 `/healthz` 代理到 `127.0.0.1:9000`。
 
 Windows 可以运行 `scripts/start-lan.ps1`；首次开放防火墙时使用管理员 PowerShell 执行 `scripts/start-lan.ps1 -OpenFirewall`。
 

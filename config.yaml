@@ -16,7 +16,7 @@ library:
   auto_scan_interval: "0"
 
 server:
-  addr: ":8080"
+  addr: ":9000"
   # Use "*" for LAN/dev access. Production can set a specific public origin.
   cors_origin: "*"
 

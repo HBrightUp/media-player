@@ -34,7 +34,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:                     getenv("SERVER_ADDR", ":8080"),
+		Addr:                     getenv("SERVER_ADDR", ":9000"),
 		DatabaseURL:              getenv("DATABASE_URL", "postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable"),
 		RedisAddr:                getenv("REDIS_ADDR", ""),
 		RedisKeyPrefix:           "media-player",

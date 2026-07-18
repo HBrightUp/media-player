@@ -715,6 +715,7 @@ function App() {
   const nextTrackPreloadAudioRef = useRef<HTMLAudioElement | null>(null);
   const nextTrackPreloadURLRef = useRef("");
   const audioStreamRecoveryRef = useRef<AudioStreamRecoveryState | null>(null);
+  const playbackToggleRef = useRef<() => void>(() => undefined);
   const nextTrackPreloadTimerRef = useRef<number | null>(null);
   const trackLyricsCacheRef = useRef<Map<number, TrackLyrics>>(new Map());
   const trackLyricsRequestRef = useRef<Map<number, Promise<TrackLyrics>>>(new Map());
@@ -792,6 +793,7 @@ function App() {
   const [toastMessage, setToastMessage] = useState("");
   const [loadMessage, setLoadMessage] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioElementGeneration, setAudioElementGeneration] = useState(0);
   const [isAudioLoading, setIsAudioLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(12);
   const [seekPreviewTime, setSeekPreviewTime] = useState<number | null>(null);
@@ -1093,7 +1095,7 @@ function App() {
       return;
     }
 
-    const pauseOnSpaceKeyDown = (event: KeyboardEvent) => {
+    const togglePlaybackOnSpaceKeyDown = (event: KeyboardEvent) => {
       const isSpaceKey = event.key === " " || event.key === "Spacebar" || event.code === "Space";
       if (
         !isSpaceKey ||
@@ -1107,22 +1109,15 @@ function App() {
       ) {
         return;
       }
-      if (!isPlaying) {
-        event.preventDefault();
-        return;
-      }
       event.preventDefault();
-      playbackIntentRef.current = false;
-      setIsAudioLoading(false);
-      setIsPlaying(false);
-      void sendPlaybackHeartbeat("paused");
+      playbackToggleRef.current();
     };
 
-    window.addEventListener("keydown", pauseOnSpaceKeyDown, true);
+    window.addEventListener("keydown", togglePlaybackOnSpaceKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", pauseOnSpaceKeyDown, true);
+      window.removeEventListener("keydown", togglePlaybackOnSpaceKeyDown, true);
     };
-  }, [activePage, isPlaying]);
+  }, [activePage]);
 
   useEffect(() => {
     if (!audioFileAccessDialog.isOpen || !audioFileAccessDialog.lockoutUntil) {
@@ -1297,9 +1292,7 @@ function App() {
 
     const remainingMs = sleepTimerEndsAt - Date.now();
     if (remainingMs <= 0) {
-      playbackIntentRef.current = false;
-      audioRef.current?.pause();
-      setIsPlaying(false);
+      stopPlaybackAndReleaseSleepResources(playbackSession?.token);
       setSleepTimerEndsAt(null);
       setSleepTimerNow(Date.now());
       showToast("睡眠定时器已结束");
@@ -1313,7 +1306,7 @@ function App() {
     return () => {
       window.clearTimeout(timeoutID);
     };
-  }, [sleepTimerEndsAt, sleepTimerNow]);
+  }, [playbackSession?.token, sleepTimerEndsAt, sleepTimerNow]);
 
   useLayoutEffect(() => {
     if (activePage !== "music" || !shouldRevealCurrentTrackRef.current || !currentTrack?.id) {
@@ -3506,6 +3499,55 @@ function App() {
     showToast("睡眠定时器已关闭");
   }
 
+  function stopPlaybackAndReleaseSleepResources(playbackToken?: string) {
+    playbackRequestIdRef.current += 1;
+    audioPlayRequestIdRef.current += 1;
+    playbackIntentRef.current = false;
+    ignoreAudioPauseUntilRef.current = 0;
+    pendingAudioResumeTimeRef.current = null;
+    audioStreamRecoveryRef.current = null;
+    clearPendingTrackPlay();
+    clearCurrentTimeCommitTimer();
+    stopLyricsClock();
+    stopLyricsVisualizer();
+
+    if (nextTrackPreloadTimerRef.current !== null) {
+      window.clearTimeout(nextTrackPreloadTimerRef.current);
+      nextTrackPreloadTimerRef.current = null;
+    }
+    const preloadAudio = nextTrackPreloadAudioRef.current;
+    if (preloadAudio) {
+      preloadAudio.pause();
+      preloadAudio.removeAttribute("src");
+      preloadAudio.load();
+      nextTrackPreloadAudioRef.current = null;
+    }
+    nextTrackPreloadURLRef.current = "";
+
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+    lastAppliedAudioSourceRef.current = "";
+    bufferUpdateResumeAtRef.current = 0;
+    isCurrentTrackFullyBufferedRef.current = false;
+    disconnectEqualizerAudioChain();
+    setAudioElementGeneration((generation) => generation + 1);
+
+    setPlaybackSession(null);
+    if (playbackToken) {
+      void releasePlaybackSession(playbackToken).catch(() => undefined);
+    }
+    setIsAudioLoading(false);
+    setIsPlaying(false);
+    setSeekPreviewTime(null);
+    setBufferedRanges([]);
+    commitCurrentTime(0);
+    setDuration(0);
+  }
+
   async function handleCreateCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!authSession?.userId) {
@@ -4022,6 +4064,8 @@ function App() {
       allowTakeover: true
     });
   }
+
+  playbackToggleRef.current = togglePlay;
 
   function stepTrack(direction: 1 | -1, { allowTakeover = true }: { allowTakeover?: boolean } = {}) {
     const nextTrack = getAdjacentQueuedTrack(direction);
@@ -4981,6 +5025,7 @@ function App() {
             isPlaying={isPlaying}
             savedScroll={lyricsScrollStateRef.current}
             onScrollPositionChange={updateLyricsScrollPosition}
+            onSeek={(time) => handleSeek(String(time))}
             onPreviousTrack={() => stepTrack(-1)}
             onNextTrack={() => stepTrack(1)}
             onToggleFullscreen={toggleFullscreen}
@@ -5072,7 +5117,7 @@ function App() {
       </nav>
 
       <audio
-        key={currentTrack ? getTrackQuality(currentTrack) : "empty"}
+        key={`${currentTrack ? getTrackQuality(currentTrack) : "empty"}-${audioElementGeneration}`}
         ref={audioRef}
         preload="auto"
         onLoadStart={() => {
@@ -5575,6 +5620,7 @@ type FullLyricsPageProps = {
   isPlaying: boolean;
   savedScroll: LyricsScrollState;
   onScrollPositionChange: (trackID: number, top: number, activeLineIndex: number) => void;
+  onSeek: (time: number) => void;
   onPreviousTrack: () => void;
   onNextTrack: () => void;
   onToggleFullscreen: () => void | Promise<void>;
@@ -5590,6 +5636,7 @@ function FullLyricsPage({
   isPlaying,
   savedScroll,
   onScrollPositionChange,
+  onSeek,
   onPreviousTrack,
   onNextTrack,
   onToggleFullscreen
@@ -5607,8 +5654,18 @@ function FullLyricsPage({
   const lyricsSideControlsHideTimerRef = useRef<number | null>(null);
   const lyricsSideControlsVisibleRef = useRef(false);
   const userScrollPausedUntilRef = useRef(0);
+  const lyricsSeekCommitTimerRef = useRef<number | null>(null);
+  const lyricsSeekPreviewRef = useRef<{ index: number; time: number } | null>(null);
+  const lyricsScrubPointerRef = useRef<{
+    pointerId: number;
+    pointerType: string;
+    startY: number;
+    startScrollTop: number;
+    moved: boolean;
+  } | null>(null);
   const [isUserBrowsingLyrics, setIsUserBrowsingLyrics] = useState(false);
   const [lyricsSideControlsVisible, setLyricsSideControlsVisible] = useState(false);
+  const [lyricsSeekPreview, setLyricsSeekPreview] = useState<{ index: number; time: number } | null>(null);
   const scenePalette = useMemo(() => getLyricsScenePalette(currentTrack), [currentTrack?.album, currentTrack?.artist, currentTrack?.id, currentTrack?.title]);
   const coverImageURL = currentTrack?.cover_url ? coverURL(currentTrack) : "";
   const coverImageStyle = useMemo(
@@ -5648,6 +5705,8 @@ function FullLyricsPage({
       }) as CSSProperties,
     [visualizer]
   );
+  const focalLineIndex = activeLineIndex >= 0 ? activeLineIndex : lines.length ? 0 : -1;
+  const displayFocalLineIndex = lyricsSeekPreview?.index ?? focalLineIndex;
 
   useEffect(() => {
     return () => {
@@ -5660,16 +5719,26 @@ function FullLyricsPage({
       if (lyricsSideControlsHideTimerRef.current) {
         window.clearTimeout(lyricsSideControlsHideTimerRef.current);
       }
+      if (lyricsSeekCommitTimerRef.current) {
+        window.clearTimeout(lyricsSeekCommitTimerRef.current);
+      }
     };
   }, []);
 
   useEffect(() => {
     userScrollPausedUntilRef.current = 0;
+    lyricsSeekPreviewRef.current = null;
+    lyricsScrubPointerRef.current = null;
     setIsUserBrowsingLyrics(false);
+    setLyricsSeekPreview(null);
     hideLyricsSideControls();
     if (followResumeTimerRef.current) {
       window.clearTimeout(followResumeTimerRef.current);
       followResumeTimerRef.current = null;
+    }
+    if (lyricsSeekCommitTimerRef.current) {
+      window.clearTimeout(lyricsSeekCommitTimerRef.current);
+      lyricsSeekCommitTimerRef.current = null;
     }
   }, [currentTrack?.id]);
 
@@ -5682,6 +5751,7 @@ function FullLyricsPage({
     markProgrammaticLyricsScroll(90);
     const canRestoreSavedPosition = Boolean(
       currentTrack &&
+        activeLineIndex >= 0 &&
         savedScroll.trackID === currentTrack.id &&
         savedScroll.activeLineIndex === activeLineIndex
     );
@@ -5692,9 +5762,9 @@ function FullLyricsPage({
       return;
     }
 
-    if (currentTrack && activeLineIndex >= 0 && activeLineRef.current) {
+    if (currentTrack && focalLineIndex >= 0 && activeLineRef.current) {
       syncActiveLyricIntoView("auto");
-      initialSyncedLineIndexRef.current = activeLineIndex;
+      initialSyncedLineIndexRef.current = focalLineIndex;
       return;
     }
 
@@ -5702,10 +5772,10 @@ function FullLyricsPage({
   }, [currentTrack?.id, lines.length, savedScroll.trackID]);
 
   useEffect(() => {
-    if (!currentTrack || activeLineIndex < 0) {
+    if (!currentTrack || focalLineIndex < 0) {
       return;
     }
-    if (initialSyncedLineIndexRef.current === activeLineIndex) {
+    if (initialSyncedLineIndexRef.current === focalLineIndex) {
       initialSyncedLineIndexRef.current = null;
       return;
     }
@@ -5713,12 +5783,12 @@ function FullLyricsPage({
       return;
     }
     syncActiveLyricIntoView(shouldReduceMotion() ? "auto" : "smooth");
-  }, [activeLineIndex, currentTrack?.id]);
+  }, [focalLineIndex, currentTrack?.id]);
 
   function syncActiveLyricIntoView(behavior: ScrollBehavior) {
     const lyricsList = lyricsListRef.current;
     const activeLine = activeLineRef.current;
-    if (!currentTrack || activeLineIndex < 0 || !lyricsList || !activeLine) {
+    if (!currentTrack || focalLineIndex < 0 || !lyricsList || !activeLine) {
       return;
     }
     const listRect = lyricsList.getBoundingClientRect();
@@ -5761,13 +5831,105 @@ function FullLyricsPage({
     }, 4800);
   }
 
+  function getCenteredTimedLyric(lyricsList: HTMLDivElement) {
+    const listRect = lyricsList.getBoundingClientRect();
+    const centerY = listRect.top + listRect.height / 2;
+    const rows = Array.from(lyricsList.querySelectorAll<HTMLParagraphElement>("p[data-lyric-index]"));
+    let nearest: { index: number; time: number; distance: number } | null = null;
+
+    for (const row of rows) {
+      const index = Number(row.dataset.lyricIndex);
+      const time = lines[index]?.time_seconds;
+      if (!Number.isInteger(index) || typeof time !== "number" || !Number.isFinite(time)) {
+        continue;
+      }
+      const rowRect = row.getBoundingClientRect();
+      const distance = Math.abs(rowRect.top + rowRect.height / 2 - centerY);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { index, time, distance };
+      }
+    }
+
+    return nearest ? { index: nearest.index, time: nearest.time } : null;
+  }
+
+  function commitLyricsSeekPreview() {
+    const preview = lyricsSeekPreviewRef.current;
+    if (!preview) {
+      return;
+    }
+    if (lyricsSeekCommitTimerRef.current) {
+      window.clearTimeout(lyricsSeekCommitTimerRef.current);
+      lyricsSeekCommitTimerRef.current = null;
+    }
+    lyricsSeekPreviewRef.current = null;
+    setLyricsSeekPreview(null);
+    lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 600;
+    onSeek(preview.time);
+
+    userScrollPausedUntilRef.current = Date.now() + 900;
+    if (followResumeTimerRef.current) {
+      window.clearTimeout(followResumeTimerRef.current);
+    }
+    followResumeTimerRef.current = window.setTimeout(() => {
+      followResumeTimerRef.current = null;
+      userScrollPausedUntilRef.current = 0;
+      setIsUserBrowsingLyrics(false);
+    }, 900);
+  }
+
+  function scheduleLyricsSeekCommit(delayMs = 190) {
+    if (lyricsSeekCommitTimerRef.current) {
+      window.clearTimeout(lyricsSeekCommitTimerRef.current);
+    }
+    lyricsSeekCommitTimerRef.current = window.setTimeout(() => {
+      lyricsSeekCommitTimerRef.current = null;
+      if (lyricsScrubPointerRef.current) {
+        scheduleLyricsSeekCommit(90);
+        return;
+      }
+      commitLyricsSeekPreview();
+    }, delayMs);
+  }
+
   function handleLyricsScroll(top: number) {
     if (!currentTrack) {
       return;
     }
     onScrollPositionChange(currentTrack.id, top, activeLineIndex);
-    if (!ignoreScrollRef.current) {
-      pauseLyricsAutoFollow();
+    if (ignoreScrollRef.current) {
+      return;
+    }
+    pauseLyricsAutoFollow();
+    const lyricsList = lyricsListRef.current;
+    if (!lyricsList) {
+      return;
+    }
+    const preview = getCenteredTimedLyric(lyricsList);
+    if (!preview) {
+      return;
+    }
+    lyricsSeekPreviewRef.current = preview;
+    setLyricsSeekPreview((previous) =>
+      previous && previous.index === preview.index && previous.time === preview.time ? previous : preview
+    );
+    scheduleLyricsSeekCommit();
+  }
+
+  function handleLyricsPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const scrubPointer = lyricsScrubPointerRef.current;
+    const lyricsList = lyricsListRef.current;
+    if (!scrubPointer || scrubPointer.pointerId !== event.pointerId || !lyricsList) {
+      return;
+    }
+    const movementY = event.clientY - scrubPointer.startY;
+    if (Math.abs(movementY) > 4) {
+      scrubPointer.moved = true;
+      lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 600;
+    }
+    if (scrubPointer.pointerType === "mouse" && scrubPointer.moved) {
+      event.preventDefault();
+      lyricsList.scrollTop = scrubPointer.startScrollTop - movementY;
     }
   }
 
@@ -5882,6 +6044,10 @@ function FullLyricsPage({
     event.stopPropagation();
     lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 900;
     revealLyricsSideControls(event.pointerType === "touch");
+    if (event.pointerType === "touch") {
+      const control = event.currentTarget;
+      window.setTimeout(() => control.blur(), 0);
+    }
   }
 
   function handleLyricsSideClick(event: ReactMouseEvent<HTMLButtonElement>, direction: 1 | -1) {
@@ -5897,6 +6063,23 @@ function FullLyricsPage({
   }
 
   function handleLyricsPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    const lyricsList = lyricsListRef.current;
+    if (lyricsList && event.currentTarget === lyricsList) {
+      if (event.pointerType === "mouse" && event.button !== 0) {
+        return;
+      }
+      lyricsScrubPointerRef.current = {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startY: event.clientY,
+        startScrollTop: lyricsList.scrollTop,
+        moved: false
+      };
+      if (event.pointerType === "mouse") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+    }
+
     if (event.pointerType !== "touch") {
       return;
     }
@@ -5914,7 +6097,24 @@ function FullLyricsPage({
   }
 
   function handleLyricsPointerUp(event: ReactPointerEvent<HTMLElement>) {
-    if (event.pointerType !== "touch") {
+    const scrubPointer = lyricsScrubPointerRef.current;
+    const completedScrub = Boolean(scrubPointer && scrubPointer.pointerId === event.pointerId && scrubPointer.moved);
+    if (scrubPointer?.pointerId === event.pointerId) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      lyricsScrubPointerRef.current = null;
+      if (completedScrub) {
+        event.preventDefault();
+        event.stopPropagation();
+        lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
+        scheduleLyricsSeekCommit(event.pointerType === "mouse" ? 60 : 170);
+      }
+    }
+
+    if (event.pointerType !== "touch" || completedScrub) {
+      lyricsTapStartRef.current = null;
+      lastLyricsTapRef.current = null;
       return;
     }
     const tapStart = lyricsTapStartRef.current;
@@ -5944,11 +6144,19 @@ function FullLyricsPage({
   }
 
   function handleLyricsPointerCancel(event: ReactPointerEvent<HTMLElement>) {
-    if (event.pointerType !== "touch") {
-      return;
+    const scrubPointer = lyricsScrubPointerRef.current;
+    if (scrubPointer?.pointerId === event.pointerId) {
+      const wasScrubbing = scrubPointer.moved;
+      lyricsScrubPointerRef.current = null;
+      if (wasScrubbing) {
+        lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
+        scheduleLyricsSeekCommit(210);
+      }
     }
-    lyricsTapStartRef.current = null;
-    lastLyricsTapRef.current = null;
+    if (event.pointerType === "touch") {
+      lyricsTapStartRef.current = null;
+      lastLyricsTapRef.current = null;
+    }
   }
 
   let content: ReactNode;
@@ -6007,7 +6215,7 @@ function FullLyricsPage({
   } else {
     content = (
       <div
-        className={`full-lyrics-list ${isUserBrowsingLyrics ? "is-user-browsing" : ""}`}
+        className={`full-lyrics-list ${isUserBrowsingLyrics ? "is-user-browsing" : ""} ${lyricsSeekPreview ? "is-scrubbing" : ""}`}
         aria-label="完整歌词"
         ref={lyricsListRef}
         role="region"
@@ -6015,6 +6223,7 @@ function FullLyricsPage({
         onScroll={(event) => handleLyricsScroll(event.currentTarget.scrollTop)}
         onKeyDown={handleLyricsKeyDown}
         onPointerDown={handleLyricsPointerDown}
+        onPointerMove={handleLyricsPointerMove}
         onPointerUp={handleLyricsPointerUp}
         onPointerCancel={handleLyricsPointerCancel}
         onClickCapture={handleLyricsClickCapture}
@@ -6024,12 +6233,14 @@ function FullLyricsPage({
           const isActive = index === activeLineIndex;
           const hasKaraokeWords = isActive && Boolean(line.words?.length);
           const karaokeDisplayTime = currentTime + karaokeTimingLeadSeconds;
-          const distance = activeLineIndex >= 0 ? Math.abs(index - activeLineIndex) : 0;
+          const distance = Math.abs(index - displayFocalLineIndex);
           const lineClassName = [
             isActive ? "active" : "",
             hasKaraokeWords ? "has-karaoke" : "",
+            index === lyricsSeekPreview?.index ? "scrub-target" : "",
             distance === 1 ? "near" : "",
             distance > 4 ? "far" : "",
+            distance > 6 ? "outside-window" : "",
             index < activeLineIndex ? "past" : ""
           ]
             .filter(Boolean)
@@ -6037,8 +6248,9 @@ function FullLyricsPage({
           return (
             <p
               key={`${index}-${line.text}`}
-              ref={isActive ? activeLineRef : undefined}
+              ref={index === focalLineIndex ? activeLineRef : undefined}
               className={lineClassName}
+              data-lyric-index={index}
             >
               {hasKaraokeWords ? (
                 <span className="karaoke-line" aria-label={line.text}>
@@ -6047,10 +6259,15 @@ function FullLyricsPage({
                     const progress = duration > 0
                       ? Math.min(1, Math.max(0, (karaokeDisplayTime - word.start_seconds) / duration))
                       : karaokeDisplayTime >= word.end_seconds ? 1 : 0;
+                    const progressClassName = progress >= 0.999
+                      ? "is-sung"
+                      : progress > 0
+                        ? "is-current"
+                        : "is-upcoming";
                     return (
                       <span
                         aria-hidden="true"
-                        className="karaoke-word"
+                        className={`karaoke-word ${progressClassName}`}
                         data-text={word.text}
                         key={`${wordIndex}-${word.start_seconds}-${word.text}`}
                         style={{ "--karaoke-progress": `${(progress * 100).toFixed(2)}%` } as CSSProperties}
@@ -6072,12 +6289,6 @@ function FullLyricsPage({
     <section className="lyrics-page" style={lyricsPaletteStyle} aria-label="歌词">
       <div className={`lyrics-cinematic-scene ${isPlaying ? "is-playing" : "is-paused"} ${coverImageURL ? "has-cover" : "no-cover"}`} style={sceneMotionStyle} aria-hidden="true">
         <span className="lyrics-cover-art" style={coverImageStyle} />
-        {!coverImageURL && currentTrack ? (
-          <div className="lyrics-generated-cover">
-            <span>{currentTrack.artist}</span>
-            <strong>{currentTrack.title}</strong>
-          </div>
-        ) : null}
         <span className="lyrics-color-field base" />
         <span className="lyrics-color-field lift" />
         <svg className="lyrics-light-threads" viewBox="0 0 1440 420" preserveAspectRatio="none">
@@ -6089,6 +6300,35 @@ function FullLyricsPage({
         <span className="lyrics-glass-depth" />
         <span className="lyrics-film-texture" />
       </div>
+      {currentTrack ? (
+        <div className="lyrics-album-cluster" aria-hidden="true">
+          <div className="lyrics-album-fallback-copy">
+            <strong>{currentTrack.title}</strong>
+            <span>{currentTrack.artist}</span>
+          </div>
+          <div
+            className={`lyrics-album-display ${coverImageURL ? "has-image" : "is-generated"}`}
+            style={coverImageStyle}
+          >
+            {!coverImageURL ? (
+              <svg className="lyrics-generated-wave" viewBox="0 0 520 320" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="lyrics-generated-wave-gradient" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#54edff" />
+                    <stop offset="28%" stopColor="#7487ff" />
+                    <stop offset="52%" stopColor="#f56fca" />
+                    <stop offset="76%" stopColor="#ffbd67" />
+                    <stop offset="100%" stopColor="#9cf27c" />
+                  </linearGradient>
+                </defs>
+                <path className="wave-main" d="M-24 214 C 54 74, 132 272, 218 142 S 356 54, 544 184" />
+                <path className="wave-echo" d="M-18 242 C 82 116, 142 258, 236 176 S 392 92, 548 212" />
+                <path className="wave-spark" d="M-12 166 C 78 54, 158 220, 248 112 S 404 38, 548 148" />
+              </svg>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <nav className={`lyrics-side-controls ${lyricsSideControlsVisible ? "is-visible" : ""}`} aria-label="歌词页切歌">
         <button
           className="lyrics-side-control previous"
@@ -6129,8 +6369,14 @@ function FullLyricsPage({
           </span>
         </button>
       </nav>
-      <section className="lyrics-page-body" aria-live="polite">
+      <section className={`lyrics-page-body ${lyricsSeekPreview ? "is-scrubbing" : ""}`} aria-live="polite">
         {content}
+        {lyricsSeekPreview ? (
+          <div className="lyrics-seek-indicator" aria-hidden="true">
+            <span>{lyricsSeekPreview.time >= currentTime ? "快进" : "快退"}</span>
+            <strong>{formatDuration(lyricsSeekPreview.time)}</strong>
+          </div>
+        ) : null}
       </section>
     </section>
   );
