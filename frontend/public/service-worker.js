@@ -1,4 +1,4 @@
-const cacheName = "media-player-shell-v2";
+const cacheName = "media-player-shell-v3";
 const shellAssets = [
   "/",
   "/manifest.webmanifest",

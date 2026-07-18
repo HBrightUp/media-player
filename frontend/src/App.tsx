@@ -1139,7 +1139,7 @@ function App() {
   }, [equalizerGains]);
 
   useEffect(() => {
-    if (activePage !== "lyrics" || !isPlaying || !currentTrack?.stream_url) {
+    if (activePage !== "lyrics" || !isPlaying || !currentTrack?.stream_url || isLosslessMusicTrack(currentTrack)) {
       stopLyricsVisualizer();
       return;
     }
@@ -1501,7 +1501,7 @@ function App() {
       audio.load();
     }
     if (isPlaying) {
-      prepareEqualizerForPlayback();
+      prepareEqualizerForPlayback(currentTrack);
       if (audio.readyState < audioReadyStateHasFutureData) {
         setIsAudioLoading(true);
       }
@@ -3396,7 +3396,7 @@ function App() {
       void releasePlaybackSession(previousToken).catch(() => undefined);
     }
 
-    prepareEqualizerForPlayback();
+    prepareEqualizerForPlayback(track);
     setIsAudioLoading(true);
     setIsPlaying(true);
     return true;
@@ -3935,7 +3935,7 @@ function App() {
     if (canResumeCurrentStream) {
       const audio = audioRef.current;
       playbackIntentRef.current = true;
-      prepareEqualizerForPlayback();
+      prepareEqualizerForPlayback(track);
       setIsAudioLoading(Boolean(audio && audio.readyState < audioReadyStateHasFutureData));
       setIsPlaying(true);
       void sendPlaybackHeartbeat("playing");
@@ -3953,7 +3953,7 @@ function App() {
       setIsPlaying(false);
       return;
     }
-    prepareEqualizerForPlayback();
+    prepareEqualizerForPlayback(track);
     setIsAudioLoading(true);
     setIsPlaying(true);
   }
@@ -4153,11 +4153,15 @@ function App() {
     });
   }
 
-  function prepareEqualizerForPlayback() {
+  function prepareEqualizerForPlayback(track: Track | null | undefined = currentTrack) {
+    if (track && isLosslessMusicTrack(track)) {
+      return null;
+    }
     const context = ensureEqualizerAudioChain();
     if (context?.state === "suspended") {
       void context.resume().catch(() => undefined);
     }
+    return context;
   }
 
   function setEqualizerBandGain(bandId: EqualizerBandId, gain: number) {
@@ -4229,7 +4233,7 @@ function App() {
     }
     if (playbackMode === "one" && isCurrentTrackQueued()) {
       audio.currentTime = 0;
-      prepareEqualizerForPlayback();
+      prepareEqualizerForPlayback(currentTrack);
       void audio.play();
       return;
     }
@@ -5098,7 +5102,7 @@ function App() {
               if (!currentAudio || audioPlayRequestIdRef.current !== playRequestId || !playbackIntentRef.current || !currentAudio.paused) {
                 return;
               }
-              prepareEqualizerForPlayback();
+              prepareEqualizerForPlayback(currentTrack);
               void currentAudio.play().catch((error) => {
                 if (audioPlayRequestIdRef.current !== playRequestId) {
                   return;
@@ -5233,12 +5237,18 @@ function describeAudioElementError(audio: HTMLAudioElement | null, track: Track 
 }
 
 function describeUnsupportedAudioFormat(track: Track | null | undefined) {
+  if (track && shouldUseLosslessWavPlayback(track)) {
+    if (canBrowserPlayAudioFormat("wav")) {
+      return "";
+    }
+    return "当前浏览器不支持无损 WAV 兼容流，请换用支持 WAV 的浏览器";
+  }
   const format = getPlayableAudioFormat(track);
   if (!format || canBrowserPlayAudioFormat(format)) {
     return "";
   }
   if (format === "flac") {
-    return "当前浏览器不支持 FLAC 高品质播放，请先切到轻音乐或换用支持 FLAC 的浏览器";
+    return "当前浏览器不支持 FLAC 原始流，请刷新后使用无损兼容播放";
   }
   return `当前浏览器不支持 ${format.toUpperCase()} 音频播放`;
 }
@@ -5286,6 +5296,10 @@ function browserAudioMimeTypes(format: string) {
 
 function isLosslessMusicTrack(track: Track) {
   return getTrackQuality(track) === "lossless";
+}
+
+function shouldUseLosslessWavPlayback(track: Track) {
+  return isLosslessMusicTrack(track) && normalizeAudioExtension(track.format || getFileExtension(track.filename)) === "flac";
 }
 
 function isLossyMusicTrack(track: Track) {
