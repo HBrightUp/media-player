@@ -1,6 +1,13 @@
+export type LyricWord = {
+  text: string;
+  start_seconds: number;
+  end_seconds: number;
+};
+
 export type LyricLine = {
   time_seconds: number | null;
   text: string;
+  words?: LyricWord[];
 };
 
 export type Track = {
@@ -123,8 +130,6 @@ export type FavoriteCategoryTrackRequest = {
 
 export type PresenceRequest = {
   session_id: string;
-  user_id?: number;
-  phone?: string;
 };
 
 export type OnlineUser = {
@@ -163,6 +168,8 @@ export type PlaybackSessionResponse = {
   device_id: string;
   tab_id: string;
   device_name: string;
+  stream_ticket?: string;
+  stream_ticket_expires_at?: string;
 };
 
 export type AudioFileImportLimits = {

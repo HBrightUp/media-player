@@ -50,6 +50,7 @@ Edit `deployments/production/.env`:
 ```dotenv
 MEDIA_PLAYER_SITE_ADDRESS=media.example.com
 MEDIA_PLAYER_PUBLIC_ORIGIN=https://media.example.com
+MEDIA_PLAYER_FRONTEND_MODE=container
 POSTGRES_DB=media_player
 POSTGRES_USER=media_player
 POSTGRES_PASSWORD=<use-a-strong-password>
@@ -73,6 +74,17 @@ For IP-only HTTP deployment:
 MEDIA_PLAYER_SITE_ADDRESS=http://<ECS_PUBLIC_IP>
 MEDIA_PLAYER_PUBLIC_ORIGIN=http://<ECS_PUBLIC_IP>
 ```
+
+If ports `80`/`443` are already owned by a system Caddy, set:
+
+```dotenv
+MEDIA_PLAYER_FRONTEND_MODE=host_caddy
+```
+
+In this mode the deploy script starts only `postgres` and `backend` through
+Compose, builds the frontend image, exports its `/srv` static files into
+`/opt/media-player/frontend/dist`, validates `/etc/caddy/Caddyfile`, and reloads
+the system Caddy service.
 
 ## 4. Add Music Files
 

@@ -40,8 +40,15 @@ type TrackLyrics struct {
 }
 
 type LyricLine struct {
-	TimeSeconds *float64 `json:"time_seconds"`
-	Text        string   `json:"text"`
+	TimeSeconds *float64    `json:"time_seconds"`
+	Text        string      `json:"text"`
+	Words       []LyricWord `json:"words,omitempty"`
+}
+
+type LyricWord struct {
+	Text         string  `json:"text"`
+	StartSeconds float64 `json:"start_seconds"`
+	EndSeconds   float64 `json:"end_seconds"`
 }
 
 type LibrarySetting struct {

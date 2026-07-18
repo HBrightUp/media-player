@@ -1,14 +1,14 @@
-# 后端启动时会读取这个目录，并递归扫描其中的音频文件写入数据库。
-# 可以写绝对路径，例如：/Users/hml/Music
+# 后端启动时会读取当前用户的 Music 目录，并递归扫描音频文件写入数据库。
+# ${HOME} 会在启动时自动展开为当前运行用户的主目录。
 library:
-  shared_lyrics_directory: "D:/MusicLyrics/Common"
+  shared_lyrics_directory: "${HOME}/Music/shared-lyrics"
   lossless:
-    music_directory: "D:/Music/Lossless"
-    lyrics_directory: "D:/MusicLyrics/Lossless"
+    music_directory: "${HOME}/Music/music"
+    lyrics_directory: "${HOME}/Music/lyrics"
   # 可选：歌词目录。支持按音乐目录的相对路径放置同名 .lrc 文件。
   lossy:
-    music_directory: "D:/Music/Lossy"
-    lyrics_directory: "D:/MusicLyrics/Lossy"
+    music_directory: "${HOME}/Music/lossy-music"
+    lyrics_directory: "${HOME}/Music/lossy-lyrics"
   # 后端会检测音乐/歌词目录变化，变化后等待防抖时间再扫描。
   watch_poll_interval: "1m"
   watch_debounce: "30s"

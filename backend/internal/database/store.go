@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/hml/media-player/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -277,16 +279,19 @@ func (s *Store) UpsertTrack(ctx context.Context, track models.Track) (int64, err
 	return id, err
 }
 
-func (s *Store) ClearTracks(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM tracks`)
-	return err
-}
-
-func (s *Store) DeleteTracksExceptPaths(ctx context.Context, paths []string) error {
-	if len(paths) == 0 {
-		return s.ClearTracks(ctx)
-	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM tracks WHERE NOT (path = ANY($1))`, paths)
+func (s *Store) DeleteTracksUnderRootExceptPaths(ctx context.Context, root string, paths []string, protectedRootPrefixes []string) error {
+	root = filepath.Clean(root)
+	rootPrefix := root + string(os.PathSeparator)
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM tracks
+		WHERE (path = $1 OR left(path, length($2)) = $2)
+			AND NOT (path = ANY($3))
+			AND NOT EXISTS (
+				SELECT 1
+				FROM unnest($4::text[]) AS protected(prefix)
+				WHERE left(path, length(protected.prefix)) = protected.prefix
+			)
+	`, root, rootPrefix, paths, protectedRootPrefixes)
 	return err
 }
 

@@ -175,16 +175,12 @@ function parseRetryAfterSeconds(value: string | null) {
   return Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
-export function streamURL(track: Track, sessionToken?: string, playbackToken?: string): string {
+export function streamURL(track: Track, streamTicket?: string): string {
   const url = `${API_BASE}${track.stream_url}`;
   const params = new URLSearchParams();
-  const token = sessionToken?.trim();
-  const playback = playbackToken?.trim();
-  if (token) {
-    params.set("session_token", token);
-  }
-  if (playback) {
-    params.set("playback_token", playback);
+  const ticket = streamTicket?.trim();
+  if (ticket) {
+    params.set("stream_ticket", ticket);
   }
   const query = params.toString();
   if (!query) {

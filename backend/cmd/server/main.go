@@ -54,17 +54,6 @@ func main() {
 	}
 	scanRoots := configuredScanRoots(cfg)
 	saveConfiguredDirectories(ctx, store, cfg)
-	if len(scanRoots) > 0 {
-		saveAndScanLibrary(ctx, store, scanner, scanRoots, "startup")
-		if cfg.LibraryWatchPollInterval > 0 {
-			startLibraryWatchers(ctx, scanRoots, cfg.LibraryWatchPollInterval, cfg.LibraryWatchDebounce, func(scanCtx context.Context, reason string) {
-				saveAndScanLibrary(scanCtx, store, scanner, scanRoots, reason)
-			})
-		}
-		if cfg.LibraryAutoScanInterval > 0 {
-			startLibraryAutoScan(ctx, store, scanner, scanRoots, cfg.LibraryAutoScanInterval)
-		}
-	}
 
 	api := httpapi.New(store, scanner, cfg.CORSOrigin)
 	server := &http.Server{
@@ -79,6 +68,23 @@ func main() {
 			log.Fatalf("http server: %v", err)
 		}
 	}()
+
+	if len(scanRoots) > 0 {
+		go func() {
+			saveAndScanLibrary(ctx, store, scanner, scanRoots, "startup")
+			if ctx.Err() != nil {
+				return
+			}
+			if cfg.LibraryWatchPollInterval > 0 {
+				startLibraryWatchers(ctx, scanRoots, cfg.LibraryWatchPollInterval, cfg.LibraryWatchDebounce, func(scanCtx context.Context, reason string) {
+					saveAndScanLibrary(scanCtx, store, scanner, scanRoots, reason)
+				})
+			}
+			if cfg.LibraryAutoScanInterval > 0 {
+				startLibraryAutoScan(ctx, store, scanner, scanRoots, cfg.LibraryAutoScanInterval)
+			}
+		}()
+	}
 
 	<-ctx.Done()
 

@@ -10,7 +10,7 @@ frontend:
 	cd frontend && npm run dev
 
 fmt:
-	cd backend && gofmt -w .
+	cd backend && go fmt ./...
 	cd frontend && npm run typecheck
 
 test:

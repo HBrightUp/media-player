@@ -1,96 +1,135 @@
 # Media Player
 
-一个移动端布局优先的在线音乐播放器：React 前端、Go 后端、Postgres 数据库。
+一个面向个人或小团队自托管的媒体与文档应用。前端使用 React、Vite 和 TypeScript，后端使用 Go，数据保存在 PostgreSQL，音频和歌词保留在服务器文件系统。
 
-> 参考站点 `https://m.uzz.me/` 当前会进入安全验证页，无法直接读取真实页面结构。本实现已调整为 Web 端全屏播放器：纯黑/深灰界面、单一橙红强调色、纯色封面与底部固定播放控制。
+## 主要功能
 
-## 功能
+- 分别管理无损和有损曲库，支持共享歌词目录
+- 扫描 MP3、FLAC、M4A、AAC、OGG、WAV、AIFF 等音频
+- 读取音频标题、歌手、专辑、内嵌封面和内嵌歌词
+- 匹配独立 LRC/TXT 歌词并同步滚动显示
+- 收藏、收藏分类、搜索、排序、播放队列、均衡器和睡眠定时
+- 账号登录、角色权限、登录审计、在线状态和单账号播放会话控制
+- 管理员上传、转码、重命名和删除服务器音频/歌词
+- 基于 Tiptap 的共享文档与目录管理
+- PWA 安装、Windows 局域网启动和 Docker Compose 生产部署
 
-- 通过 `config.yaml` 设置服务端可访问的默认音乐文件夹目录
-- 后端启动时递归扫描目录下的常见音频文件，包括 `mp3`、`flac`、`m4a`、`wav` 等
-- 后端检测音乐/歌词目录变化，变化后防抖触发音乐库扫描
-- 保存歌曲文件信息到 Postgres
-- 读取音频文件的基础标签信息：标题、歌手、专辑
-- 支持独立 `.lrc` 歌词目录，播放时按歌曲 ID 加载并同步显示歌词
-- 歌曲列表搜索、排序、选中播放
-- 后端按歌曲 ID 提供音频流
+## 权限模型
 
-## 本地 / 局域网启动
+| 角色 | 有损播放 | 无损播放 | 音频文件管理 | 用户管理 |
+| --- | --- | --- | --- | --- |
+| 普通用户 | 是 | 否 | 否 | 否 |
+| VIP | 是 | 是 | 否 | 否 |
+| 管理员 | 是 | 是 | 是 | 否 |
+| 超级管理员 | 是 | 是 | 是 | 是 |
 
-1. 启动 Postgres：
+所有播放、歌词、在线状态和文档读取均要求登录。音频流地址只包含受当前播放会话约束的临时票据，不包含登录令牌。
+
+## 本地启动
+
+要求：Go 1.26、Node.js 24、Docker（用于本地 PostgreSQL）。
+
+1. 启动 PostgreSQL：
 
 ```bash
 docker compose -f deployments/local/compose.yaml up -d
 ```
 
-2. 设置默认音乐目录：
-
-编辑根目录 [config.yaml](/Users/hml/project/myself/github/media-player/config.yaml)，填入本机音乐目录：
+2. 配置曲库。可以编辑根目录 `config.yaml`，也可以复制 `.env.example` 后按环境注入变量：
 
 ```yaml
 library:
-  music_directory: "/Users/you/Music"
-  lyrics_directory: "/Users/you/MusicLyrics"
+  shared_lyrics_directory: "/Users/you/MusicLyricsShared"
+  lossless:
+    music_directory: "/Users/you/MusicLossless"
+    lyrics_directory: "/Users/you/MusicLyricsLossless"
+  lossy:
+    music_directory: "/Users/you/MusicLossy"
+    lyrics_directory: "/Users/you/MusicLyricsLossy"
   watch_poll_interval: "1m"
   watch_debounce: "30s"
+  auto_scan_interval: "0"
+```
+
+歌词优先按相对目录和同名文件匹配，例如：
+
+```text
+/Users/you/MusicLossless/陈奕迅/爱情转移.flac
+/Users/you/MusicLyricsLossless/陈奕迅/爱情转移.lrc
 ```
 
 3. 启动后端：
 
 ```bash
 cd backend
-DATABASE_URL='postgres://media_player:media_player@127.0.0.1:15432/media_player?sslmode=disable' go run ./cmd/server
+go run ./cmd/server
 ```
-
-歌词目录是可选项。推荐按音乐目录的相对路径放置同名 `.lrc` 文件，例如：
-
-```text
-/Users/you/Music/陈奕迅/爱情转移.flac
-/Users/you/MusicLyrics/陈奕迅/爱情转移.lrc
-```
-
-后端会在启动时扫描音乐目录下的音频文件，并把找到的歌词写入独立的 `track_lyrics` 表。启动后默认每 1 分钟检测一次音乐/歌词目录变化，发现变化后等待 30 秒安静期再扫描，避免大文件复制或批量上传时反复扫描。需要关闭目录变化检测时可设置 `LIBRARY_WATCH_POLL_INTERVAL=0`；自动全量扫描是可选兜底能力，默认关闭，需要时可设置 `LIBRARY_AUTO_SCAN_INTERVAL=30m`。
 
 4. 启动前端：
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-前端开发服务会监听 `0.0.0.0:5173`。本机可打开 `http://localhost:5173`，同一局域网设备请打开 `http://<本机局域网 IP>:5173`。
+访问 `http://localhost:5173`。前端开发服务会把 `/api` 和 `/healthz` 代理到 `127.0.0.1:8080`。
 
-### Windows 一键局域网启动
+Windows 可以运行 `scripts/start-lan.ps1`；首次开放防火墙时使用管理员 PowerShell 执行 `scripts/start-lan.ps1 -OpenFirewall`。
 
-如果已经安装 PostgreSQL，并按默认配置创建了 `media_player` 数据库，可以直接运行：
+## 曲库扫描安全
 
-```powershell
-.\scripts\start-lan.ps1
-```
+扫描按曲库根目录独立对账。只有某个根目录完整遍历成功后，才会清理该根目录下已经不存在的数据库记录；其他曲库或临时不可访问的挂载不会被清理。音频文件本身不会在扫描过程中删除。
 
-首次需要允许局域网设备访问时，用管理员 PowerShell 运行：
+后端会先启动 HTTP 服务，再在后台执行首次曲库扫描，因此大曲库不会阻塞 `/healthz` 和登录接口；扫描期间曲目列表会逐步更新。
 
-```powershell
-.\scripts\start-lan.ps1 -OpenFirewall
-```
-
-脚本会启动后端 `0.0.0.0:8080` 和前端 `0.0.0.0:5173`，并输出可在同一 Wi-Fi/局域网设备上打开的地址，例如 `http://192.168.1.23:5173`。数据库端口仍建议只给本机使用。
-
-## API
+## 常用 API
 
 - `GET /healthz`
-- `GET /api/settings/library`
-- `PUT /api/settings/library` body: `{ "path": "/path/to/music" }`
-- `POST /api/library/scan`
-- `GET /api/tracks`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
+- `GET|POST /api/admin/users`
+- `PATCH|DELETE /api/admin/users/{id}`
+- `POST /api/presence/heartbeat`
+- `POST /api/presence/offline`
+- `POST /api/playback/session`
+- `POST /api/playback/heartbeat`
+- `POST /api/playback/release`
+- `GET /api/tracks?quality=lossless|lossy`
 - `GET /api/tracks/{id}/lyrics`
-- `GET /api/tracks/{id}/stream`
+- `GET /api/tracks/{id}/cover`
+- `GET /api/tracks/{id}/stream?stream_ticket=...`
+- `GET|POST /api/favorites`
+- `GET|POST /api/favorite-categories`
+- `GET|POST /api/note-folders`
+- `GET|POST /api/notes`
+- `POST /api/audio-files/authorize`
+- `GET /api/audio-files`
+- `POST /api/audio-files/import`
 
-## 目录说明
+公开注册当前关闭，用户由超级管理员在用户管理页面创建。
 
-- `frontend/`: React + Vite + TypeScript 前端
-- `backend/`: Go API 服务
-- `backend/migrations/`: Postgres 初始化 SQL
-- `deployments/local/`: 本地 Postgres Compose 配置
-- `docs/music-player-concept.png`: 本次视觉概念稿
+## 测试
+
+```bash
+make test
+```
+
+该命令运行后端 Go 测试以及前端 TypeScript/生产构建。GitHub Actions 也会执行相同的两部分检查。
+
+## 部署
+
+生产部署使用 Caddy、Go 后端和 PostgreSQL 三个容器。完整步骤见 `deployments/production/README.md`。
+
+后端启动时执行嵌入的 `backend/internal/database/schema.sql`；`backend/migrations/001_init.sql` 与其保持功能一致，供外部迁移流程使用。
+
+## 目录
+
+- `frontend/`：React SPA/PWA
+- `backend/cmd/server/`：后端入口
+- `backend/internal/httpapi/`：HTTP API、认证与权限
+- `backend/internal/library/`：扫描、标签、歌词与目录监听
+- `backend/internal/database/`：PostgreSQL 数据访问和运行时 schema
+- `deployments/local/`：本地 PostgreSQL
+- `deployments/production/`：生产 Docker Compose 和 Caddy

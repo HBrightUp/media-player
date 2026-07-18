@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +20,6 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/hml/media-player/backend/internal/database"
 	"github.com/hml/media-player/backend/internal/models"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
@@ -52,9 +52,15 @@ var lossyAudioFormats = map[string]bool{
 }
 
 type Scanner struct {
-	store       *database.Store
+	store       trackStore
 	lyricsRoots []string
 	mu          sync.Mutex
+}
+
+type trackStore interface {
+	UpsertTrack(context.Context, models.Track) (int64, error)
+	ReplaceTrackLyrics(context.Context, int64, *models.TrackLyrics) error
+	DeleteTracksUnderRootExceptPaths(context.Context, string, []string, []string) error
 }
 
 type ScanRoot struct {
@@ -72,7 +78,7 @@ type tags struct {
 	Cover  *models.TrackCover
 }
 
-func NewScanner(store *database.Store, lyricsRoot ...string) *Scanner {
+func NewScanner(store trackStore, lyricsRoot ...string) *Scanner {
 	roots := make([]string, 0, len(lyricsRoot))
 	for _, root := range lyricsRoot {
 		root = strings.TrimSpace(root)
@@ -127,8 +133,6 @@ func (s *Scanner) ScanRoots(ctx context.Context, specs []ScanRoot) (models.ScanR
 
 	result := models.ScanResult{}
 	rootLabels := make([]string, 0, len(specs))
-	seenPaths := make([]string, 0)
-	traversalIncomplete := false
 	scannedRoots := 0
 
 	for _, spec := range specs {
@@ -163,6 +167,13 @@ func (s *Scanner) ScanRoots(ctx context.Context, specs []ScanRoot) (models.ScanR
 		}
 		rootLabels = append(rootLabels, fmt.Sprintf("%s:%s", labelQuality, absRoot))
 		scannedRoots++
+		seenPaths := make([]string, 0)
+		traversalIncomplete := false
+		protectedRoots := nestedScanRootPrefixes(absRoot, specs)
+		protectedRootSet := make(map[string]bool, len(protectedRoots))
+		for _, prefix := range protectedRoots {
+			protectedRootSet[prefix] = true
+		}
 
 		err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -176,6 +187,9 @@ func (s *Scanner) ScanRoots(ctx context.Context, specs []ScanRoot) (models.ScanR
 				return ctx.Err()
 			}
 			if entry.IsDir() {
+				if path != absRoot && protectedRootSet[filepath.Clean(path)+string(os.PathSeparator)] {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 
@@ -206,18 +220,45 @@ func (s *Scanner) ScanRoots(ctx context.Context, specs []ScanRoot) (models.ScanR
 		if err != nil {
 			return result, err
 		}
+		if traversalIncomplete {
+			continue
+		}
+		if err := s.store.DeleteTracksUnderRootExceptPaths(ctx, absRoot, seenPaths, protectedRoots); err != nil {
+			return result, fmt.Errorf("remove missing tracks under %s: %w", absRoot, err)
+		}
 	}
 	result.RootPath = strings.Join(rootLabels, ";")
 	if scannedRoots == 0 {
 		return result, errors.New("music directory is required")
 	}
-	if traversalIncomplete {
-		return result, nil
-	}
-	if err := s.store.DeleteTracksExceptPaths(ctx, seenPaths); err != nil {
-		return result, fmt.Errorf("remove missing tracks: %w", err)
-	}
 	return result, nil
+}
+
+func nestedScanRootPrefixes(root string, specs []ScanRoot) []string {
+	root = filepath.Clean(root)
+	prefixes := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, spec := range specs {
+		candidate := strings.TrimSpace(spec.MusicRoot)
+		if candidate == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		absolute = filepath.Clean(absolute)
+		relative, err := filepath.Rel(root, absolute)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		prefix := absolute + string(os.PathSeparator)
+		if !seen[prefix] {
+			seen[prefix] = true
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes
 }
 
 func recordScanError(result *models.ScanResult, path string, err error) {
@@ -597,6 +638,7 @@ func readLRCFile(path, source string) *models.TrackLyrics {
 	if len(lines) == 0 {
 		return nil
 	}
+	lines = mergeKaraokeTimeline(path, lines)
 	sourcePath := path
 	return &models.TrackLyrics{
 		Format:     lyricFormat(lines),
@@ -605,6 +647,59 @@ func readLRCFile(path, source string) *models.TrackLyrics {
 		Source:     source,
 		SourcePath: &sourcePath,
 	}
+}
+
+type karaokeTimeline struct {
+	Version int                `json:"version"`
+	Lines   []models.LyricLine `json:"lines"`
+}
+
+func mergeKaraokeTimeline(lyricsPath string, lines []models.LyricLine) []models.LyricLine {
+	timelinePath := strings.TrimSuffix(lyricsPath, filepath.Ext(lyricsPath)) + ".karaoke.json"
+	content, err := os.ReadFile(timelinePath)
+	if err != nil {
+		return lines
+	}
+
+	var timeline karaokeTimeline
+	if json.Unmarshal(content, &timeline) != nil || timeline.Version != 1 {
+		return lines
+	}
+
+	for _, timedLine := range timeline.Lines {
+		if timedLine.TimeSeconds == nil || len(timedLine.Words) == 0 {
+			continue
+		}
+		words := validKaraokeWords(timedLine.Words)
+		if len(words) == 0 {
+			continue
+		}
+		for index := range lines {
+			if lines[index].TimeSeconds == nil || trimText(lines[index].Text) != trimText(timedLine.Text) {
+				continue
+			}
+			delta := *lines[index].TimeSeconds - *timedLine.TimeSeconds
+			if delta < -0.02 || delta > 0.02 {
+				continue
+			}
+			lines[index].Words = words
+			break
+		}
+	}
+	return lines
+}
+
+func validKaraokeWords(words []models.LyricWord) []models.LyricWord {
+	result := make([]models.LyricWord, 0, len(words))
+	lastStart := -1.0
+	for _, word := range words {
+		if word.Text == "" || word.StartSeconds < 0 || word.EndSeconds < word.StartSeconds || word.StartSeconds < lastStart {
+			return nil
+		}
+		result = append(result, word)
+		lastStart = word.StartSeconds
+	}
+	return result
 }
 
 func parseLRC(content string) []models.LyricLine {
@@ -631,6 +726,9 @@ func parseLRC(content string) []models.LyricLine {
 			continue
 		}
 		for _, timestamp := range timestamps {
+			if isLyricMetadataText(rawLine, &timestamp) {
+				continue
+			}
 			value := timestamp
 			lines = append(lines, models.LyricLine{
 				TimeSeconds: &value,
@@ -639,6 +737,99 @@ func parseLRC(content string) []models.LyricLine {
 		}
 	}
 	return compactLyrics(lines)
+}
+
+var lyricCreditLabelHints = []string{
+	"作词", "词", "作曲", "曲", "编曲", "编配", "制作", "制作人", "制作统筹", "制作公司",
+	"监制", "混音", "母带", "录音", "配唱", "人声编辑", "音频编辑", "和声", "和音",
+	"吉他", "贝斯", "鼓", "键盘", "乐队", "音乐总监", "项目总监", "总监", "弦乐",
+	"古筝", "箫", "笛", "长笛", "二胡", "琵琶", "出品", "出品人", "出品公司",
+	"出品发行公司", "发行", "发行公司", "音乐出品发行公司", "厂牌", "运营", "企划",
+	"策划", "统筹", "商务", "宣传", "封面", "设计", "节目", "节目名", "来源", "鸣谢",
+}
+
+var lyricEnglishCreditLabelHints = []string{
+	"publisher", "producer", "projectdirector", "director", "arrangement", "arranged", "mixing", "mixed",
+	"mastering", "mastered", "vocal", "lyrics", "composed", "written",
+}
+
+func isLyricMetadataText(text string, timestamp *float64) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	lowered := strings.ToLower(text)
+	if strings.HasPrefix(lowered, "lrc by") ||
+		strings.HasPrefix(lowered, "offset:") ||
+		strings.HasPrefix(lowered, "re:") ||
+		strings.HasPrefix(lowered, "ve:") ||
+		strings.HasPrefix(lowered, "ti:") ||
+		strings.HasPrefix(lowered, "ar:") ||
+		strings.HasPrefix(lowered, "al:") ||
+		strings.HasPrefix(lowered, "by:") {
+		return true
+	}
+	if strings.Contains(text, "未经著作权人") ||
+		strings.Contains(text, "不得以任何方式") ||
+		strings.Contains(text, "著作权权利保留") ||
+		strings.Contains(text, "未经许可") {
+		return true
+	}
+	if strings.HasSuffix(text, "：") || strings.HasSuffix(text, ":") {
+		if len([]rune(text)) <= 16 {
+			return true
+		}
+	}
+	if timestamp != nil && *timestamp < 5 && len([]rune(text)) <= 60 && strings.Contains(text, "《") {
+		return true
+	}
+	if timestamp != nil && *timestamp < 12 && (strings.Contains(text, " - ") || (strings.Contains(text, "-") && len([]rune(text)) <= 40)) {
+		return true
+	}
+	if index := strings.IndexAny(text, ":："); index > 0 && index <= 96 {
+		rawLabel := text[:index]
+		label := compactLyricCreditLabel(rawLabel)
+		for _, hint := range lyricCreditLabelHints {
+			if strings.Contains(label, hint) {
+				return true
+			}
+		}
+		englishLabel := compactASCII(strings.ToLower(rawLabel))
+		for _, hint := range lyricEnglishCreditLabelHints {
+			if strings.Contains(englishLabel, hint) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func compactLyricCreditLabel(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r <= 127 {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				return -1
+			}
+			switch r {
+			case ' ', '\t', '\n', '\r', '(', ')', '/', '.', '_', '-':
+				return -1
+			}
+		}
+		switch r {
+		case '（', '）':
+			return -1
+		}
+		return r
+	}, value)
+}
+
+func compactASCII(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r
+		}
+		return -1
+	}, value)
 }
 
 func trackLyricsFromLines(lines []models.LyricLine, source, sourcePath string) *models.TrackLyrics {

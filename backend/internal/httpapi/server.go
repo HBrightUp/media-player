@@ -72,6 +72,7 @@ type Server struct {
 	loginFailures       *authFailureLimiter
 	trackRefreshLimiter *manualRefreshLimiter
 	audioFileAccess     *audioFileAccessManager
+	streamTickets       *streamTicketManager
 	authAuditSweeper    *authAuditSweeper
 }
 
@@ -101,8 +102,6 @@ type favoriteCategoryTrackRequest struct {
 
 type presenceRequest struct {
 	SessionID string `json:"session_id"`
-	UserID    int64  `json:"user_id"`
-	Phone     string `json:"phone"`
 }
 
 type presenceResponse struct {
@@ -179,6 +178,7 @@ func New(store *database.Store, scanner *library.Scanner, corsOrigin string) *Se
 		loginFailures:       newAuthFailureLimiter(),
 		trackRefreshLimiter: newManualRefreshLimiter(),
 		audioFileAccess:     newAudioFileAccessManager(audioFileAccessTokenSize, audioFileAccessTTL),
+		streamTickets:       newStreamTicketManager(streamTicketTTL),
 		authAuditSweeper:    &authAuditSweeper{},
 	}
 }
@@ -395,6 +395,10 @@ func (s *Server) handlePresenceHeartbeat(w http.ResponseWriter, r *http.Request)
 		methodNotAllowed(w)
 		return
 	}
+	user, ok := s.requireSessionUser(w, r, "请先登录后上报在线状态")
+	if !ok {
+		return
+	}
 
 	var request presenceRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -407,22 +411,17 @@ func (s *Server) handlePresenceHeartbeat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	now := time.Now()
-	s.sweepAuthSessions(r.Context(), now)
-	s.touchAuthSessionIfPresent(r.Context(), authSessionToken(r), now)
-
-	phone := normalizePresencePhone(request.Phone)
-	user, hasUser := s.resolvePresenceUser(r.Context(), request.UserID, phone)
-	if hasUser {
-		request.UserID = user.ID
-		phone = user.Phone
-	}
-	snapshot := s.presence.Touch(sessionID, request.UserID, phone, user.Nickname, now)
+	snapshot := s.presence.Touch(sessionID, user.ID, user.Phone, user.Nickname, now)
 	writePresenceResponse(w, snapshot, true)
 }
 
 func (s *Server) handlePresenceOffline(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
+		return
+	}
+	user, ok := s.requireSessionUser(w, r, "请先登录后更新在线状态")
+	if !ok {
 		return
 	}
 
@@ -437,32 +436,8 @@ func (s *Server) handlePresenceOffline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot := s.presence.Remove(sessionID, time.Now())
+	snapshot := s.presence.RemoveForUser(sessionID, user.ID, time.Now())
 	writePresenceResponse(w, snapshot, false)
-}
-
-func (s *Server) resolvePresenceUser(ctx context.Context, userID int64, phone string) (models.User, bool) {
-	if userID > 0 {
-		user, err := s.store.GetUserByID(ctx, userID)
-		if err == nil && (phone == "" || user.Phone == phone) {
-			return user, true
-		}
-	}
-	if phone != "" {
-		user, err := s.store.GetUserByPhone(ctx, phone)
-		if err == nil {
-			return user, true
-		}
-	}
-	return models.User{}, false
-}
-
-func (s *Server) optionalSessionUserID(r *http.Request) int64 {
-	userID, ok := s.authSessionUserID(r.Context(), authSessionToken(r), time.Now())
-	if !ok {
-		return 0
-	}
-	return userID
 }
 
 func (s *Server) requireSessionUserID(w http.ResponseWriter, r *http.Request, message string) (int64, bool) {
@@ -526,7 +501,7 @@ func authSessionToken(r *http.Request) string {
 	if token != "" {
 		return token
 	}
-	return strings.TrimSpace(r.URL.Query().Get("session_token"))
+	return ""
 }
 
 func newAuthSessionToken(tokenBytes int) (string, string, error) {
@@ -541,14 +516,6 @@ func newAuthSessionToken(tokenBytes int) (string, string, error) {
 func hashAuthSessionToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-func (s *Server) touchAuthSessionIfPresent(ctx context.Context, token string, now time.Time) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return
-	}
-	_, _ = s.store.TouchAuthSession(ctx, hashAuthSessionToken(token), now)
 }
 
 func (s *Server) sweepAuthSessions(ctx context.Context, now time.Time) {
@@ -1160,15 +1127,7 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 		writeError(w, http.StatusInternalServerError, "读取歌曲失败")
 		return
 	}
-	user, ok := s.requireSessionUser(w, r, "请先登录后播放音乐")
-	if !ok {
-		return
-	}
-	if !userCanAccessTrack(user, track) {
-		writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
-		return
-	}
-	if !s.requirePlaybackSessionForStream(w, r, user.ID) {
+	if !s.authorizeTrackStream(w, r, track) {
 		return
 	}
 
@@ -1187,8 +1146,48 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 
 	w.Header().Set("Content-Type", library.ContentType(track.Format))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", track.Filename))
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, track.Filename, info.ModTime(), file)
+}
+
+func (s *Server) authorizeTrackStream(w http.ResponseWriter, r *http.Request, track models.Track) bool {
+	if ticket := strings.TrimSpace(r.URL.Query().Get("stream_ticket")); ticket != "" {
+		grant, ok := s.streamTickets.Validate(ticket, time.Now())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "播放链接已失效，请重新点击播放")
+			return false
+		}
+		user, err := s.store.GetUserByID(r.Context(), grant.UserID)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "播放链接已失效，请重新登录")
+			return false
+		}
+		if !userCanAccessTrack(user, track) {
+			writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
+			return false
+		}
+		now := time.Now()
+		if _, err := s.store.TouchPlaybackSession(r.Context(), grant.PlaybackTokenHash, user.ID, now, now.Add(playbackSessionTTL)); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusConflict, "音乐已在其它设备或页面播放")
+			} else {
+				writeError(w, http.StatusInternalServerError, "校验播放会话失败")
+			}
+			return false
+		}
+		return true
+	}
+
+	user, ok := s.requireSessionUser(w, r, "请先登录后播放音乐")
+	if !ok {
+		return false
+	}
+	if !userCanAccessTrack(user, track) {
+		writeError(w, http.StatusForbidden, "当前用户无权播放高品质")
+		return false
+	}
+	return s.requirePlaybackSessionForStream(w, r, user.ID)
 }
 
 func validateDirectory(path string) (string, error) {
@@ -1267,13 +1266,6 @@ func validateFavoriteCategoryName(name string) (string, error) {
 		return "", fmt.Errorf("分类名称不能超过%d个字符", favoriteCategoryMaxRunes)
 	}
 	return name, nil
-}
-
-func normalizePresencePhone(phone string) string {
-	normalized := strings.TrimSpace(phone)
-	normalized = strings.ReplaceAll(normalized, " ", "")
-	normalized = strings.ReplaceAll(normalized, "-", "")
-	return normalized
 }
 
 func authFailureKey(phone, address string) string {
@@ -1570,11 +1562,13 @@ func (p *presenceTracker) Touch(sessionID string, userID int64, phone string, ni
 	return p.snapshotLocked(now)
 }
 
-func (p *presenceTracker) Remove(sessionID string, now time.Time) presenceSnapshot {
+func (p *presenceTracker) RemoveForUser(sessionID string, userID int64, now time.Time) presenceSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	delete(p.sessions, sessionID)
+	if session, ok := p.sessions[sessionID]; ok && session.UserID == userID {
+		delete(p.sessions, sessionID)
+	}
 	return p.snapshotLocked(now)
 }
 

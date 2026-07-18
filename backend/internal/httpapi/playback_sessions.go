@@ -6,12 +6,111 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hml/media-player/backend/internal/database"
 	"github.com/hml/media-player/backend/internal/models"
 	"github.com/jackc/pgx/v5"
 )
+
+const (
+	streamTicketTTL       = 12 * time.Hour
+	streamTicketTokenSize = 32
+)
+
+type streamTicketGrant struct {
+	UserID            int64
+	PlaybackTokenHash string
+	ExpiresAt         time.Time
+}
+
+type streamTicketManager struct {
+	mu               sync.Mutex
+	grants           map[string]streamTicketGrant
+	tokensByPlayback map[string]string
+	ttl              time.Duration
+}
+
+func newStreamTicketManager(ttl time.Duration) *streamTicketManager {
+	return &streamTicketManager{
+		grants:           make(map[string]streamTicketGrant),
+		tokensByPlayback: make(map[string]string),
+		ttl:              ttl,
+	}
+}
+
+func (m *streamTicketManager) Grant(userID int64, playbackTokenHash string, now time.Time) (string, time.Time, error) {
+	expiresAt := now.Add(m.ttl)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteExpiredLocked(now)
+	if token := m.tokensByPlayback[playbackTokenHash]; token != "" {
+		tokenHash := hashAuthSessionToken(token)
+		if grant, ok := m.grants[tokenHash]; ok {
+			grant.UserID = userID
+			grant.ExpiresAt = expiresAt
+			m.grants[tokenHash] = grant
+			return token, expiresAt, nil
+		}
+		delete(m.tokensByPlayback, playbackTokenHash)
+	}
+	token, tokenHash, err := newAuthSessionToken(streamTicketTokenSize)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	m.grants[tokenHash] = streamTicketGrant{
+		UserID:            userID,
+		PlaybackTokenHash: playbackTokenHash,
+		ExpiresAt:         expiresAt,
+	}
+	m.tokensByPlayback[playbackTokenHash] = token
+	return token, expiresAt, nil
+}
+
+func (m *streamTicketManager) Validate(token string, now time.Time) (streamTicketGrant, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return streamTicketGrant{}, false
+	}
+	tokenHash := hashAuthSessionToken(token)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	grant, ok := m.grants[tokenHash]
+	if !ok {
+		return streamTicketGrant{}, false
+	}
+	if !now.Before(grant.ExpiresAt) {
+		delete(m.grants, tokenHash)
+		if currentToken := m.tokensByPlayback[grant.PlaybackTokenHash]; currentToken != "" && hashAuthSessionToken(currentToken) == tokenHash {
+			delete(m.tokensByPlayback, grant.PlaybackTokenHash)
+		}
+		return streamTicketGrant{}, false
+	}
+	return grant, true
+}
+
+func (m *streamTicketManager) RevokePlayback(playbackTokenHash string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tokenHash, grant := range m.grants {
+		if grant.PlaybackTokenHash == playbackTokenHash {
+			delete(m.grants, tokenHash)
+		}
+	}
+	delete(m.tokensByPlayback, playbackTokenHash)
+}
+
+func (m *streamTicketManager) deleteExpiredLocked(now time.Time) {
+	for tokenHash, grant := range m.grants {
+		if !now.Before(grant.ExpiresAt) {
+			delete(m.grants, tokenHash)
+			if token := m.tokensByPlayback[grant.PlaybackTokenHash]; token != "" && hashAuthSessionToken(token) == tokenHash {
+				delete(m.tokensByPlayback, grant.PlaybackTokenHash)
+			}
+		}
+	}
+}
 
 type playbackSessionRequest struct {
 	TrackID    int64  `json:"track_id"`
@@ -78,7 +177,13 @@ func (s *Server) handlePlaybackSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "申请播放权失败")
 		return
 	}
-	writePlaybackSessionResponse(w, token, record)
+	streamTicket, streamTicketExpiresAt, err := s.streamTickets.Grant(user.ID, tokenHash, now)
+	if err != nil {
+		_, _ = s.store.ReleasePlaybackSession(r.Context(), tokenHash, user.ID, "stream_ticket_failed", time.Now())
+		writeError(w, http.StatusInternalServerError, "生成播放链接失败")
+		return
+	}
+	writePlaybackSessionResponse(w, token, record, streamTicket, streamTicketExpiresAt)
 }
 
 func (s *Server) handlePlaybackHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -112,13 +217,14 @@ func (s *Server) handlePlaybackHeartbeat(w http.ResponseWriter, r *http.Request)
 	}
 
 	now := time.Now()
+	tokenHash := hashAuthSessionToken(token)
 	state := database.NormalizePlaybackState(request.State)
 	ttl := playbackSessionTTL
 	if state == database.PlaybackStatePaused {
 		ttl = playbackPauseTTL
 	}
 	record, err := s.store.HeartbeatPlaybackSession(r.Context(), database.PlaybackSessionHeartbeat{
-		TokenHash: hashAuthSessionToken(token),
+		TokenHash: tokenHash,
 		UserID:    user.ID,
 		DeviceID:  deviceID,
 		TabID:     tabID,
@@ -135,7 +241,12 @@ func (s *Server) handlePlaybackHeartbeat(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "续期播放会话失败")
 		return
 	}
-	writePlaybackSessionResponse(w, token, record)
+	streamTicket, streamTicketExpiresAt, err := s.streamTickets.Grant(user.ID, tokenHash, now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "生成播放链接失败")
+		return
+	}
+	writePlaybackSessionResponse(w, token, record, streamTicket, streamTicketExpiresAt)
 }
 
 func (s *Server) handlePlaybackRelease(w http.ResponseWriter, r *http.Request) {
@@ -155,11 +266,13 @@ func (s *Server) handlePlaybackRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	token := strings.TrimSpace(request.Token)
 	if token != "" {
-		_, err := s.store.ReleasePlaybackSession(r.Context(), hashAuthSessionToken(token), user.ID, "released", time.Now())
+		tokenHash := hashAuthSessionToken(token)
+		_, err := s.store.ReleasePlaybackSession(r.Context(), tokenHash, user.ID, "released", time.Now())
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "释放播放会话失败")
 			return
 		}
+		s.streamTickets.RevokePlayback(tokenHash)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
@@ -226,14 +339,12 @@ func validatePlaybackClient(w http.ResponseWriter, deviceID string, tabID string
 
 func playbackSessionToken(r *http.Request) string {
 	token := strings.TrimSpace(r.Header.Get("X-Playback-Session-Token"))
-	if token != "" {
-		return token
-	}
-	return strings.TrimSpace(r.URL.Query().Get("playback_token"))
+	return token
 }
 
-func writePlaybackSessionResponse(w http.ResponseWriter, token string, record database.PlaybackSessionRecord) {
-	writeJSON(w, http.StatusOK, map[string]any{
+func writePlaybackSessionResponse(w http.ResponseWriter, token string, record database.PlaybackSessionRecord, streamTicket string, streamTicketExpiresAt time.Time) {
+	w.Header().Set("Cache-Control", "no-store")
+	payload := map[string]any{
 		"ok":          true,
 		"token":       token,
 		"expires_at":  record.ExpiresAt.UTC().Format(time.RFC3339),
@@ -242,5 +353,10 @@ func writePlaybackSessionResponse(w http.ResponseWriter, token string, record da
 		"device_id":   record.DeviceID,
 		"tab_id":      record.TabID,
 		"device_name": record.DeviceName,
-	})
+	}
+	if streamTicket != "" {
+		payload["stream_ticket"] = streamTicket
+		payload["stream_ticket_expires_at"] = streamTicketExpiresAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, payload)
 }

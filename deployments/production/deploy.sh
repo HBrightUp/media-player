@@ -15,6 +15,8 @@ set -a
 . "$ENV_FILE"
 set +a
 
+FRONTEND_MODE="${MEDIA_PLAYER_FRONTEND_MODE:-container}"
+
 if [ "${POSTGRES_PASSWORD:-}" = "change-this-password" ]; then
   echo "Refusing to deploy with the example POSTGRES_PASSWORD."
   exit 1
@@ -55,5 +57,38 @@ for directory in \
   chown "$MEDIA_PLAYER_FILE_OWNER" "$directory"
 done
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
+COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
+export DOCKER_BUILDKIT COMPOSE_DOCKER_CLI_BUILD
+
+if [ "$FRONTEND_MODE" = "host_caddy" ]; then
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build postgres backend
+  docker rm -f media-player-frontend >/dev/null 2>&1 || true
+
+  docker build -t production-frontend:latest "$ROOT_DIR/frontend"
+  container_id="$(docker create production-frontend:latest)"
+  cleanup() {
+    docker rm "$container_id" >/dev/null 2>&1 || true
+  }
+  trap cleanup EXIT INT TERM
+
+  rm -rf "$ROOT_DIR/frontend/dist.new" "$ROOT_DIR/frontend/dist.prev"
+  docker cp "$container_id":/srv "$ROOT_DIR/frontend/dist.new"
+  cleanup
+  trap - EXIT INT TERM
+
+  if [ -d "$ROOT_DIR/frontend/dist" ]; then
+    mv "$ROOT_DIR/frontend/dist" "$ROOT_DIR/frontend/dist.prev"
+  fi
+  mv "$ROOT_DIR/frontend/dist.new" "$ROOT_DIR/frontend/dist"
+
+  if command -v caddy >/dev/null 2>&1 && [ -f /etc/caddy/Caddyfile ]; then
+    caddy validate --config /etc/caddy/Caddyfile
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl reload caddy
+    fi
+  fi
+else
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+fi
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps

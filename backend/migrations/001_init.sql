@@ -65,6 +65,73 @@ BEGIN
   END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  ended_reason TEXT,
+  offline_recorded_at TIMESTAMPTZ,
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS ended_reason TEXT;
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS offline_recorded_at TIMESTAMPTZ;
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS ip_address TEXT;
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS user_agent TEXT;
+
+CREATE TABLE IF NOT EXISTS auth_audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  event_type TEXT NOT NULL CHECK (event_type IN ('login_success', 'login_failure', 'logout_explicit', 'offline_timeout', 'session_expired')),
+  user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  phone TEXT,
+  session_token_hash TEXT,
+  ip_address TEXT,
+  user_agent TEXT,
+  success BOOLEAN NOT NULL DEFAULT true,
+  failure_reason TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS playback_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auth_session_token_hash TEXT,
+  device_id TEXT NOT NULL,
+  tab_id TEXT NOT NULL,
+  device_name TEXT NOT NULL DEFAULT '',
+  track_id BIGINT REFERENCES tracks(id) ON DELETE SET NULL,
+  state TEXT NOT NULL DEFAULT 'playing' CHECK (state IN ('playing', 'paused')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS auth_session_token_hash TEXT;
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS device_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS tab_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS device_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS track_id BIGINT REFERENCES tracks(id) ON DELETE SET NULL;
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'playing';
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS revoked_reason TEXT;
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE playback_sessions DROP CONSTRAINT IF EXISTS playback_sessions_state_check;
+ALTER TABLE playback_sessions ADD CONSTRAINT playback_sessions_state_check CHECK (state IN ('playing', 'paused'));
+
 CREATE TABLE IF NOT EXISTS favorite_tracks (
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   track_id BIGINT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -105,37 +172,25 @@ CREATE TABLE IF NOT EXISTS track_lyrics (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS playback_sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  auth_session_token_hash TEXT,
-  device_id TEXT NOT NULL,
-  tab_id TEXT NOT NULL,
-  device_name TEXT NOT NULL DEFAULT '',
-  track_id BIGINT REFERENCES tracks(id) ON DELETE SET NULL,
-  state TEXT NOT NULL DEFAULT 'playing' CHECK (state IN ('playing', 'paused')),
-  expires_at TIMESTAMPTZ NOT NULL,
-  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  revoked_at TIMESTAMPTZ,
-  revoked_reason TEXT,
+CREATE TABLE IF NOT EXISTS note_folders (
+  id BIGSERIAL PRIMARY KEY,
+  parent_id BIGINT REFERENCES note_folders(id) ON DELETE CASCADE,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS auth_session_token_hash TEXT;
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS device_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS tab_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS device_name TEXT NOT NULL DEFAULT '';
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS track_id BIGINT REFERENCES tracks(id) ON DELETE SET NULL;
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'playing';
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS revoked_reason TEXT;
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE playback_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE playback_sessions DROP CONSTRAINT IF EXISTS playback_sessions_state_check;
-ALTER TABLE playback_sessions ADD CONSTRAINT playback_sessions_state_check CHECK (state IN ('playing', 'paused'));
+CREATE TABLE IF NOT EXISTS notes (
+  id BIGSERIAL PRIMARY KEY,
+  folder_id BIGINT REFERENCES note_folders(id) ON DELETE SET NULL,
+  owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 DO $$
 BEGIN
@@ -180,6 +235,13 @@ CREATE INDEX IF NOT EXISTS tracks_album_idx ON tracks (lower(album));
 CREATE INDEX IF NOT EXISTS tracks_quality_title_idx ON tracks (quality, lower(title), lower(artist), id);
 CREATE INDEX IF NOT EXISTS users_phone_idx ON users (phone);
 CREATE INDEX IF NOT EXISTS users_role_idx ON users (role, id);
+CREATE INDEX IF NOT EXISTS auth_sessions_user_expires_idx ON auth_sessions (user_id, expires_at DESC);
+CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions (expires_at);
+CREATE INDEX IF NOT EXISTS auth_sessions_last_seen_idx ON auth_sessions (last_seen_at) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS auth_sessions_offline_pending_idx ON auth_sessions (last_seen_at) WHERE ended_at IS NULL AND offline_recorded_at IS NULL;
+CREATE INDEX IF NOT EXISTS auth_audit_logs_user_time_idx ON auth_audit_logs (user_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS auth_audit_logs_event_time_idx ON auth_audit_logs (event_type, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS auth_audit_logs_phone_time_idx ON auth_audit_logs (phone, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS playback_sessions_user_active_idx ON playback_sessions (user_id, expires_at DESC) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS playback_sessions_last_seen_idx ON playback_sessions (last_seen_at) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS playback_sessions_auth_session_idx ON playback_sessions (auth_session_token_hash) WHERE revoked_at IS NULL;
@@ -189,3 +251,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS favorite_categories_user_name_unique_idx ON fa
 CREATE INDEX IF NOT EXISTS favorite_categories_user_sort_idx ON favorite_categories (user_id, sort_order, id);
 CREATE INDEX IF NOT EXISTS favorite_category_tracks_user_category_added_idx ON favorite_category_tracks (user_id, category_id, added_at DESC);
 CREATE INDEX IF NOT EXISTS favorite_category_tracks_user_track_idx ON favorite_category_tracks (user_id, track_id);
+CREATE INDEX IF NOT EXISTS note_folders_parent_sort_idx ON note_folders (parent_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS note_folders_owner_idx ON note_folders (owner_user_id);
+CREATE INDEX IF NOT EXISTS notes_folder_updated_idx ON notes (folder_id, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS notes_owner_updated_idx ON notes (owner_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS notes_search_idx ON notes (lower(title), updated_at DESC);

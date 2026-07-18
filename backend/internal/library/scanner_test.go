@@ -1,12 +1,227 @@
 package library
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hml/media-player/backend/internal/models"
 )
+
+type scannerStoreStub struct {
+	nextTrackID int64
+	cleanups    []scannerCleanup
+	upserted    []models.Track
+}
+
+type scannerCleanup struct {
+	root           string
+	paths          []string
+	protectedRoots []string
+}
+
+func (s *scannerStoreStub) UpsertTrack(_ context.Context, track models.Track) (int64, error) {
+	s.nextTrackID++
+	s.upserted = append(s.upserted, track)
+	return s.nextTrackID, nil
+}
+
+func (s *scannerStoreStub) ReplaceTrackLyrics(_ context.Context, _ int64, _ *models.TrackLyrics) error {
+	return nil
+}
+
+func (s *scannerStoreStub) DeleteTracksUnderRootExceptPaths(_ context.Context, root string, paths []string, protectedRoots []string) error {
+	s.cleanups = append(s.cleanups, scannerCleanup{
+		root:           root,
+		paths:          append([]string(nil), paths...),
+		protectedRoots: append([]string(nil), protectedRoots...),
+	})
+	return nil
+}
+
+func TestScanRootProtectsNestedConfiguredRootFromCleanup(t *testing.T) {
+	parentRoot := t.TempDir()
+	nestedRoot := filepath.Join(parentRoot, "mounted-lossy")
+	store := &scannerStoreStub{}
+	scanner := NewScanner(store)
+
+	if _, err := scanner.ScanRoots(context.Background(), []ScanRoot{
+		LosslessScanRoot(parentRoot),
+		LossyScanRoot(nestedRoot),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.cleanups) != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", len(store.cleanups))
+	}
+	wantPrefix := nestedRoot + string(os.PathSeparator)
+	if len(store.cleanups[0].protectedRoots) != 1 || store.cleanups[0].protectedRoots[0] != wantPrefix {
+		t.Fatalf("protected roots = %q, want [%q]", store.cleanups[0].protectedRoots, wantPrefix)
+	}
+}
+
+func TestNestedConfiguredRootIsScannedOnlyByItsOwnSpec(t *testing.T) {
+	parentRoot := t.TempDir()
+	nestedRoot := filepath.Join(parentRoot, "nested")
+	if err := os.MkdirAll(nestedRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	audioPath := filepath.Join(nestedRoot, "artist-title.flac")
+	if err := os.WriteFile(audioPath, []byte("not a real flac"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := &scannerStoreStub{}
+	scanner := NewScanner(store)
+
+	if _, err := scanner.ScanRoots(context.Background(), []ScanRoot{
+		LosslessScanRoot(parentRoot),
+		LosslessScanRoot(nestedRoot),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.upserted) != 1 {
+		t.Fatalf("upserted tracks = %d, want 1", len(store.upserted))
+	}
+	if store.upserted[0].Path != audioPath {
+		t.Fatalf("upserted path = %q, want %q", store.upserted[0].Path, audioPath)
+	}
+}
+
+func TestScanRootsCleansOnlySuccessfullyScannedRoots(t *testing.T) {
+	validRoot := t.TempDir()
+	audioPath := filepath.Join(validRoot, "artist-title.flac")
+	if err := os.WriteFile(audioPath, []byte("not a real flac"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missingRoot := filepath.Join(t.TempDir(), "missing")
+	store := &scannerStoreStub{}
+	scanner := NewScanner(store)
+
+	result, err := scanner.ScanRoots(context.Background(), []ScanRoot{
+		LosslessScanRoot(validRoot),
+		LossyScanRoot(missingRoot),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Found != 1 || result.Imported != 1 {
+		t.Fatalf("scan result = found:%d imported:%d, want found:1 imported:1", result.Found, result.Imported)
+	}
+	if len(store.cleanups) != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", len(store.cleanups))
+	}
+	validRoot, err = filepath.Abs(validRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.cleanups[0].root != validRoot {
+		t.Fatalf("cleanup root = %q, want %q", store.cleanups[0].root, validRoot)
+	}
+	if len(store.cleanups[0].paths) != 1 || store.cleanups[0].paths[0] != audioPath {
+		t.Fatalf("cleanup paths = %q, want [%q]", store.cleanups[0].paths, audioPath)
+	}
+}
+
+func TestScanEmptyRootOnlyCleansThatRoot(t *testing.T) {
+	root := t.TempDir()
+	store := &scannerStoreStub{}
+	scanner := NewScanner(store)
+
+	if _, err := scanner.Scan(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.cleanups) != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", len(store.cleanups))
+	}
+	if len(store.cleanups[0].paths) != 0 {
+		t.Fatalf("cleanup paths = %q, want none", store.cleanups[0].paths)
+	}
+}
+
+func TestReadLRCFileMergesKaraokeTimeline(t *testing.T) {
+	directory := t.TempDir()
+	lyricsPath := filepath.Join(directory, "song.lrc")
+	if err := os.WriteFile(lyricsPath, []byte("[00:52.860]我 心砰砰跳跳\n[00:56.000]下一句\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	timeline := `{
+  "version": 1,
+  "lines": [{
+    "time_seconds": 52.86,
+    "text": "我 心砰砰跳跳",
+    "words": [
+      {"text": "我 ", "start_seconds": 52.72, "end_seconds": 53.60},
+      {"text": "心", "start_seconds": 53.92, "end_seconds": 54.16}
+    ]
+  }]
+}`
+	if err := os.WriteFile(filepath.Join(directory, "song.karaoke.json"), []byte(timeline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lyrics := readLRCFile(lyricsPath, "test")
+	if lyrics == nil {
+		t.Fatal("lyrics = nil")
+	}
+	if len(lyrics.Lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lyrics.Lines))
+	}
+	if len(lyrics.Lines[0].Words) != 2 {
+		t.Fatalf("karaoke words = %d, want 2", len(lyrics.Lines[0].Words))
+	}
+	if lyrics.Lines[0].Words[0].Text != "我 " {
+		t.Fatalf("first karaoke word = %q, want %q", lyrics.Lines[0].Words[0].Text, "我 ")
+	}
+	if len(lyrics.Lines[1].Words) != 0 {
+		t.Fatalf("second line karaoke words = %d, want 0", len(lyrics.Lines[1].Words))
+	}
+}
+
+func TestReadLRCFileFiltersCreditLinesBeforeMergingKaraokeTimeline(t *testing.T) {
+	directory := t.TempDir()
+	lyricsPath := filepath.Join(directory, "song.lrc")
+	content := strings.Join([]string{
+		"[00:01.000]项目总监Project Director：庄有豪",
+		"[00:02.000]鸣谢：万物体验家/不要音乐",
+		"[00:03.000]真正唱出来的一句",
+	}, "\n")
+	if err := os.WriteFile(lyricsPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	timeline := `{
+  "version": 1,
+  "lines": [{
+    "time_seconds": 3.0,
+    "text": "真正唱出来的一句",
+    "words": [
+      {"text": "真正", "start_seconds": 3.02, "end_seconds": 3.40}
+    ]
+  }]
+}`
+	if err := os.WriteFile(filepath.Join(directory, "song.karaoke.json"), []byte(timeline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lyrics := readLRCFile(lyricsPath, "test")
+	if lyrics == nil {
+		t.Fatal("lyrics = nil")
+	}
+	if len(lyrics.Lines) != 1 {
+		t.Fatalf("lines = %d, want 1", len(lyrics.Lines))
+	}
+	if lyrics.Lines[0].Text != "真正唱出来的一句" {
+		t.Fatalf("line text = %q, want sung lyric", lyrics.Lines[0].Text)
+	}
+	if len(lyrics.Lines[0].Words) != 1 {
+		t.Fatalf("karaoke words = %d, want 1", len(lyrics.Lines[0].Words))
+	}
+}
 
 func TestBuildTrackReadsID3v22Album(t *testing.T) {
 	root := t.TempDir()

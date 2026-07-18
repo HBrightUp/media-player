@@ -35,7 +35,10 @@ type noteRequest struct {
 func (s *Server) handleNoteFolders(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		viewerID := s.optionalSessionUserID(r)
+		viewerID, ok := s.requireSessionUserID(w, r, "请先登录后读取文件夹")
+		if !ok {
+			return
+		}
 		folders, err := s.store.ListNoteFolders(r.Context(), viewerID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "读取文件夹失败")
@@ -103,7 +106,10 @@ func (s *Server) handleNoteFolderRoute(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		viewerID := s.optionalSessionUserID(r)
+		viewerID, ok := s.requireSessionUserID(w, r, "请先登录后读取文档")
+		if !ok {
+			return
+		}
 		folderID, unfiled, err := noteFolderFilter(r)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -158,7 +164,11 @@ func (s *Server) handleNoteRoute(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		note, err := s.store.GetNote(r.Context(), s.optionalSessionUserID(r), noteID)
+		viewerID, ok := s.requireSessionUserID(w, r, "请先登录后读取文档")
+		if !ok {
+			return
+		}
+		note, err := s.store.GetNote(r.Context(), viewerID, noteID)
 		writeNoteReadResult(w, map[string]any{"note": note}, err, "读取文档失败")
 	case http.MethodPatch, http.MethodPut:
 		var request noteRequest
