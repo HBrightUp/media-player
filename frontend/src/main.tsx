@@ -21,7 +21,18 @@ createRoot(document.getElementById("root")!).render(
 );
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  let isReloadingForServiceWorkerUpdate = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (isReloadingForServiceWorkerUpdate) {
+      return;
+    }
+    isReloadingForServiceWorkerUpdate = true;
+    window.location.reload();
+  });
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/service-worker.js").catch(() => undefined);
+    void navigator.serviceWorker
+      .register("/service-worker.js")
+      .then((registration) => registration.update())
+      .catch(() => undefined);
   });
 }
