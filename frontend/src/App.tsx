@@ -850,11 +850,21 @@ function App() {
   const currentTrackStreamURL = currentTrack?.stream_url && currentStreamTicket ? streamURL(currentTrack, currentStreamTicket) : "";
   const nextTrackToPreload = useMemo(() => {
     const currentTrackInQueue = Boolean(currentTrack?.id && playbackQueue.some((track) => track.id === currentTrack.id));
-    if (!isPlaying || playbackMode !== "all" || !currentTrack?.stream_url || playbackQueue.length < 2 || !currentTrackInQueue) {
+    if (
+      !isPlaying ||
+      playbackMode !== "all" ||
+      !currentTrack?.stream_url ||
+      playbackQueue.length < 2 ||
+      !currentTrackInQueue ||
+      !canPreloadAdjacentTrack(currentTrack)
+    ) {
       return null;
     }
     const nextTrack = getAdjacentQueuedTrack(1);
-    return nextTrack?.id === currentTrack.id ? null : nextTrack;
+    if (!nextTrack || nextTrack.id === currentTrack.id || !canPreloadAdjacentTrack(nextTrack)) {
+      return null;
+    }
+    return nextTrack;
   }, [currentTrack, isPlaying, playbackMode, playbackQueue]);
   const nextTrackPreloadURL = nextTrackToPreload?.stream_url && currentStreamTicket ? streamURL(nextTrackToPreload, currentStreamTicket) : "";
 
@@ -5280,6 +5290,10 @@ function isLosslessMusicTrack(track: Track) {
 
 function isLossyMusicTrack(track: Track) {
   return getTrackQuality(track) === "lossy";
+}
+
+function canPreloadAdjacentTrack(track: Track) {
+  return isLossyMusicTrack(track);
 }
 
 function filterTracksForRole(tracks: Track[], role?: UserRole | null) {
