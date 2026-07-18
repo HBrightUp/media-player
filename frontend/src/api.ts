@@ -182,19 +182,12 @@ export function streamURL(track: Track, streamTicket?: string): string {
   if (ticket) {
     params.set("stream_ticket", ticket);
   }
-  if (shouldUseLosslessWAVStream(track)) {
-    params.set("stream_format", "wav");
-  }
   const query = params.toString();
   if (!query) {
     return url;
   }
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}${query}`;
-}
-
-function shouldUseLosslessWAVStream(track: Track) {
-  return track.quality === "lossless" && track.format.trim().toLowerCase() === "flac";
 }
 
 export function coverURL(track: Track): string {

@@ -1184,10 +1184,6 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request, id int64) {
 	if !s.authorizeTrackStream(w, r, track) {
 		return
 	}
-	if wantsLosslessWAVStream(r, track) {
-		s.streamLosslessWAV(w, r, track)
-		return
-	}
 
 	file, err := os.Open(track.Path)
 	if err != nil {
