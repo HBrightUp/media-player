@@ -349,6 +349,7 @@ const authSessionFallbackDurationMs = 3 * 24 * 60 * 60 * 1000;
 const audioFileAccessUploadExtensionMs = 60 * 60 * 1000;
 const presenceHeartbeatIntervalMs = 25_000;
 const playbackHeartbeatIntervalMs = 5_000;
+const playbackSessionExpirySafetyMs = playbackHeartbeatIntervalMs * 2;
 const audioStreamRecoveryMaxAttempts = 1;
 const manualLibraryRefreshCooldownMs = 60_000;
 const lyricsChromeAutoHideMs = 2800;
@@ -430,6 +431,7 @@ const lossyAudioFileExtensionsForUpload = new Set([".mp3", ".aac", ".m4a", ".ogg
 const supportedAudioFileExtensions = new Set([...losslessAudioFileExtensions, ...lossyAudioFileExtensionsForUpload]);
 const lossyMusicFormats = new Set(["mp3", "aac", "m4a", "ogg"]);
 const supportedLyricFileExtensions = new Set([".lrc", ".txt"]);
+const karaokeLyricFileSuffix = ".karaoke.json";
 type AudioManagerArea = Extract<AudioFileArea, "lossless_music" | "lossy_music">;
 const audioFileAreas: Array<{ id: AudioManagerArea; label: string }> = [
   { id: "lossless_music", label: "高品质" },
@@ -748,6 +750,7 @@ function App() {
   const lastAppliedAudioSourceRef = useRef("");
   const currentTrackRef = useRef<Track | null>(null);
   const currentTrackStreamURLRef = useRef("");
+  const playbackSessionRef = useRef<PlaybackSessionState | null>(null);
   const playbackIntentRef = useRef(false);
   const ignoreAudioPauseUntilRef = useRef(0);
   const forceAudioPlaybackUntilRef = useRef(0);
@@ -891,6 +894,7 @@ function App() {
   const currentTrackStreamURL = currentTrack?.stream_url && currentStreamTicket ? streamURL(currentTrack, currentStreamTicket) : "";
   currentTrackRef.current = currentTrack;
   currentTrackStreamURLRef.current = currentTrackStreamURL;
+  playbackSessionRef.current = playbackSession;
   const nextTrackToPreload = useMemo(() => {
     const currentTrackInQueue = Boolean(currentTrack?.id && playbackQueue.some((track) => track.id === currentTrack.id));
     if (
@@ -1545,26 +1549,6 @@ function App() {
     }, delay);
     return () => window.clearTimeout(timerID);
   }, [activePage, authSession?.token, currentTrack?.id, nextTrackToPreload?.id]);
-
-  useEffect(() => {
-    if (
-      activePage !== "lyrics" ||
-      !authSession?.userId ||
-      !currentTrack?.stream_url ||
-      currentTrackStreamURL ||
-      isPlaying
-    ) {
-      return;
-    }
-    const track = currentTrack;
-    const timerID = window.setTimeout(() => {
-      void ensurePlaybackSessionForTrack(track, {
-        allowTakeover: true,
-        state: "paused"
-      });
-    }, 180);
-    return () => window.clearTimeout(timerID);
-  }, [activePage, authSession?.userId, currentTrack?.id, currentTrack?.stream_url, currentTrackStreamURL, isPlaying]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -3307,6 +3291,20 @@ function App() {
     }));
   }
 
+  function isPlaybackSessionFresh(session: PlaybackSessionState | null | undefined, now = Date.now()): session is PlaybackSessionState {
+    return Boolean(session?.token && session.expiresAt > now + playbackSessionExpirySafetyMs);
+  }
+
+  // Playback rights are recovered lazily from user-initiated playback paths only.
+  // Do not poll or reacquire a session just because it is close to expiring while nobody is listening.
+  function clearExpiredPlaybackSession(session: PlaybackSessionState | null | undefined, now = Date.now()) {
+    if (!session || isPlaybackSessionFresh(session, now)) {
+      return false;
+    }
+    setPlaybackSession(null);
+    return true;
+  }
+
   function broadcastPlaybackClaim() {
     if (!authSession?.userId) {
       return;
@@ -3364,10 +3362,16 @@ function App() {
     playbackDeviceIdRef.current = deviceID;
     playbackTabIdRef.current = tabID;
 
-    if (!forceClaim && playbackSession?.token) {
+    const now = Date.now();
+    const currentPlaybackSession = playbackSessionRef.current;
+    if (!forceClaim && clearExpiredPlaybackSession(currentPlaybackSession, now)) {
+      lastAppliedAudioSourceRef.current = "";
+    }
+
+    if (!forceClaim && isPlaybackSessionFresh(currentPlaybackSession, now)) {
       try {
         const response = await heartbeatPlaybackSession({
-          token: playbackSession.token,
+          token: currentPlaybackSession.token,
           track_id: track.id,
           device_id: deviceID,
           tab_id: tabID,
@@ -4045,10 +4049,15 @@ function App() {
       playImmediately = false
     }: { queue?: Track[]; scope?: PlaybackQueueScope; reveal?: boolean; allowTakeover?: boolean; startTime?: number | null; playImmediately?: boolean } = {}
   ) {
+    const now = Date.now();
+    const reusablePlaybackSession = isPlaybackSessionFresh(playbackSessionRef.current, now) ? playbackSessionRef.current : null;
+    if (!reusablePlaybackSession) {
+      clearExpiredPlaybackSession(playbackSessionRef.current, now);
+    }
     const canResumeCurrentStream =
       currentTrack?.id === track.id &&
-      playbackSession?.trackID === track.id &&
-      Boolean(playbackSession.token && playbackSession.streamTicket && currentTrackStreamURL);
+      reusablePlaybackSession?.trackID === track.id &&
+      Boolean(reusablePlaybackSession.streamTicket && currentTrackStreamURL);
     const requestID = playbackRequestIdRef.current + 1;
     playbackRequestIdRef.current = requestID;
     audioStreamRecoveryRef.current = null;
@@ -4453,7 +4462,14 @@ function App() {
       return;
     }
 
-    if (currentTrackStreamURLRef.current) {
+    const now = Date.now();
+    const currentPlaybackSession = playbackSessionRef.current;
+    const canUseCurrentStreamURL = Boolean(currentTrackStreamURLRef.current && isPlaybackSessionFresh(currentPlaybackSession, now));
+    if (!canUseCurrentStreamURL) {
+      clearExpiredPlaybackSession(currentPlaybackSession, now);
+    }
+
+    if (canUseCurrentStreamURL) {
       const audio = audioRef.current;
       playbackIntentRef.current = true;
       prepareEqualizerForPlayback(track);
@@ -6966,6 +6982,42 @@ function getUploadRelativePath(file: File) {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
 }
 
+function isKaraokeLyricFilePath(path: string) {
+  return getDisplayFilename(path).toLowerCase().endsWith(karaokeLyricFileSuffix);
+}
+
+function isSupportedLyricFilePath(path: string) {
+  return supportedLyricFileExtensions.has(getFileExtension(path)) || isKaraokeLyricFilePath(path);
+}
+
+function getUploadBaseName(path: string) {
+  const filename = getDisplayFilename(path);
+  if (isKaraokeLyricFilePath(filename)) {
+    return filename.slice(0, -karaokeLyricFileSuffix.length).trim();
+  }
+  return filename.replace(/\.[^.]*$/, "").trim();
+}
+
+function serverAudioHasLyricForUpload(serverAudio: ServerAudioFile, lyricRelativePath: string) {
+  if (isKaraokeLyricFilePath(lyricRelativePath)) {
+    return Boolean(serverAudio.has_karaoke_lyrics);
+  }
+  return Boolean(serverAudio.has_lyrics);
+}
+
+function getServerLyricUploadReadyReason(serverAudio: ServerAudioFile, lyricRelativePath: string) {
+  if (isKaraokeLyricFilePath(lyricRelativePath)) {
+    return serverAudio.has_lyrics
+      ? `服务器已有 ${serverAudio.artist}-${serverAudio.title}，将补充 KTV 逐字时间轴`
+      : `服务器已有 ${serverAudio.artist}-${serverAudio.title}，将补充 KTV 逐字时间轴；缺少同名 LRC 时暂不会生效`;
+  }
+  return `服务器已有 ${serverAudio.artist}-${serverAudio.title}，将补充歌词`;
+}
+
+function getLyricDuplicateReason(relativePath: string) {
+  return isKaraokeLyricFilePath(relativePath) ? "服务器已有对应 KTV 逐字时间轴，已跳过" : "服务器已有对应歌词文件，已跳过";
+}
+
 function isAudioFileArea(area: AudioFileArea) {
   return area === "lossless_music" || area === "lossy_music";
 }
@@ -6993,11 +7045,12 @@ function areaSupportsUploadAudioExtension(area: AudioFileArea, extension: string
 }
 
 function getUploadFileKind(file: File, area: AudioFileArea = "lossless_music") {
-  const ext = getFileExtension(getUploadRelativePath(file));
+  const relativePath = getUploadRelativePath(file);
+  const ext = getFileExtension(relativePath);
   if (isAudioFileArea(area) && supportedAudioFileExtensions.has(ext)) {
     return "audio";
   }
-  if (supportedLyricFileExtensions.has(ext)) {
+  if (isSupportedLyricFilePath(relativePath)) {
     return "lyrics";
   }
   return "";
@@ -7101,7 +7154,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
           displayName,
           kind: "lyrics",
           status: "ready",
-          reason: "将保存到当前歌词区域",
+          reason: isKaraokeLyricFilePath(relativePath) ? "将保存到当前歌词区域（KTV 逐字时间轴）" : "将保存到当前歌词区域",
           sizeBytes: file.size
         });
       }
@@ -7212,14 +7265,14 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
       continue;
     }
     if (!hasReadyUploadAudio && serverAudio) {
-      if (serverAudio.has_lyrics) {
+      if (serverAudioHasLyricForUpload(serverAudio, relativePath)) {
         duplicateCount += 1;
         items.push({
           relativePath,
           displayName,
           kind: "lyrics",
           status: "duplicate",
-          reason: "服务器已有对应歌词文件，已跳过",
+          reason: getLyricDuplicateReason(relativePath),
           sizeBytes: file.size
         });
         continue;
@@ -7232,7 +7285,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
         displayName,
         kind: "lyrics",
         status: "ready",
-        reason: `服务器已有 ${serverAudio.artist}-${serverAudio.title}，将补充歌词`,
+        reason: getServerLyricUploadReadyReason(serverAudio, relativePath),
         sizeBytes: file.size
       });
       continue;
@@ -7274,7 +7327,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
       displayName,
       kind: "lyrics",
       status: "ready",
-      reason: "将随同名音频上传",
+      reason: isKaraokeLyricFilePath(relativePath) ? "将随同名音频上传 KTV 逐字时间轴" : "将随同名音频上传",
       sizeBytes: file.size
     });
   }
@@ -7431,7 +7484,8 @@ function buildServerAudioSetFromTracks(tracks: ServerManagedFile[], providedSet?
       title,
       extension,
       area: track.area,
-      has_lyrics: track.has_lyrics
+      has_lyrics: track.has_lyrics,
+      has_karaoke_lyrics: track.has_karaoke_lyrics
     });
   }
   return entries;
@@ -7522,7 +7576,7 @@ function isLosslessAudioExtension(extension: string) {
 }
 
 function tagsFromUploadFilename(relativePath: string): UploadAudioTags {
-  const baseName = getDisplayFilename(relativePath).replace(/\.[^.]*$/, "").trim();
+  const baseName = getUploadBaseName(relativePath);
   for (const separator of [" - ", "-", "—", "–", "_"]) {
     const index = baseName.indexOf(separator);
     if (index <= 0) {
@@ -7815,7 +7869,7 @@ function bytesToAscii(data: Uint8Array) {
 }
 
 function normalizeImportBase(path: string) {
-  return normalizeAudioText(getDisplayFilename(path).replace(/\.[^.]*$/, ""));
+  return normalizeAudioText(getUploadBaseName(path));
 }
 
 function normalizeAudioText(value: string) {
@@ -7981,7 +8035,7 @@ function getAudioImportResultKindLabel(item: AudioFileImportItemResult) {
   if (supportedAudioFileExtensions.has(ext)) {
     return "音频";
   }
-  if (supportedLyricFileExtensions.has(ext)) {
+  if (isSupportedLyricFilePath(item.relative_path || item.target_filename || "")) {
     return "歌词";
   }
   return "文件";

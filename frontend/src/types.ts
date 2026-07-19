@@ -212,6 +212,7 @@ export type ServerAudioFile = {
   extension: string;
   area?: AudioFileArea;
   has_lyrics?: boolean;
+  has_karaoke_lyrics?: boolean;
 };
 
 export type AudioFileArea = "lossless_music" | "lossy_music" | "lossless_lyrics" | "lossy_lyrics" | "shared_lyrics";
@@ -223,6 +224,7 @@ export type ServerManagedFile = {
   kind: "audio" | "lyrics";
   quality?: "lossless" | "lossy";
   has_lyrics?: boolean;
+  has_karaoke_lyrics?: boolean;
   relative_path: string;
   filename: string;
   title: string;

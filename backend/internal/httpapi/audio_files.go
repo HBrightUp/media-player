@@ -37,6 +37,7 @@ const (
 	audioImportManifestMaxBytes  = int64(1024 * 1024)
 	audioImportStaleAge          = 2 * time.Hour
 	audioImportTempPattern       = "media-player-import-*"
+	karaokeLyricExtension        = ".karaoke.json"
 )
 
 var (
@@ -109,13 +110,14 @@ type audioFilesLimitsResponse struct {
 }
 
 type serverAudioSetEntry struct {
-	Filename     string `json:"filename"`
-	FilenameHash string `json:"filename_hash"`
-	Artist       string `json:"artist"`
-	Title        string `json:"title"`
-	Extension    string `json:"extension"`
-	Area         string `json:"area,omitempty"`
-	HasLyrics    bool   `json:"has_lyrics,omitempty"`
+	Filename         string `json:"filename"`
+	FilenameHash     string `json:"filename_hash"`
+	Artist           string `json:"artist"`
+	Title            string `json:"title"`
+	Extension        string `json:"extension"`
+	Area             string `json:"area,omitempty"`
+	HasLyrics        bool   `json:"has_lyrics,omitempty"`
+	HasKaraokeLyrics bool   `json:"has_karaoke_lyrics,omitempty"`
 }
 
 type audioFileArea struct {
@@ -275,6 +277,7 @@ func (s *Server) listManagedFiles(ctx context.Context, area audioFileArea) ([]se
 
 func managedFileFromTrack(track models.Track, areaID string) serverManagedFile {
 	trackID := track.ID
+	artist, title := managedTrackNameParts(track)
 	return serverManagedFile{
 		ID:           strconv.FormatInt(track.ID, 10),
 		TrackID:      &trackID,
@@ -283,13 +286,30 @@ func managedFileFromTrack(track models.Track, areaID string) serverManagedFile {
 		Quality:      track.Quality,
 		RelativePath: track.RelativePath,
 		Filename:     track.Filename,
-		Title:        track.Title,
-		Artist:       track.Artist,
+		Title:        title,
+		Artist:       artist,
 		Album:        track.Album,
 		Format:       track.Format,
 		SizeBytes:    track.SizeBytes,
 		ModifiedAt:   track.ModifiedAt,
 	}
+}
+
+func managedTrackNameParts(track models.Track) (string, string) {
+	filename := strings.TrimSpace(track.Filename)
+	if filename == "" {
+		filename = filepath.Base(track.RelativePath)
+	}
+	if artist, title := library.StandardAudioNamePartsFromFilename(filename); artist != "" && title != "" {
+		return artist, title
+	}
+
+	artist := strings.TrimSpace(track.Artist)
+	title := strings.TrimSpace(track.Title)
+	if title == "" {
+		title = strings.TrimSpace(strings.TrimSuffix(filename, filepath.Ext(filename)))
+	}
+	return artist, title
 }
 
 func listLyricsManagedFiles(area audioFileArea) ([]serverManagedFile, error) {
@@ -301,8 +321,8 @@ func listLyricsManagedFiles(area audioFileArea) ([]serverManagedFile, error) {
 		if entry.IsDir() {
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".lrc" && ext != ".txt" {
+		lyricExt := lyricTargetExtension(path)
+		if lyricExt == "" {
 			return nil
 		}
 		info, err := entry.Info()
@@ -314,9 +334,10 @@ func listLyricsManagedFiles(area audioFileArea) ([]serverManagedFile, error) {
 			relativePath = filepath.Base(path)
 		}
 		filename := filepath.Base(path)
-		artist, title := library.StandardAudioNamePartsFromFilename(filename)
+		base := lyricBaseName(filename)
+		artist, title := library.StandardAudioNamePartsFromFilename(base + ".lrc")
 		if title == "" {
-			title = strings.TrimSuffix(filename, filepath.Ext(filename))
+			title = base
 		}
 		if artist == "" {
 			artist = "歌词"
@@ -329,7 +350,7 @@ func listLyricsManagedFiles(area audioFileArea) ([]serverManagedFile, error) {
 			Filename:     filename,
 			Title:        title,
 			Artist:       artist,
-			Format:       strings.TrimPrefix(ext, "."),
+			Format:       strings.TrimPrefix(lyricExt, "."),
 			SizeBytes:    info.Size(),
 			ModifiedAt:   info.ModTime(),
 		})
@@ -374,13 +395,14 @@ func buildServerAudioSet(tracks []models.Track, area audioFileArea) []serverAudi
 
 		hash := sha256.Sum256([]byte(filename))
 		entries = append(entries, serverAudioSetEntry{
-			Filename:     filename,
-			FilenameHash: hex.EncodeToString(hash[:]),
-			Artist:       artist,
-			Title:        title,
-			Extension:    extension,
-			Area:         area.ID,
-			HasLyrics:    trackHasAreaLyricFile(area.LyricsRoot, track),
+			Filename:         filename,
+			FilenameHash:     hex.EncodeToString(hash[:]),
+			Artist:           artist,
+			Title:            title,
+			Extension:        extension,
+			Area:             area.ID,
+			HasLyrics:        trackHasAreaLyricFile(area.LyricsRoot, track),
+			HasKaraokeLyrics: trackHasAreaKaraokeLyricFile(area.LyricsRoot, track),
 		})
 	}
 	return entries
@@ -625,9 +647,10 @@ func (s *Server) renameLyricsFile(w http.ResponseWriter, r *http.Request, area a
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	currentExt := strings.ToLower(filepath.Ext(sourcePath))
-	if currentExt != ".txt" {
-		currentExt = ".lrc"
+	currentExt := lyricTargetExtension(sourcePath)
+	if currentExt == "" {
+		writeError(w, http.StatusBadRequest, "歌词文件格式不支持")
+		return
 	}
 	targetBase, err := audioTargetBase(artist, title)
 	if err != nil {
@@ -693,14 +716,17 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 	}
 
 	root := area.Root
-	lyricsByBase := make(map[string]uploadedAudioImportFile)
+	lyricsByBase := make(map[string][]uploadedAudioImportFile)
 	addLyricLookupKey := func(key string, upload uploadedAudioImportFile) {
 		if key == "" {
 			return
 		}
-		if _, exists := lyricsByBase[key]; !exists {
-			lyricsByBase[key] = upload
+		for _, existing := range lyricsByBase[key] {
+			if existing.RelativePath == upload.RelativePath {
+				return
+			}
 		}
+		lyricsByBase[key] = append(lyricsByBase[key], upload)
 	}
 	for _, upload := range uploads {
 		if upload.Kind != "lyrics" {
@@ -713,17 +739,23 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 		}
 	}
 	handledLyricPaths := make(map[string]bool)
-	findLyricForAudio := func(upload uploadedAudioImportFile, targetFilename string) (uploadedAudioImportFile, bool) {
+	findLyricsForAudio := func(upload uploadedAudioImportFile, targetFilename string) []uploadedAudioImportFile {
 		keys := []string{normalizedImportBase(upload.RelativePath)}
 		if targetFilename != "" {
 			keys = append(keys, normalizedImportBase(targetFilename))
 		}
+		seen := make(map[string]bool)
+		var lyrics []uploadedAudioImportFile
 		for _, key := range keys {
-			if lyric, ok := lyricsByBase[key]; ok && !handledLyricPaths[lyric.RelativePath] {
-				return lyric, true
+			for _, lyric := range lyricsByBase[key] {
+				if handledLyricPaths[lyric.RelativePath] || seen[lyric.RelativePath] {
+					continue
+				}
+				seen[lyric.RelativePath] = true
+				lyrics = append(lyrics, lyric)
 			}
 		}
-		return uploadedAudioImportFile{}, false
+		return lyrics
 	}
 	addLyricSkipped := func(lyric uploadedAudioImportFile, targetFilename string, reason string) {
 		handledLyricPaths[lyric.RelativePath] = true
@@ -833,17 +865,14 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 			addLyricSkipped(lyric, "", "对应音乐文件名不符合规范，歌词已跳过")
 			return true, nil
 		}
-		ext := strings.ToLower(filepath.Ext(lyric.RelativePath))
-		if ext != ".txt" {
-			ext = ".lrc"
+		ext := lyricTargetExtension(lyric.RelativePath)
+		if ext == "" {
+			addLyricSkipped(lyric, "", "歌词文件格式不支持，已跳过")
+			return true, nil
 		}
 		targetFilename := targetBase + ext
 		if strings.TrimSpace(area.LyricsRoot) == "" {
 			addLyricSkipped(lyric, targetFilename, "当前区域未配置歌词目录，歌词已跳过")
-			return true, nil
-		}
-		if trackHasAreaLyricFile(area.LyricsRoot, track) {
-			addLyricSkipped(lyric, targetFilename, "服务器已有对应歌词文件，已跳过")
 			return true, nil
 		}
 		lyricTarget, err := safeMusicPath(area.LyricsRoot, targetFilename)
@@ -860,7 +889,11 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 			return true, nil
 		}
 		importedLyrics = append(importedLyrics, lyricTarget)
-		addLyricImported(lyric, targetFilename, "歌词已补充到服务器已有音乐")
+		reason := "歌词已补充到服务器已有音乐"
+		if ext == karaokeLyricExtension {
+			reason = "KTV 逐字时间轴已补充到服务器已有音乐"
+		}
+		addLyricImported(lyric, targetFilename, reason)
 		return true, nil
 	}
 
@@ -882,7 +915,7 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 				Reason:       "无法识别歌曲名和歌手，请按“歌手-歌曲名称”命名后重新导入",
 				SizeBytes:    upload.SizeBytes,
 			})
-			if lyric, ok := findLyricForAudio(upload, ""); ok {
+			for _, lyric := range findLyricsForAudio(upload, "") {
 				addLyricSkipped(lyric, "", "对应音频无法识别，歌词已跳过")
 			}
 			continue
@@ -897,7 +930,7 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 				Reason:       areaAudioUnsupportedReason(area),
 				SizeBytes:    upload.SizeBytes,
 			})
-			if lyric, ok := findLyricForAudio(upload, ""); ok {
+			for _, lyric := range findLyricsForAudio(upload, "") {
 				addLyricSkipped(lyric, "", "对应音频格式不属于当前区域，歌词已跳过")
 			}
 			continue
@@ -911,7 +944,7 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 		if err != nil {
 			report.Skipped++
 			report.Items = append(report.Items, audioFileImportItemResult{RelativePath: upload.RelativePath, Status: "skipped", Reason: "目标文件名不符合规范", SizeBytes: upload.SizeBytes})
-			if lyric, ok := findLyricForAudio(upload, targetFilename); ok {
+			for _, lyric := range findLyricsForAudio(upload, targetFilename) {
 				addLyricSkipped(lyric, "", "对应音频目标文件名不符合规范，歌词已跳过")
 			}
 			continue
@@ -923,13 +956,13 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 			}
 			report.Skipped++
 			report.Items = append(report.Items, audioFileImportItemResult{RelativePath: upload.RelativePath, TargetFilename: targetFilename, Status: "skipped", Reason: reason, SizeBytes: upload.SizeBytes})
-			if lyric, ok := findLyricForAudio(upload, targetFilename); ok {
+			for _, lyric := range findLyricsForAudio(upload, targetFilename) {
 				handled, err := importLyricForExistingTrack(lyric)
 				if err != nil {
 					return report, importedTargets, importedLyrics, err
 				}
 				if !handled {
-					addLyricSkipped(lyric, targetBase+".lrc", "对应音频已存在，歌词已跳过")
+					addLyricSkipped(lyric, targetBase+lyricTargetExtensionOrDefault(lyric.RelativePath), "对应音频已存在，歌词已跳过")
 				}
 			}
 			continue
@@ -939,8 +972,8 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 			if err := copyFile(upload.TempPath, targetPath); err != nil {
 				report.Failed++
 				report.Items = append(report.Items, audioFileImportItemResult{RelativePath: upload.RelativePath, TargetFilename: targetFilename, Status: "failed", Reason: "保存轻音乐文件失败", SizeBytes: upload.SizeBytes})
-				if lyric, ok := findLyricForAudio(upload, targetFilename); ok {
-					addLyricSkipped(lyric, targetBase+".lrc", "对应音频保存失败，歌词已跳过")
+				for _, lyric := range findLyricsForAudio(upload, targetFilename) {
+					addLyricSkipped(lyric, targetBase+lyricTargetExtensionOrDefault(lyric.RelativePath), "对应音频保存失败，歌词已跳过")
 				}
 				continue
 			}
@@ -948,8 +981,8 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 			if err := copyFile(upload.TempPath, targetPath); err != nil {
 				report.Failed++
 				report.Items = append(report.Items, audioFileImportItemResult{RelativePath: upload.RelativePath, TargetFilename: targetFilename, Status: "failed", Reason: "保存 FLAC 文件失败", SizeBytes: upload.SizeBytes})
-				if lyric, ok := findLyricForAudio(upload, targetFilename); ok {
-					addLyricSkipped(lyric, targetBase+".lrc", "对应音频保存失败，歌词已跳过")
+				for _, lyric := range findLyricsForAudio(upload, targetFilename) {
+					addLyricSkipped(lyric, targetBase+lyricTargetExtensionOrDefault(lyric.RelativePath), "对应音频保存失败，歌词已跳过")
 				}
 				continue
 			}
@@ -958,8 +991,8 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 				_ = os.Remove(targetPath)
 				report.Failed++
 				report.Items = append(report.Items, audioFileImportItemResult{RelativePath: upload.RelativePath, TargetFilename: targetFilename, Status: "failed", Reason: err.Error(), SizeBytes: upload.SizeBytes})
-				if lyric, ok := findLyricForAudio(upload, targetFilename); ok {
-					addLyricSkipped(lyric, targetBase+".lrc", "对应音频转码失败，歌词已跳过")
+				for _, lyric := range findLyricsForAudio(upload, targetFilename) {
+					addLyricSkipped(lyric, targetBase+lyricTargetExtensionOrDefault(lyric.RelativePath), "对应音频转码失败，歌词已跳过")
 				}
 				continue
 			}
@@ -967,20 +1000,10 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 		}
 		importedTargets = append(importedTargets, targetPath)
 
-		if lyric, ok := findLyricForAudio(upload, targetFilename); ok {
-			lyricTargetFilename := targetBase + strings.ToLower(filepath.Ext(lyric.RelativePath))
-			if strings.ToLower(filepath.Ext(lyricTargetFilename)) != ".txt" {
-				lyricTargetFilename = targetBase + ".lrc"
-			}
+		for _, lyric := range findLyricsForAudio(upload, targetFilename) {
+			lyricTargetFilename := targetBase + lyricTargetExtensionOrDefault(lyric.RelativePath)
 			if strings.TrimSpace(area.LyricsRoot) == "" {
 				addLyricSkipped(lyric, lyricTargetFilename, "当前区域未配置歌词目录，歌词已跳过")
-				report.Imported++
-				report.Items = append(report.Items, audioFileImportItemResult{
-					RelativePath:   upload.RelativePath,
-					TargetFilename: targetFilename,
-					Status:         "imported",
-					SizeBytes:      upload.SizeBytes,
-				})
 				continue
 			}
 			lyricTarget, err := safeMusicPath(area.LyricsRoot, lyricTargetFilename)
@@ -992,7 +1015,11 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 				addLyricFailed(lyric, lyricTargetFilename, "保存歌词文件失败")
 			} else {
 				importedLyrics = append(importedLyrics, lyricTarget)
-				addLyricImported(lyric, lyricTargetFilename, "")
+				reason := ""
+				if lyricTargetExtension(lyric.RelativePath) == karaokeLyricExtension {
+					reason = "KTV 逐字时间轴已随同名音频导入"
+				}
+				addLyricImported(lyric, lyricTargetFilename, reason)
 			}
 		}
 
@@ -1035,13 +1062,16 @@ func importLyricsFiles(ctx context.Context, area audioFileArea, uploads []upload
 			})
 			continue
 		}
-		base := sanitizeAudioFilename(strings.TrimSuffix(filepath.Base(upload.RelativePath), filepath.Ext(upload.RelativePath)))
+		base := sanitizeAudioFilename(lyricBaseName(upload.RelativePath))
 		if base == "" {
-			base = sanitizeAudioFilename(strings.TrimSuffix(upload.OriginalName, filepath.Ext(upload.OriginalName)))
+			base = sanitizeAudioFilename(lyricBaseName(upload.OriginalName))
 		}
-		ext := strings.ToLower(filepath.Ext(upload.RelativePath))
-		if ext != ".txt" {
-			ext = ".lrc"
+		ext := lyricTargetExtension(upload.RelativePath)
+		if ext == "" {
+			report.Skipped++
+			report.LyricsSkipped++
+			report.Items = append(report.Items, audioFileImportItemResult{RelativePath: upload.RelativePath, Status: "skipped", Reason: "歌词文件格式不支持，已跳过", SizeBytes: upload.SizeBytes})
+			continue
 		}
 		targetFilename := base + ext
 		targetPath, err := safeMusicPath(area.Root, targetFilename)
@@ -1123,7 +1153,7 @@ func readAudioImportMultipart(r *http.Request, jobDir string) ([]uploadedAudioIm
 			relativePath = fieldName
 		}
 		ext := strings.ToLower(filepath.Ext(relativePath))
-		kind := audioImportFileKind(ext)
+		kind := audioImportFileKind(relativePath)
 		if kind == "" {
 			size, copyErr := countAndDiscard(part)
 			totalBytes += size
@@ -1134,7 +1164,7 @@ func readAudioImportMultipart(r *http.Request, jobDir string) ([]uploadedAudioIm
 				return nil, report, errors.New("读取上传文件失败")
 			}
 			report.Skipped++
-			report.Items = append(report.Items, audioFileImportItemResult{RelativePath: relativePath, Status: "skipped", Reason: "仅支持 FLAC/WAV/AIFF、MP3/AAC/M4A/OGG 音频和 LRC/TXT 歌词文件", SizeBytes: size})
+			report.Items = append(report.Items, audioFileImportItemResult{RelativePath: relativePath, Status: "skipped", Reason: "仅支持 FLAC/WAV/AIFF、MP3/AAC/M4A/OGG 音频和 LRC/TXT/KTV JSON 歌词文件", SizeBytes: size})
 			continue
 		}
 
@@ -1468,8 +1498,11 @@ func audioTargetBase(artist string, title string) (string, error) {
 	return targetBase, nil
 }
 
-func audioImportFileKind(ext string) string {
-	switch ext {
+func audioImportFileKind(path string) string {
+	if isKaraokeLyricFilename(path) {
+		return "lyrics"
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".flac", ".wav", ".aif", ".aiff", ".mp3", ".aac", ".m4a", ".ogg":
 		return "audio"
 	case ".lrc", ".txt":
@@ -1537,19 +1570,64 @@ func cleanImportRelativePath(value string) string {
 }
 
 func normalizedImportBase(path string) string {
-	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	base := lyricBaseName(path)
 	base = strings.TrimSpace(strings.ToLower(base))
 	return fileNameSpacePattern.ReplaceAllString(base, " ")
 }
 
+func isKaraokeLyricFilename(path string) bool {
+	return strings.HasSuffix(strings.ToLower(filepath.Base(path)), karaokeLyricExtension)
+}
+
+func lyricTargetExtension(path string) string {
+	if isKaraokeLyricFilename(path) {
+		return karaokeLyricExtension
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".lrc":
+		return ".lrc"
+	case ".txt":
+		return ".txt"
+	default:
+		return ""
+	}
+}
+
+func lyricTargetExtensionOrDefault(path string) string {
+	if ext := lyricTargetExtension(path); ext != "" {
+		return ext
+	}
+	return ".lrc"
+}
+
+func lyricBaseName(path string) string {
+	base := filepath.Base(path)
+	if isKaraokeLyricFilename(base) {
+		return strings.TrimSpace(base[:len(base)-len(karaokeLyricExtension)])
+	}
+	return strings.TrimSpace(strings.TrimSuffix(base, filepath.Ext(base)))
+}
+
 func trackHasAreaLyricFile(lyricsRoot string, track models.Track) bool {
+	return trackHasAreaLyricExtension(lyricsRoot, track, ".lrc", ".txt")
+}
+
+func trackHasAreaKaraokeLyricFile(lyricsRoot string, track models.Track) bool {
+	return trackHasAreaLyricExtension(lyricsRoot, track, karaokeLyricExtension)
+}
+
+func trackHasAreaLyricExtension(lyricsRoot string, track models.Track, extensions ...string) bool {
 	if strings.TrimSpace(lyricsRoot) == "" {
 		return false
 	}
 	for _, base := range trackLyricBaseCandidates(track) {
-		for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT"} {
+		for _, ext := range extensions {
 			path := filepath.Join(lyricsRoot, base+ext)
 			if pathWithinRoot(lyricsRoot, path) && fileExists(path) {
+				return true
+			}
+			upperPath := filepath.Join(lyricsRoot, base+strings.ToUpper(ext))
+			if pathWithinRoot(lyricsRoot, upperPath) && fileExists(upperPath) {
 				return true
 			}
 		}
@@ -1631,7 +1709,7 @@ func renameAreaLyrics(lyricsRoot string, track models.Track, newBase string) {
 		return
 	}
 	oldBase := strings.TrimSuffix(track.Filename, filepath.Ext(track.Filename))
-	for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT"} {
+	for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT", karaokeLyricExtension, strings.ToUpper(karaokeLyricExtension)} {
 		oldPath := filepath.Join(lyricsRoot, oldBase+ext)
 		if !fileExists(oldPath) {
 			continue
@@ -1639,6 +1717,8 @@ func renameAreaLyrics(lyricsRoot string, track models.Track, newBase string) {
 		newExt := ".lrc"
 		if strings.EqualFold(ext, ".txt") {
 			newExt = ".txt"
+		} else if strings.EqualFold(ext, karaokeLyricExtension) {
+			newExt = karaokeLyricExtension
 		}
 		newPath := filepath.Join(lyricsRoot, newBase+newExt)
 		if pathWithinRoot(lyricsRoot, newPath) && !fileExists(newPath) {
@@ -1754,7 +1834,7 @@ func removeImportedAudioFiles(audioPaths, lyricPaths []string) {
 
 func removeSidecarLyrics(audioPath string) {
 	base := strings.TrimSuffix(audioPath, filepath.Ext(audioPath))
-	for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT"} {
+	for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT", karaokeLyricExtension, strings.ToUpper(karaokeLyricExtension)} {
 		_ = os.Remove(base + ext)
 	}
 }
@@ -1762,7 +1842,7 @@ func removeSidecarLyrics(audioPath string) {
 func renameSidecarLyrics(oldAudioPath, newAudioPath string) {
 	oldBase := strings.TrimSuffix(oldAudioPath, filepath.Ext(oldAudioPath))
 	newBase := strings.TrimSuffix(newAudioPath, filepath.Ext(newAudioPath))
-	for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT"} {
+	for _, ext := range []string{".lrc", ".LRC", ".txt", ".TXT", karaokeLyricExtension, strings.ToUpper(karaokeLyricExtension)} {
 		oldPath := oldBase + ext
 		if !fileExists(oldPath) {
 			continue
@@ -1770,6 +1850,8 @@ func renameSidecarLyrics(oldAudioPath, newAudioPath string) {
 		newExt := ".lrc"
 		if strings.EqualFold(ext, ".txt") {
 			newExt = ".txt"
+		} else if strings.EqualFold(ext, karaokeLyricExtension) {
+			newExt = karaokeLyricExtension
 		}
 		newPath := newBase + newExt
 		if !fileExists(newPath) {
