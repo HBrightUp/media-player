@@ -61,11 +61,8 @@ services:
       REDIS_KEY_PREFIX: "${REDIS_KEY_PREFIX:-media-player}"
       CORS_ORIGIN: "${MEDIA_PLAYER_PUBLIC_ORIGIN:?MEDIA_PLAYER_PUBLIC_ORIGIN is required}"
       MUSIC_DIRECTORY: "/lossless-music"
-      LYRICS_DIRECTORY: "/lossless-lyrics"
       LOSSLESS_MUSIC_DIRECTORY: "/lossless-music"
-      LOSSLESS_LYRICS_DIRECTORY: "/lossless-lyrics"
       LOSSY_MUSIC_DIRECTORY: "/lossy-music"
-      LOSSY_LYRICS_DIRECTORY: "/lossy-lyrics"
       SHARED_LYRICS_DIRECTORY: "/shared-lyrics"
       CLIENT_APPS_DIRECTORY: "/client-apps"
       LIBRARY_WATCH_POLL_INTERVAL: "${LIBRARY_WATCH_POLL_INTERVAL:-1m}"
@@ -75,9 +72,7 @@ services:
       - "127.0.0.1:18080:8080"
     volumes:
       - ${LOSSLESS_MUSIC_DIRECTORY:-/opt/media-player/music}:/lossless-music:rw
-      - ${LOSSLESS_LYRICS_DIRECTORY:-/opt/media-player/lyrics}:/lossless-lyrics:rw
       - ${LOSSY_MUSIC_DIRECTORY:-/opt/media-player/lossy-music}:/lossy-music:rw
-      - ${LOSSY_LYRICS_DIRECTORY:-/opt/media-player/lossy-lyrics}:/lossy-lyrics:rw
       - ${SHARED_LYRICS_DIRECTORY:-/opt/media-player/shared-lyrics}:/shared-lyrics:rw
       - ${CLIENT_APPS_DIRECTORY:-/opt/media-player/apps}:/client-apps:ro
 

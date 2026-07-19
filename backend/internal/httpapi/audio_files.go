@@ -803,7 +803,7 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 		if existingTracksByLyricKey != nil {
 			return existingTracksByLyricKey, nil
 		}
-		tracks, err := s.store.ListTracksByQuality(ctx, area.Quality)
+		tracks, err := s.store.ListTracks(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -817,9 +817,6 @@ func (s *Server) importManagedFiles(ctx context.Context, area audioFileArea, upl
 			}
 		}
 		for _, track := range tracks {
-			if area.Root != "" && !pathWithinRoot(area.Root, track.Path) {
-				continue
-			}
 			addTrackKey(normalizedImportBase(track.RelativePath), track)
 			addTrackKey(normalizedImportBase(track.Filename), track)
 			if track.Artist != "" && track.Title != "" {
@@ -1389,13 +1386,9 @@ func (s *Server) audioFileArea(ctx context.Context, areaID string) (audioFileAre
 func audioFileAreaDefinition(areaID string) (audioFileArea, bool) {
 	switch areaID {
 	case "lossless_music":
-		return audioFileArea{ID: areaID, Label: "高品质", Kind: "audio", Quality: models.TrackQualityLossless, Root: losslessMusicDirectoryKey, LyricsRoot: losslessLyricsDirectoryKey}, true
+		return audioFileArea{ID: areaID, Label: "高品质", Kind: "audio", Quality: models.TrackQualityLossless, Root: losslessMusicDirectoryKey, LyricsRoot: sharedLyricsDirectoryKey}, true
 	case "lossy_music":
-		return audioFileArea{ID: areaID, Label: "轻音乐", Kind: "audio", Quality: models.TrackQualityLossy, Root: lossyMusicDirectoryKey, LyricsRoot: lossyLyricsDirectoryKey}, true
-	case "lossless_lyrics":
-		return audioFileArea{ID: areaID, Label: "无损歌词", Kind: "lyrics", Root: losslessLyricsDirectoryKey}, true
-	case "lossy_lyrics":
-		return audioFileArea{ID: areaID, Label: "有损歌词", Kind: "lyrics", Root: lossyLyricsDirectoryKey}, true
+		return audioFileArea{ID: areaID, Label: "轻音乐", Kind: "audio", Quality: models.TrackQualityLossy, Root: lossyMusicDirectoryKey, LyricsRoot: sharedLyricsDirectoryKey}, true
 	case "shared_lyrics":
 		return audioFileArea{ID: areaID, Label: "公共歌词", Kind: "lyrics", Root: sharedLyricsDirectoryKey}, true
 	default:
@@ -1427,12 +1420,10 @@ func (s *Server) configuredManagedScanRoots(ctx context.Context) []library.ScanR
 	sharedLyrics, _ := s.settingPath(ctx, sharedLyricsDirectoryKey)
 	var roots []library.ScanRoot
 	if losslessMusic, _ := s.settingPath(ctx, losslessMusicDirectoryKey); strings.TrimSpace(losslessMusic) != "" {
-		losslessLyrics, _ := s.settingPath(ctx, losslessLyricsDirectoryKey)
-		roots = append(roots, library.LosslessScanRoot(losslessMusic, compactPathList(losslessLyrics, sharedLyrics)...))
+		roots = append(roots, library.LosslessScanRoot(losslessMusic, sharedLyrics))
 	}
 	if lossyMusic, _ := s.settingPath(ctx, lossyMusicDirectoryKey); strings.TrimSpace(lossyMusic) != "" {
-		lossyLyrics, _ := s.settingPath(ctx, lossyLyricsDirectoryKey)
-		roots = append(roots, library.LossyScanRoot(lossyMusic, compactPathList(lossyLyrics, sharedLyrics)...))
+		roots = append(roots, library.LossyScanRoot(lossyMusic, sharedLyrics))
 	}
 	return roots
 }
@@ -1443,20 +1434,6 @@ func (s *Server) scanManagedLibrary(ctx context.Context) (models.ScanResult, err
 		return models.ScanResult{}, errors.New("请先配置音乐目录")
 	}
 	return s.scanner.ScanRoots(ctx, roots)
-}
-
-func compactPathList(paths ...string) []string {
-	result := make([]string, 0, len(paths))
-	seen := make(map[string]bool, len(paths))
-	for _, path := range paths {
-		path = strings.TrimSpace(path)
-		if path == "" || seen[path] {
-			continue
-		}
-		seen[path] = true
-		result = append(result, path)
-	}
-	return result
 }
 
 func (s *Server) getManagedTrack(w http.ResponseWriter, r *http.Request, root string, trackID int64) (models.Track, bool) {

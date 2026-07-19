@@ -11,10 +11,8 @@ library:
   shared_lyrics_directory: "D:/Lyrics/Common"
   lossless:
     music_directory: "D:/Music"
-    lyrics_directory: "D:/Lyrics/Lossless"
   lossy:
     music_directory: "D:/MusicLossy"
-    lyrics_directory: "D:/Lyrics/Lossy"
   watch_poll_interval: "2m"
 client_apps:
   directory: "D:/Apps"
@@ -34,14 +32,8 @@ client_apps:
 	if cfg.LosslessMusicDirectory != "D:/Music" {
 		t.Fatalf("lossless music = %q", cfg.LosslessMusicDirectory)
 	}
-	if cfg.LosslessLyricsDirectory != "D:/Lyrics/Lossless" {
-		t.Fatalf("lossless lyrics = %q", cfg.LosslessLyricsDirectory)
-	}
 	if cfg.LossyMusicDirectory != "D:/MusicLossy" {
 		t.Fatalf("lossy music = %q", cfg.LossyMusicDirectory)
-	}
-	if cfg.LossyLyricsDirectory != "D:/Lyrics/Lossy" {
-		t.Fatalf("lossy lyrics = %q", cfg.LossyLyricsDirectory)
 	}
 	if cfg.ClientAppsDirectory != "D:/Apps" {
 		t.Fatalf("client apps = %q", cfg.ClientAppsDirectory)

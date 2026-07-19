@@ -1,6 +1,6 @@
 param(
   [string]$MusicDirectory = "",
-  [string]$LyricsDirectory = "",
+  [string]$SharedLyricsDirectory = "",
   [switch]$OpenFirewall
 )
 
@@ -55,8 +55,8 @@ $env:CORS_ORIGIN = "*"
 if ($MusicDirectory -ne "") {
   $env:MUSIC_DIRECTORY = $MusicDirectory
 }
-if ($LyricsDirectory -ne "") {
-  $env:LYRICS_DIRECTORY = $LyricsDirectory
+if ($SharedLyricsDirectory -ne "") {
+  $env:SHARED_LYRICS_DIRECTORY = $SharedLyricsDirectory
 }
 
 $backendOut = Join-Path $logDir "backend.out.log"

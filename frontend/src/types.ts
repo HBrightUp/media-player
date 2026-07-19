@@ -215,7 +215,7 @@ export type ServerAudioFile = {
   has_karaoke_lyrics?: boolean;
 };
 
-export type AudioFileArea = "lossless_music" | "lossy_music" | "lossless_lyrics" | "lossy_lyrics" | "shared_lyrics";
+export type AudioFileArea = "lossless_music" | "lossy_music" | "shared_lyrics";
 
 export type ServerManagedFile = {
   id: string;

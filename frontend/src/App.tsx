@@ -432,10 +432,11 @@ const supportedAudioFileExtensions = new Set([...losslessAudioFileExtensions, ..
 const lossyMusicFormats = new Set(["mp3", "aac", "m4a", "ogg"]);
 const supportedLyricFileExtensions = new Set([".lrc", ".txt"]);
 const karaokeLyricFileSuffix = ".karaoke.json";
-type AudioManagerArea = Extract<AudioFileArea, "lossless_music" | "lossy_music">;
+type AudioManagerArea = Extract<AudioFileArea, "lossless_music" | "lossy_music" | "shared_lyrics">;
 const audioFileAreas: Array<{ id: AudioManagerArea; label: string }> = [
   { id: "lossless_music", label: "高品质" },
-  { id: "lossy_music", label: "轻音乐" }
+  { id: "lossy_music", label: "轻音乐" },
+  { id: "shared_lyrics", label: "公共歌词" }
 ];
 
 function areBufferedRangesEqual(previous: BufferedAudioRange[], next: BufferedAudioRange[]) {
@@ -7023,11 +7024,17 @@ function isAudioFileArea(area: AudioFileArea) {
 }
 
 function normalizeAudioManagerArea(area: AudioFileArea): AudioManagerArea {
-  return area === "lossy_music" ? "lossy_music" : "lossless_music";
+  if (area === "lossy_music") {
+    return "lossy_music";
+  }
+  if (area === "shared_lyrics") {
+    return "shared_lyrics";
+  }
+  return "lossless_music";
 }
 
 function isLyricsFileArea(area: AudioFileArea) {
-  return !isAudioFileArea(area);
+  return area === "shared_lyrics";
 }
 
 function isLossyAudioArea(area: AudioFileArea) {
@@ -7154,7 +7161,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
           displayName,
           kind: "lyrics",
           status: "ready",
-          reason: isKaraokeLyricFilePath(relativePath) ? "将保存到当前歌词区域（KTV 逐字时间轴）" : "将保存到当前歌词区域",
+          reason: isKaraokeLyricFilePath(relativePath) ? "将保存到公共歌词目录（KTV 逐字时间轴）" : "将保存到公共歌词目录",
           sizeBytes: file.size
         });
       }
@@ -7327,7 +7334,7 @@ async function buildAudioImportPreflight(files: File[], serverAudioSet: ServerAu
       displayName,
       kind: "lyrics",
       status: "ready",
-      reason: isKaraokeLyricFilePath(relativePath) ? "将随同名音频上传 KTV 逐字时间轴" : "将随同名音频上传",
+      reason: isKaraokeLyricFilePath(relativePath) ? "将随同名音频上传并保存到公共歌词目录（KTV 逐字时间轴）" : "将随同名音频上传并保存到公共歌词目录",
       sizeBytes: file.size
     });
   }
@@ -12409,6 +12416,7 @@ function AudioFileManagerPage({
       ? `当前 ${files.length} 个文件`
       : "管理服务器文件目录";
   const activeArea = audioFileAreas.find((item) => item.id === area) ?? audioFileAreas[0];
+  const isSharedLyricsArea = area === "shared_lyrics";
 
   function openAudioSearchDialog() {
     setAudioSearchDraft(audioSearchQuery);
@@ -12472,7 +12480,7 @@ function AudioFileManagerPage({
           }}
         />
         <button className="audio-manager-primary-button" type="button" disabled={isImporting} onClick={onChooseFolder}>
-          {isImporting ? "导入中" : "选择音乐文件夹"}
+          {isImporting ? "导入中" : isSharedLyricsArea ? "选择歌词文件夹" : "选择音乐文件夹"}
         </button>
         <button className="audio-manager-secondary-button" type="button" disabled={isLoading || isImporting} onClick={refreshAndClearAudioSearch}>
           刷新

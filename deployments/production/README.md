@@ -57,19 +57,15 @@ POSTGRES_USER=media_player
 POSTGRES_PASSWORD=<use-a-strong-password>
 REDIS_KEY_PREFIX=media-player
 MUSIC_DIRECTORY=/opt/media-player/music
-LYRICS_DIRECTORY=/opt/media-player/lyrics
 LOSSLESS_MUSIC_DIRECTORY=/opt/media-player/music
-LOSSLESS_LYRICS_DIRECTORY=/opt/media-player/lyrics
 LOSSY_MUSIC_DIRECTORY=/opt/media-player/lossy-music
-LOSSY_LYRICS_DIRECTORY=/opt/media-player/lossy-lyrics
 SHARED_LYRICS_DIRECTORY=/opt/media-player/shared-lyrics
 CLIENT_APPS_DIRECTORY=/opt/media-player/apps
 ```
 
-`MUSIC_DIRECTORY` and `LYRICS_DIRECTORY` remain as legacy aliases. The default
-production mapping keeps existing files compatible by treating
-`/opt/media-player/music` as lossless music and `/opt/media-player/lyrics` as
-lossless lyrics.
+`MUSIC_DIRECTORY` remains as a legacy alias for `LOSSLESS_MUSIC_DIRECTORY`.
+Lyrics are maintained only in `SHARED_LYRICS_DIRECTORY`, shared by lossless and
+lossy audio versions.
 
 For IP-only HTTP deployment:
 
@@ -93,25 +89,20 @@ the system Caddy service.
 
 ```bash
 mkdir -p /opt/media-player/music
-mkdir -p /opt/media-player/lyrics
 mkdir -p /opt/media-player/lossy-music
-mkdir -p /opt/media-player/lossy-lyrics
 mkdir -p /opt/media-player/shared-lyrics
 ```
 
-Upload lossless audio files into `/opt/media-player/music` and lossless lyrics
-into `/opt/media-player/lyrics`. Upload lossy audio files into
-`/opt/media-player/lossy-music` and lossy lyrics into
-`/opt/media-player/lossy-lyrics`. Lyrics shared by both versions can be placed
-in `/opt/media-player/shared-lyrics`. Use the same relative path where
-possible, for example:
+Upload lossless audio files into `/opt/media-player/music`, lossy audio files
+into `/opt/media-player/lossy-music`, and all lyrics into
+`/opt/media-player/shared-lyrics`. Use the same relative path where possible,
+for example:
 
 ```text
 /opt/media-player/music/artist/song.flac
-/opt/media-player/lyrics/artist/song.lrc
 /opt/media-player/lossy-music/artist/song.mp3
-/opt/media-player/lossy-lyrics/artist/song.lrc
 /opt/media-player/shared-lyrics/artist/song.lrc
+/opt/media-player/shared-lyrics/artist/song.karaoke.json
 ```
 
 ## 5. Add Client Installers
@@ -139,8 +130,9 @@ Run from the repository root on the server:
 sh deployments/production/deploy.sh
 ```
 
-The script validates the environment file, creates the configured music and
-lyrics directories, builds the frontend/backend images, and starts all services.
+The script validates the environment file, creates the configured music,
+shared lyrics, and client installer directories, builds the frontend/backend
+images, and starts all services.
 
 Manual equivalent:
 

@@ -44,20 +44,20 @@ library:
   shared_lyrics_directory: "/Users/you/MusicLyricsShared"
   lossless:
     music_directory: "/Users/you/MusicLossless"
-    lyrics_directory: "/Users/you/MusicLyricsLossless"
   lossy:
     music_directory: "/Users/you/MusicLossy"
-    lyrics_directory: "/Users/you/MusicLyricsLossy"
   watch_poll_interval: "1m"
   watch_debounce: "30s"
   auto_scan_interval: "0"
 ```
 
-歌词优先按相对目录和同名文件匹配，例如：
+歌词统一放在公共歌词目录，高品质和轻音乐共用同一套 `.lrc` / `.karaoke.json`。歌词按相对目录和同名文件匹配，例如：
 
 ```text
 /Users/you/MusicLossless/陈奕迅/爱情转移.flac
-/Users/you/MusicLyricsLossless/陈奕迅/爱情转移.lrc
+/Users/you/MusicLossy/陈奕迅/爱情转移.mp3
+/Users/you/MusicLyricsShared/陈奕迅/爱情转移.lrc
+/Users/you/MusicLyricsShared/陈奕迅/爱情转移.karaoke.json
 ```
 
 3. 启动后端：

@@ -33,12 +33,10 @@ import (
 )
 
 const (
-	musicDirectoryKey          = "music_directory"
-	losslessMusicDirectoryKey  = "lossless_music_directory"
-	losslessLyricsDirectoryKey = "lossless_lyrics_directory"
-	lossyMusicDirectoryKey     = "lossy_music_directory"
-	lossyLyricsDirectoryKey    = "lossy_lyrics_directory"
-	sharedLyricsDirectoryKey   = "shared_lyrics_directory"
+	musicDirectoryKey         = "music_directory"
+	losslessMusicDirectoryKey = "lossless_music_directory"
+	lossyMusicDirectoryKey    = "lossy_music_directory"
+	sharedLyricsDirectoryKey  = "shared_lyrics_directory"
 )
 const (
 	favoriteCategoryMaxRunes = 16

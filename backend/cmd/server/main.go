@@ -50,7 +50,7 @@ func main() {
 		log.Fatalf("migrate database: %v", err)
 	}
 
-	scanner := library.NewScanner(store, cfg.LyricsDirectory, cfg.SharedLyricsDirectory)
+	scanner := library.NewScanner(store, cfg.SharedLyricsDirectory)
 	if cfg.ConfigPath != "" {
 		log.Printf("loaded config from %s", cfg.ConfigPath)
 	}
@@ -149,37 +149,19 @@ func configuredScanRoots(cfg config.Config) []library.ScanRoot {
 	sharedLyrics := strings.TrimSpace(cfg.SharedLyricsDirectory)
 	roots := make([]library.ScanRoot, 0, 2)
 	if strings.TrimSpace(cfg.LosslessMusicDirectory) != "" {
-		lyricsRoots := compactPaths(cfg.LosslessLyricsDirectory, sharedLyrics)
-		roots = append(roots, library.LosslessScanRoot(cfg.LosslessMusicDirectory, lyricsRoots...))
+		roots = append(roots, library.LosslessScanRoot(cfg.LosslessMusicDirectory, sharedLyrics))
 	}
 	if strings.TrimSpace(cfg.LossyMusicDirectory) != "" {
-		lyricsRoots := compactPaths(cfg.LossyLyricsDirectory, sharedLyrics)
-		roots = append(roots, library.LossyScanRoot(cfg.LossyMusicDirectory, lyricsRoots...))
+		roots = append(roots, library.LossyScanRoot(cfg.LossyMusicDirectory, sharedLyrics))
 	}
 	return roots
 }
 
-func compactPaths(paths ...string) []string {
-	result := make([]string, 0, len(paths))
-	seen := make(map[string]bool, len(paths))
-	for _, path := range paths {
-		path = strings.TrimSpace(path)
-		if path == "" || seen[path] {
-			continue
-		}
-		seen[path] = true
-		result = append(result, path)
-	}
-	return result
-}
-
 func saveConfiguredDirectories(ctx context.Context, store *database.Store, cfg config.Config) {
 	directories := map[string]string{
-		"lossless_music_directory":  cfg.LosslessMusicDirectory,
-		"lossless_lyrics_directory": cfg.LosslessLyricsDirectory,
-		"lossy_music_directory":     cfg.LossyMusicDirectory,
-		"lossy_lyrics_directory":    cfg.LossyLyricsDirectory,
-		"shared_lyrics_directory":   cfg.SharedLyricsDirectory,
+		"lossless_music_directory": cfg.LosslessMusicDirectory,
+		"lossy_music_directory":    cfg.LossyMusicDirectory,
+		"shared_lyrics_directory":  cfg.SharedLyricsDirectory,
 	}
 	for key, path := range directories {
 		path = strings.TrimSpace(path)
@@ -189,6 +171,9 @@ func saveConfiguredDirectories(ctx context.Context, store *database.Store, cfg c
 		if _, err := store.SetSetting(ctx, key, path); err != nil {
 			log.Printf("save configured %s skipped: %v", key, err)
 		}
+	}
+	if err := store.DeleteSettings(ctx, "lyrics_directory", "lossless_lyrics_directory", "lossy_lyrics_directory"); err != nil {
+		log.Printf("remove obsolete lyrics settings skipped: %v", err)
 	}
 }
 

@@ -72,6 +72,17 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) (models.Libra
 	return setting, err
 }
 
+func (s *Store) DeleteSettings(ctx context.Context, keys ...string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM settings
+		WHERE key = ANY($1)
+	`, keys)
+	return err
+}
+
 func (s *Store) CreateUser(ctx context.Context, user models.User) (models.User, error) {
 	if user.CountryCode == "" {
 		user.CountryCode = "+86"

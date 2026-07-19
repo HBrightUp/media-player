@@ -20,12 +20,9 @@ type Config struct {
 	RedisKeyPrefix           string
 	CORSOrigin               string
 	MusicDirectory           string
-	LyricsDirectory          string
 	SharedLyricsDirectory    string
 	LosslessMusicDirectory   string
-	LosslessLyricsDirectory  string
 	LossyMusicDirectory      string
-	LossyLyricsDirectory     string
 	ClientAppsDirectory      string
 	LibraryAutoScanInterval  time.Duration
 	LibraryWatchPollInterval time.Duration
@@ -61,18 +58,12 @@ func Load() (Config, error) {
 	cfg.RedisKeyPrefix = getenv("REDIS_KEY_PREFIX", cfg.RedisKeyPrefix)
 	cfg.CORSOrigin = getenv("CORS_ORIGIN", cfg.CORSOrigin)
 	cfg.MusicDirectory = getenv("MUSIC_DIRECTORY", cfg.MusicDirectory)
-	cfg.LyricsDirectory = getenv("LYRICS_DIRECTORY", cfg.LyricsDirectory)
 	cfg.SharedLyricsDirectory = getenv("SHARED_LYRICS_DIRECTORY", cfg.SharedLyricsDirectory)
 	cfg.LosslessMusicDirectory = getenv("LOSSLESS_MUSIC_DIRECTORY", cfg.LosslessMusicDirectory)
-	cfg.LosslessLyricsDirectory = getenv("LOSSLESS_LYRICS_DIRECTORY", cfg.LosslessLyricsDirectory)
 	cfg.LossyMusicDirectory = getenv("LOSSY_MUSIC_DIRECTORY", cfg.LossyMusicDirectory)
-	cfg.LossyLyricsDirectory = getenv("LOSSY_LYRICS_DIRECTORY", cfg.LossyLyricsDirectory)
 	cfg.ClientAppsDirectory = getenv("CLIENT_APPS_DIRECTORY", cfg.ClientAppsDirectory)
 	if cfg.LosslessMusicDirectory == "" {
 		cfg.LosslessMusicDirectory = cfg.MusicDirectory
-	}
-	if cfg.LosslessLyricsDirectory == "" {
-		cfg.LosslessLyricsDirectory = cfg.LyricsDirectory
 	}
 	if value := strings.TrimSpace(os.Getenv("LIBRARY_AUTO_SCAN_INTERVAL")); value != "" {
 		interval, err := parseDurationValue(value)
@@ -261,18 +252,12 @@ func applyYAML(cfg *Config, values map[string]string) error {
 			cfg.CORSOrigin = value
 		case "music_directory", "default_music_directory", "songs_directory", "library.music_directory", "library.default_directory":
 			cfg.MusicDirectory = value
-		case "lyrics_directory", "library.lyrics_directory":
-			cfg.LyricsDirectory = value
 		case "shared_lyrics_directory", "library.shared_lyrics_directory", "library.common_lyrics_directory":
 			cfg.SharedLyricsDirectory = value
 		case "lossless_music_directory", "library.lossless_music_directory", "library.lossless.music_directory", "library.lossless.music":
 			cfg.LosslessMusicDirectory = value
-		case "lossless_lyrics_directory", "library.lossless_lyrics_directory", "library.lossless.lyrics_directory", "library.lossless.lyrics":
-			cfg.LosslessLyricsDirectory = value
 		case "lossy_music_directory", "library.lossy_music_directory", "library.lossy.music_directory", "library.lossy.music":
 			cfg.LossyMusicDirectory = value
-		case "lossy_lyrics_directory", "library.lossy_lyrics_directory", "library.lossy.lyrics_directory", "library.lossy.lyrics":
-			cfg.LossyLyricsDirectory = value
 		case "client_apps_directory", "client_apps.directory", "clients.directory", "apps.directory":
 			cfg.ClientAppsDirectory = value
 		case "library.auto_scan_interval", "auto_scan_interval":
