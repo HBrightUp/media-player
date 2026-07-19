@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 
 class TrackCacheManager(
@@ -70,7 +71,7 @@ class TrackCacheManager(
             return null
         }
         val file = cacheFile(user, track)
-        if (!isValidCacheFile(track, file)) {
+        if (!isValidCachedPackage(track, file, lyricsFile(user, track))) {
             return null
         }
         file.setLastModified(System.currentTimeMillis())
@@ -78,7 +79,7 @@ class TrackCacheManager(
     }
 
     fun isCached(user: AuthUser, track: Track): Boolean {
-        return canUseCache(user, track) && isValidCacheFile(track, cacheFile(user, track))
+        return canUseCache(user, track) && isValidCachedPackage(track, cacheFile(user, track), lyricsFile(user, track))
     }
 
     fun cachedIdsFor(user: AuthUser, tracks: List<Track>): Set<Long> {
@@ -104,38 +105,63 @@ class TrackCacheManager(
             }
     }
 
-    suspend fun cacheTrack(user: AuthUser, track: Track, writer: suspend (File) -> Unit): CacheStats {
-        require(canUseCache(user, track)) { "当前用户无权缓存这首高品质音乐" }
+    fun cachedLyricsFor(user: AuthUser, track: Track): TrackLyrics? {
+        if (!isCached(user, track)) {
+            return null
+        }
+        return runCatching {
+            JsonDecoders.trackLyrics(JSONObject(lyricsFile(user, track).readText(Charsets.UTF_8)))
+        }.getOrNull()
+    }
+
+    suspend fun cacheTrack(
+        user: AuthUser,
+        track: Track,
+        audioWriter: suspend (File) -> Unit,
+        lyricsWriter: suspend (File) -> Unit,
+    ): CacheStats {
+        require(canUseCache(user, track)) { "当前用户无权缓存这首音乐" }
         return withContext(Dispatchers.IO) {
             val userDir = userCacheDir(user).also { it.mkdirs() }
-            val finalFile = cacheFile(user, track)
-            if (isValidCacheFile(track, finalFile)) {
+            val finalAudioFile = cacheFile(user, track)
+            val finalLyricsFile = lyricsFile(user, track)
+            if (isValidCachedPackage(track, finalAudioFile, finalLyricsFile)) {
                 return@withContext statsForUser(user)
             }
-            val tempFile = File(userDir, "${finalFile.name}.download")
-            if (tempFile.exists()) {
-                tempFile.delete()
-            }
+            val tempAudioFile = File(userDir, "${finalAudioFile.name}.download")
+            val tempLyricsFile = File(userDir, "${finalLyricsFile.name}.download")
+            tempAudioFile.delete()
+            tempLyricsFile.delete()
             ensureSpaceForTrack(track)
             try {
-                writer(tempFile)
+                audioWriter(tempAudioFile)
+                if (!isExpectedSize(track, tempAudioFile.length())) {
+                    throw IllegalStateException("缓存文件不完整，请稍后重试")
+                }
+                lyricsWriter(tempLyricsFile)
+                if (!isValidLyricsFile(tempLyricsFile)) {
+                    throw IllegalStateException("歌词缓存失败，请稍后重试")
+                }
                 ensureReservedStorageAvailable()
             } catch (error: Throwable) {
-                tempFile.delete()
+                tempAudioFile.delete()
+                tempLyricsFile.delete()
                 throw error
             }
-            if (!isExpectedSize(track, tempFile.length())) {
-                tempFile.delete()
-                throw IllegalStateException("缓存文件不完整，请稍后重试")
+            deleteCachedTrackFiles(user, track.id)
+            try {
+                moveTempFile(tempAudioFile, finalAudioFile)
+                moveTempFile(tempLyricsFile, finalLyricsFile)
+            } catch (error: Throwable) {
+                finalAudioFile.delete()
+                finalLyricsFile.delete()
+                tempAudioFile.delete()
+                tempLyricsFile.delete()
+                throw error
             }
-            if (finalFile.exists()) {
-                finalFile.delete()
-            }
-            if (!tempFile.renameTo(finalFile)) {
-                tempFile.copyTo(finalFile, overwrite = true)
-                tempFile.delete()
-            }
-            finalFile.setLastModified(System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            finalAudioFile.setLastModified(now)
+            finalLyricsFile.setLastModified(now)
             trimToLimitLocked()
             statsForUser(user)
         }
@@ -144,11 +170,9 @@ class TrackCacheManager(
     suspend fun removeTracks(user: AuthUser, trackIds: Set<Long>): CacheStats {
         return withContext(Dispatchers.IO) {
             if (trackIds.isNotEmpty()) {
-                userCacheDir(user).walkTopDown()
-                    .filter { file ->
-                        file.isFile && cachedTrackId(file)?.let { it in trackIds } == true
-                    }
-                    .forEach { it.delete() }
+                trackIds.forEach { trackId ->
+                    deleteCachedTrackFiles(user, trackId, includeDownloads = true)
+                }
             }
             statsForUser(user)
         }
@@ -163,9 +187,10 @@ class TrackCacheManager(
     }
 
     fun stats(): CacheStats {
-        val files = cacheRoot.walkTopDown().filter { it.isFile && !it.name.endsWith(".download") }.toList()
+        val files = cachedFiles()
+        val packageCount = cachedTrackPackages(files).size
         return CacheStats(
-            fileCount = files.size,
+            fileCount = packageCount,
             totalBytes = files.sumOf { it.length() },
             maxBytes = maxCacheBytes,
         )
@@ -181,11 +206,19 @@ class TrackCacheManager(
     }
 
     private fun canUseCache(user: AuthUser, track: Track): Boolean {
-        return track.isLosslessFlac && user.role.canPlayLossless
+        return track.quality != TrackQuality.LOSSLESS || user.role.canPlayLossless
     }
 
-    private fun isValidCacheFile(track: Track, file: File): Boolean {
+    private fun isValidCachedPackage(track: Track, audioFile: File, lyricsFile: File): Boolean {
+        return isValidAudioFile(track, audioFile) && isValidLyricsFile(lyricsFile)
+    }
+
+    private fun isValidAudioFile(track: Track, file: File): Boolean {
         return file.isFile && isExpectedSize(track, file.length())
+    }
+
+    private fun isValidLyricsFile(file: File): Boolean {
+        return file.isFile && file.length() > 0L
     }
 
     private fun isExpectedSize(track: Track, actualBytes: Long): Boolean {
@@ -196,14 +229,23 @@ class TrackCacheManager(
         return File(userCacheDir(user), cacheFileName(track))
     }
 
+    private fun lyricsFile(user: AuthUser, track: Track): File {
+        return File(userCacheDir(user), lyricsFileName(track))
+    }
+
     private fun userCacheDir(user: AuthUser): File {
         return File(cacheRoot, "user-${user.id}")
     }
 
     private fun cacheFileName(track: Track): String {
         val version = Integer.toHexString("${track.modifiedAt}:${track.sizeBytes}".hashCode())
-        val extension = track.format.lowercase().ifBlank { "flac" }
+        val extension = track.format.lowercase().ifBlank { "music" }
         return "${track.id}-$version.$extension"
+    }
+
+    private fun lyricsFileName(track: Track): String {
+        val version = Integer.toHexString("${track.modifiedAt}:${track.sizeBytes}".hashCode())
+        return "${track.id}-$version.lyrics.json"
     }
 
     private fun cachedTrackId(file: File): Long? {
@@ -227,21 +269,69 @@ class TrackCacheManager(
 
     private fun trimToLimitLocked() {
         val max = maxCacheBytes
-        val files = cacheRoot.walkTopDown()
-            .filter { it.isFile && !it.name.endsWith(".download") }
-            .sortedBy { it.lastModified() }
-            .toMutableList()
+        val files = cachedFiles()
         var total = files.sumOf { it.length() }
-        for (file in files) {
+        for (trackPackage in cachedTrackPackages(files).sortedBy { it.lastModified }) {
             if (total <= max) {
                 break
             }
-            val size = file.length()
-            if (file.delete()) {
-                total -= size
+            trackPackage.files.forEach { file ->
+                val size = file.length()
+                if (file.delete()) {
+                    total -= size
+                }
             }
         }
     }
+
+    private fun cachedFiles(): List<File> {
+        return cacheRoot.walkTopDown()
+            .filter { it.isFile && !it.name.endsWith(".download") }
+            .toList()
+    }
+
+    private fun cachedTrackPackages(files: List<File>): List<CachedTrackPackage> {
+        return files
+            .mapNotNull { file ->
+                val trackId = cachedTrackId(file) ?: return@mapNotNull null
+                val parentPath = file.parentFile?.absolutePath.orEmpty()
+                "$parentPath:$trackId" to file
+            }
+            .groupBy(keySelector = { it.first }, valueTransform = { it.second })
+            .values
+            .map { packageFiles ->
+                CachedTrackPackage(
+                    files = packageFiles,
+                    lastModified = packageFiles.minOfOrNull { it.lastModified() } ?: 0L,
+                )
+            }
+    }
+
+    private fun deleteCachedTrackFiles(user: AuthUser, trackId: Long, includeDownloads: Boolean = false) {
+        val userDir = userCacheDir(user)
+        if (!userDir.isDirectory) {
+            return
+        }
+        userDir.walkTopDown()
+            .filter { file ->
+                file.isFile &&
+                    (includeDownloads || !file.name.endsWith(".download")) &&
+                    cachedTrackId(file) == trackId
+            }
+            .forEach { it.delete() }
+    }
+
+    private fun moveTempFile(tempFile: File, finalFile: File) {
+        if (!tempFile.renameTo(finalFile)) {
+            tempFile.copyTo(finalFile, overwrite = true)
+            tempFile.delete()
+        }
+    }
+
+    private data class CachedTrackPackage(
+        val files: List<File>,
+        val lastModified: Long,
+    )
 
     companion object {
         const val GIB: Long = 1024L * 1024L * 1024L

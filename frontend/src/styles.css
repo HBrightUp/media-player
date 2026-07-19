@@ -430,7 +430,7 @@ html.is-standalone-app .top-line {
   min-height: 34px;
   padding: 3px 8px 3px 0;
   color: inherit;
-  background: transparent;
+  background: linear-gradient(180deg, rgba(5, 36, 72, 0), rgba(10, 55, 100, 0.42));
   border: 1px solid transparent;
   border-radius: 10px;
   font: inherit;
@@ -667,7 +667,9 @@ html.is-standalone-app .top-line {
 
 .track-context-menu {
   position: fixed;
-  width: 148px;
+  width: max-content;
+  min-width: 112px;
+  max-width: min(240px, calc(100vw - 24px));
   display: grid;
   padding: 6px;
   background: var(--panel-blue-bg);
@@ -678,14 +680,20 @@ html.is-standalone-app .top-line {
 }
 
 .track-context-menu button {
+  width: 100%;
   min-width: 0;
-  height: 42px;
+  min-height: 42px;
+  height: auto;
+  padding: 0 16px;
   color: rgba(239, 251, 255, 0.94);
   background: transparent;
   border-radius: 10px;
   font-size: 15px;
   font-weight: 760;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .track-context-menu button:hover {
@@ -693,7 +701,7 @@ html.is-standalone-app .top-line {
 }
 
 .category-context-menu {
-  width: 132px;
+  min-width: 112px;
 }
 
 .search-dialog-backdrop {
@@ -5153,7 +5161,7 @@ form.search-dialog .search-actions button {
 }
 
 .audio-file-context-menu {
-  width: 132px;
+  min-width: 112px;
 }
 
 .audio-preflight-backdrop {
@@ -6344,7 +6352,7 @@ form.search-dialog.audio-file-dialog .search-actions button,
   justify-content: center;
   gap: 14px;
   padding: 0 max(18px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-right));
-  background: linear-gradient(180deg, rgba(5, 36, 72, 0), rgba(10, 55, 100, 0.42));
+  background: transparent;
   transition:
     opacity 220ms ease,
     transform 220ms ease;

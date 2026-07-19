@@ -26,7 +26,48 @@ class MusicRepository(
         return api.tracks(quality)
     }
 
-    suspend fun lyrics(track: Track): TrackLyrics {
+    suspend fun favoriteTracks(userId: Long, categoryId: Long? = null): List<Track> {
+        return api.favoriteTracks(userId, categoryId)
+    }
+
+    suspend fun trackMemberships(userId: Long): TrackMemberships {
+        return api.trackMemberships(userId)
+    }
+
+    suspend fun addFavoriteTrack(userId: Long, trackId: Long) {
+        api.addFavoriteTrack(userId, trackId)
+    }
+
+    suspend fun removeFavoriteTrack(userId: Long, trackId: Long) {
+        api.removeFavoriteTrack(userId, trackId)
+    }
+
+    suspend fun favoriteCategories(userId: Long): List<FavoriteCategory> {
+        return api.favoriteCategories(userId)
+    }
+
+    suspend fun createFavoriteCategory(userId: Long, name: String): FavoriteCategory {
+        return api.createFavoriteCategory(userId, name)
+    }
+
+    suspend fun renameFavoriteCategory(userId: Long, categoryId: Long, name: String): FavoriteCategory {
+        return api.renameFavoriteCategory(userId, categoryId, name)
+    }
+
+    suspend fun deleteFavoriteCategory(userId: Long, categoryId: Long) {
+        api.deleteFavoriteCategory(userId, categoryId)
+    }
+
+    suspend fun addFavoriteTrackToCategory(userId: Long, categoryId: Long, trackId: Long) {
+        api.addFavoriteTrackToCategory(userId, categoryId, trackId)
+    }
+
+    suspend fun removeFavoriteTrackFromCategory(userId: Long, categoryId: Long, trackId: Long) {
+        api.removeFavoriteTrackFromCategory(userId, categoryId, trackId)
+    }
+
+    suspend fun lyrics(user: AuthUser, track: Track): TrackLyrics {
+        cacheManager.cachedLyricsFor(user, track)?.let { return it }
         return api.lyrics(track.id)
     }
 
@@ -54,26 +95,31 @@ class MusicRepository(
         )
     }
 
-    suspend fun cacheLosslessFlac(
+    suspend fun cacheTrack(
         user: AuthUser,
         track: Track,
         onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
     ): CacheStats {
-        if (!track.isLosslessFlac) {
-            throw IllegalStateException("当前只缓存高品质 FLAC 文件")
-        }
-        if (!user.role.canPlayLossless) {
+        if (track.quality == TrackQuality.LOSSLESS && !user.role.canPlayLossless) {
             throw IllegalStateException("当前用户无权缓存高品质音乐")
         }
         val playbackSession = api.claimPlaybackSession(track.id)
         return try {
             val streamUrl = api.streamUrl(track, playbackSession.streamTicket)
-            cacheManager.cacheTrack(user, track) { file ->
-                api.downloadToFile(streamUrl, file) { downloadedBytes, totalBytes ->
-                    cacheManager.ensureReservedStorageAvailable()
-                    onProgress(downloadedBytes, totalBytes)
-                }
-            }
+            cacheManager.cacheTrack(
+                user = user,
+                track = track,
+                audioWriter = { file ->
+                    api.downloadToFile(streamUrl, file) { downloadedBytes, totalBytes ->
+                        cacheManager.ensureReservedStorageAvailable()
+                        onProgress(downloadedBytes, totalBytes)
+                    }
+                },
+                lyricsWriter = { file ->
+                    val lyricsPayload = api.lyricsPayload(track.id)
+                    file.writeText(lyricsPayload.toString(), Charsets.UTF_8)
+                },
+            )
         } finally {
             runCatching { api.releasePlaybackSession(playbackSession.token) }
         }

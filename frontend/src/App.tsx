@@ -365,10 +365,9 @@ const musicListScrollSnapTolerancePx = 1.5;
 const longPressDelayMs = 520;
 const longPressMoveTolerancePx = 10;
 const transientPopupAutoDismissMs = 12_000;
-const contextMenuWidth = 148;
+const contextMenuMaxWidth = 240;
 const trackContextMenuHeight = 96;
 const categoryContextMenuHeight = 54;
-const audioFileMenuWidth = 132;
 const audioFileMenuHeight = 96;
 const categorySelectorPopoverWidth = 104;
 const categorySelectorOptionHeight = 43;
@@ -3119,7 +3118,7 @@ function App() {
   }
 
   function openAudioFileMenu(track: ServerManagedFile, clientX: number, clientY: number) {
-    const maxX = Math.max(contextMenuMargin, window.innerWidth - audioFileMenuWidth - contextMenuMargin);
+    const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuMaxWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - audioFileMenuHeight - contextMenuMargin);
     setAudioRenameDraft(null);
     setAudioDeleteTarget(null);
@@ -3809,7 +3808,7 @@ function App() {
   }
 
   function openTrackMenu(track: Track, clientX: number, clientY: number) {
-    const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
+    const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuMaxWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - trackContextMenuHeight - contextMenuMargin);
     setIsPlaybackModeMenuOpen(false);
     setIsEqualizerOpen(false);
@@ -3822,7 +3821,7 @@ function App() {
   }
 
   function openCategoryMenu(category: FavoriteCategory, clientX: number, clientY: number) {
-    const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuWidth - contextMenuMargin);
+    const maxX = Math.max(contextMenuMargin, window.innerWidth - contextMenuMaxWidth - contextMenuMargin);
     const maxY = Math.max(contextMenuMargin, window.innerHeight - categoryContextMenuHeight - contextMenuMargin);
     setIsPlaybackModeMenuOpen(false);
     setIsEqualizerOpen(false);

@@ -985,6 +985,42 @@ func (s *Server) handleFavoriteCategoryRoute(w http.ResponseWriter, r *http.Requ
 	}
 
 	switch {
+	case resource == "category" && (r.Method == http.MethodPatch || r.Method == http.MethodPost):
+		var request favoriteCategoryRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "请求格式不正确")
+			return
+		}
+		if request.UserID <= 0 {
+			writeError(w, http.StatusBadRequest, "用户标识不正确")
+			return
+		}
+		userID, ok := s.requireMatchingSessionUserID(w, r, request.UserID, "请先登录后重命名分类")
+		if !ok {
+			return
+		}
+		name, err := validateFavoriteCategoryName(request.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		category, err := s.store.UpdateFavoriteCategory(r.Context(), userID, categoryID, name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "分类不存在")
+			return
+		}
+		if err != nil {
+			if isUniqueViolation(err) {
+				writeError(w, http.StatusConflict, "分类名称已存在")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "重命名分类失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"category": category,
+		})
+
 	case resource == "category" && r.Method == http.MethodDelete:
 		userID, err := validatePositiveID(r.URL.Query().Get("user_id"), "用户")
 		if err != nil {

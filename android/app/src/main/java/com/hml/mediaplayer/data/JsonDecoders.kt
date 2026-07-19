@@ -27,6 +27,36 @@ internal object JsonDecoders {
         return payload.optJSONArray("tracks").orEmpty().mapObjects { track(it) }
     }
 
+    fun favoriteCategories(payload: JSONObject): List<FavoriteCategory> {
+        return payload.optJSONArray("categories").orEmpty().mapObjects { favoriteCategory(it) }
+    }
+
+    fun favoriteCategory(payload: JSONObject): FavoriteCategory {
+        return FavoriteCategory(
+            id = payload.optLong("id"),
+            userId = payload.optLong("user_id"),
+            name = payload.optString("name"),
+            sortOrder = payload.optInt("sort_order"),
+            createdAt = payload.optString("created_at"),
+            updatedAt = payload.optString("updated_at"),
+        )
+    }
+
+    fun trackMemberships(payload: JSONObject): TrackMemberships {
+        val favoriteTrackIds = payload.optJSONArray("favorite_track_ids").orEmpty().mapLongs().toSet()
+        val categoryMemberships = payload.optJSONArray("category_memberships").orEmpty().mapObjects {
+            TrackCategoryMembership(
+                trackId = it.optLong("track_id"),
+                categoryId = it.optLong("category_id"),
+                categoryName = it.optString("category_name"),
+            )
+        }
+        return TrackMemberships(
+            favoriteTrackIds = favoriteTrackIds,
+            categoryMemberships = categoryMemberships,
+        )
+    }
+
     fun track(payload: JSONObject): Track {
         return Track(
             id = payload.optLong("id"),
@@ -92,6 +122,14 @@ private fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> {
     val values = ArrayList<T>(length())
     for (index in 0 until length()) {
         values += transform(getJSONObject(index))
+    }
+    return values
+}
+
+private fun JSONArray.mapLongs(): List<Long> {
+    val values = ArrayList<Long>(length())
+    for (index in 0 until length()) {
+        values += optLong(index)
     }
     return values
 }

@@ -32,8 +32,82 @@ class MediaPlayerApi(private val sessionStore: SessionStore) {
         return JsonDecoders.tracks(requestJson("/api/tracks?quality=$query"))
     }
 
+    suspend fun favoriteTracks(userId: Long, categoryId: Long? = null): List<Track> {
+        val categoryQuery = categoryId?.let { "&category_id=$it" }.orEmpty()
+        return JsonDecoders.tracks(requestJson("/api/favorites?user_id=$userId$categoryQuery"))
+    }
+
+    suspend fun trackMemberships(userId: Long): TrackMemberships {
+        return JsonDecoders.trackMemberships(requestJson("/api/track-memberships?user_id=$userId"))
+    }
+
+    suspend fun addFavoriteTrack(userId: Long, trackId: Long) {
+        requestJson(
+            "/api/favorites",
+            method = "POST",
+            body = JSONObject()
+                .put("user_id", userId)
+                .put("track_id", trackId),
+        )
+    }
+
+    suspend fun removeFavoriteTrack(userId: Long, trackId: Long) {
+        requestJson("/api/favorites/$trackId?user_id=$userId", method = "DELETE")
+    }
+
+    suspend fun favoriteCategories(userId: Long): List<FavoriteCategory> {
+        return JsonDecoders.favoriteCategories(requestJson("/api/favorite-categories?user_id=$userId"))
+    }
+
+    suspend fun createFavoriteCategory(userId: Long, name: String): FavoriteCategory {
+        val payload = requestJson(
+            "/api/favorite-categories",
+            method = "POST",
+            body = JSONObject()
+                .put("user_id", userId)
+                .put("name", name),
+        )
+        return JsonDecoders.favoriteCategory(payload.getJSONObject("category"))
+    }
+
+    suspend fun renameFavoriteCategory(userId: Long, categoryId: Long, name: String): FavoriteCategory {
+        val payload = requestJson(
+            "/api/favorite-categories/$categoryId",
+            method = "POST",
+            body = JSONObject()
+                .put("user_id", userId)
+                .put("name", name),
+        )
+        return JsonDecoders.favoriteCategory(payload.getJSONObject("category"))
+    }
+
+    suspend fun deleteFavoriteCategory(userId: Long, categoryId: Long) {
+        requestJson("/api/favorite-categories/$categoryId?user_id=$userId", method = "DELETE")
+    }
+
+    suspend fun addFavoriteTrackToCategory(userId: Long, categoryId: Long, trackId: Long) {
+        requestJson(
+            "/api/favorite-categories/$categoryId/tracks",
+            method = "POST",
+            body = JSONObject()
+                .put("user_id", userId)
+                .put("track_id", trackId),
+        )
+    }
+
+    suspend fun removeFavoriteTrackFromCategory(userId: Long, categoryId: Long, trackId: Long) {
+        requestJson(
+            "/api/favorite-categories/$categoryId/tracks/$trackId?user_id=$userId",
+            method = "DELETE",
+        )
+    }
+
     suspend fun lyrics(trackId: Long): TrackLyrics {
-        return JsonDecoders.trackLyrics(requestJson("/api/tracks/$trackId/lyrics"))
+        return JsonDecoders.trackLyrics(lyricsPayload(trackId))
+    }
+
+    suspend fun lyricsPayload(trackId: Long): JSONObject {
+        return requestJson("/api/tracks/$trackId/lyrics")
     }
 
     suspend fun claimPlaybackSession(trackId: Long): PlaybackSession {

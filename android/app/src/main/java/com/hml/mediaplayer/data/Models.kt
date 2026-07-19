@@ -72,6 +72,26 @@ data class Track(
     val coverUrl: String?,
 )
 
+data class FavoriteCategory(
+    val id: Long,
+    val userId: Long,
+    val name: String,
+    val sortOrder: Int,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+data class TrackCategoryMembership(
+    val trackId: Long,
+    val categoryId: Long,
+    val categoryName: String,
+)
+
+data class TrackMemberships(
+    val favoriteTrackIds: Set<Long>,
+    val categoryMemberships: List<TrackCategoryMembership>,
+)
+
 val Track.isLosslessFlac: Boolean
     get() = quality == TrackQuality.LOSSLESS && format.equals("flac", ignoreCase = true)
 

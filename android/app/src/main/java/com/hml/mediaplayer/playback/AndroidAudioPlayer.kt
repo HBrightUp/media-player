@@ -1,6 +1,8 @@
 package com.hml.mediaplayer.playback
 
 import android.content.Context
+import android.media.audiofx.Equalizer
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -13,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 data class AudioPlayerState(
     val currentTrack: Track? = null,
@@ -21,11 +25,15 @@ data class AudioPlayerState(
     val durationMs: Long = 0L,
     val bufferedPositionMs: Long = 0L,
     val errorMessage: String? = null,
+    val playbackEndedSignal: Long = 0L,
 )
 
 class AndroidAudioPlayer(context: Context) : Player.Listener {
     private val appContext = context.applicationContext
     private var player: ExoPlayer? = createPlayer()
+    private var equalizer: Equalizer? = null
+    private var equalizerGainsDb: List<Float> = emptyList()
+    private var playbackEndedSignal = 0L
 
     private val _state = MutableStateFlow(AudioPlayerState())
     val state: StateFlow<AudioPlayerState> = _state.asStateFlow()
@@ -43,6 +51,7 @@ class AndroidAudioPlayer(context: Context) : Player.Listener {
             .build()
         activePlayer.setMediaItem(mediaItem)
         activePlayer.prepare()
+        syncEqualizerSession(activePlayer)
         activePlayer.play()
         _state.update {
             it.copy(
@@ -61,6 +70,10 @@ class AndroidAudioPlayer(context: Context) : Player.Listener {
         } else {
             activePlayer.play()
         }
+    }
+
+    fun resume() {
+        player?.play()
     }
 
     fun pause() {
@@ -83,7 +96,13 @@ class AndroidAudioPlayer(context: Context) : Player.Listener {
         return player?.bufferedPosition?.takeUnless { it == C.TIME_UNSET }?.coerceAtLeast(0L) ?: 0L
     }
 
+    fun setEqualizerGains(gainsDb: List<Float>) {
+        equalizerGainsDb = gainsDb
+        applyEqualizerGains()
+    }
+
     fun releasePlaybackResources() {
+        releaseEqualizer()
         player?.let { activePlayer ->
             activePlayer.stop()
             activePlayer.clearMediaItems()
@@ -100,8 +119,63 @@ class AndroidAudioPlayer(context: Context) : Player.Listener {
 
     private fun createPlayer(): ExoPlayer {
         return ExoPlayer.Builder(appContext).build().also {
+            it.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                true,
+            )
             it.addListener(this)
         }
+    }
+
+    private fun syncEqualizerSession(activePlayer: ExoPlayer) {
+        runCatching {
+            val audioSessionId = activePlayer.audioSessionId
+            if (audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+                recreateEqualizer(audioSessionId)
+            }
+        }
+    }
+
+    private fun recreateEqualizer(audioSessionId: Int) {
+        releaseEqualizer()
+        runCatching {
+            equalizer = Equalizer(0, audioSessionId).also { audioEffect ->
+                applyEqualizerGains(audioEffect)
+            }
+        }
+    }
+
+    private fun applyEqualizerGains(target: Equalizer? = equalizer) {
+        val audioEffect = target ?: return
+        val gains = equalizerGainsDb
+        if (gains.isEmpty()) {
+            audioEffect.enabled = false
+            return
+        }
+        val hasEffect = gains.any { abs(it) > 0.05f }
+        val range = audioEffect.bandLevelRange
+        val minLevel = range.getOrNull(0)?.toInt() ?: -1500
+        val maxLevel = range.getOrNull(1)?.toInt() ?: 1500
+        val bandCount = audioEffect.numberOfBands.toInt().coerceAtLeast(0)
+        for (band in 0 until bandCount) {
+            val gainIndex = ((band.toFloat() / bandCount) * gains.size)
+                .toInt()
+                .coerceIn(0, gains.lastIndex)
+            val level = (gains[gainIndex] * 100f)
+                .roundToInt()
+                .coerceIn(minLevel, maxLevel)
+                .toShort()
+            runCatching { audioEffect.setBandLevel(band.toShort(), level) }
+        }
+        audioEffect.enabled = hasEffect
+    }
+
+    private fun releaseEqualizer() {
+        runCatching { equalizer?.release() }
+        equalizer = null
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -109,12 +183,22 @@ class AndroidAudioPlayer(context: Context) : Player.Listener {
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        if (playbackState == Player.STATE_ENDED) {
+            playbackEndedSignal += 1L
+        }
         _state.update {
             it.copy(
                 isBuffering = playbackState == Player.STATE_BUFFERING,
                 durationMs = durationMs(),
                 bufferedPositionMs = bufferedPositionMs(),
+                playbackEndedSignal = playbackEndedSignal,
             )
+        }
+    }
+
+    override fun onAudioSessionIdChanged(audioSessionId: Int) {
+        if (audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            recreateEqualizer(audioSessionId)
         }
     }
 

@@ -561,6 +561,26 @@ func (s *Store) CreateFavoriteCategory(ctx context.Context, userID int64, name s
 	return category, err
 }
 
+func (s *Store) UpdateFavoriteCategory(ctx context.Context, userID, categoryID int64, name string) (models.FavoriteCategory, error) {
+	var category models.FavoriteCategory
+	err := s.pool.QueryRow(ctx, `
+		UPDATE favorite_categories
+		SET name = $3,
+			updated_at = now()
+		WHERE user_id = $1
+			AND id = $2
+		RETURNING id, user_id, name, sort_order, created_at, updated_at
+	`, userID, categoryID, name).Scan(
+		&category.ID,
+		&category.UserID,
+		&category.Name,
+		&category.SortOrder,
+		&category.CreatedAt,
+		&category.UpdatedAt,
+	)
+	return category, err
+}
+
 func (s *Store) DeleteFavoriteCategory(ctx context.Context, userID, categoryID int64) error {
 	_, err := s.pool.Exec(ctx, `
 		DELETE FROM favorite_categories

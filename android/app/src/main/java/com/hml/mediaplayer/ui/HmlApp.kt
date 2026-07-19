@@ -11,13 +11,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,13 +30,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -40,6 +52,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -47,18 +60,16 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -77,10 +88,13 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -94,16 +108,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -113,19 +128,25 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hml.mediaplayer.BuildConfig
 import com.hml.mediaplayer.R
 import com.hml.mediaplayer.data.AuthUser
+import com.hml.mediaplayer.data.FavoriteCategory
 import com.hml.mediaplayer.data.LyricLine
+import com.hml.mediaplayer.data.LyricWord
 import com.hml.mediaplayer.data.Track
 import com.hml.mediaplayer.data.TrackCacheManager
 import com.hml.mediaplayer.data.TrackQuality
-import com.hml.mediaplayer.data.isLosslessFlac
+import com.hml.mediaplayer.viewmodel.EqualizerPreset
 import com.hml.mediaplayer.viewmodel.HomeTab
+import com.hml.mediaplayer.viewmodel.LibraryContent
+import com.hml.mediaplayer.viewmodel.PlaybackMode
 import com.hml.mediaplayer.viewmodel.PlayerUiState
 import com.hml.mediaplayer.viewmodel.PlayerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
@@ -165,11 +186,7 @@ private fun LoginScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF08233F), Color(0xFF050B14)),
-                ),
-            )
+            .background(webBlueGradient())
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -230,20 +247,23 @@ private fun LoginScreen(
 private fun MainScaffold(state: PlayerUiState, viewModel: PlayerViewModel) {
     var bottomTabsVisible by rememberSaveable { mutableStateOf(false) }
     var profilePage by rememberSaveable { mutableStateOf(ProfilePage.HOME) }
-    val lyricsControlsBottomOffset by animateDpAsState(
-        targetValue = if (bottomTabsVisible) 104.dp else 42.dp,
-        animationSpec = tween(durationMillis = 220),
-        label = "lyrics-controls-bottom-offset",
-    )
     val lyricsContentBottomPadding by animateDpAsState(
-        targetValue = if (bottomTabsVisible) 300.dp else 220.dp,
+        targetValue = if (bottomTabsVisible) {
+            LibraryBottomClearanceExpanded
+        } else {
+            LibraryBottomClearanceCollapsed
+        },
         animationSpec = tween(durationMillis = 220),
         label = "lyrics-content-bottom-padding",
     )
-    val bottomContentClearance by animateDpAsState(
-        targetValue = if (bottomTabsVisible) 110.dp else 0.dp,
+    val libraryBottomClearance by animateDpAsState(
+        targetValue = if (bottomTabsVisible) {
+            LibraryBottomClearanceExpanded
+        } else {
+            LibraryBottomClearanceCollapsed
+        },
         animationSpec = tween(durationMillis = 220),
-        label = "bottom-content-clearance",
+        label = "library-bottom-clearance",
     )
     val revealBottomTabs = { bottomTabsVisible = true }
 
@@ -261,28 +281,24 @@ private fun MainScaffold(state: PlayerUiState, viewModel: PlayerViewModel) {
     ) {
         Scaffold(
             containerColor = Color.Transparent,
-        ) { padding ->
+        ) { _ ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(bottom = if (state.selectedTab == HomeTab.LYRICS) 0.dp else bottomContentClearance),
+                    .statusBarsPadding(),
             ) {
                 Box(modifier = Modifier.weight(1f)) {
                     when (state.selectedTab) {
-                        HomeTab.LIBRARY -> LibraryScreen(state = state, viewModel = viewModel)
+                        HomeTab.LIBRARY -> LibraryScreen(
+                            state = state,
+                            viewModel = viewModel,
+                            bottomClearance = libraryBottomClearance,
+                        )
                         HomeTab.LYRICS -> {
                             LyricsScreen(
                                 state = state,
                                 viewModel = viewModel,
                                 lyricsBottomPadding = lyricsContentBottomPadding,
-                            )
-                            LyricsPlaybackControls(
-                                state = state,
-                                viewModel = viewModel,
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = lyricsControlsBottomOffset),
                             )
                         }
                         HomeTab.PROFILE -> ProfileScreen(
@@ -316,6 +332,50 @@ private fun MainScaffold(state: PlayerUiState, viewModel: PlayerViewModel) {
 
 private val bottomTabs = listOf(HomeTab.LIBRARY, HomeTab.LYRICS, HomeTab.PROFILE)
 
+private val BottomTabsExpandedHeight = 78.dp
+private val BottomTabsCollapsedHeight = 54.dp
+private val BottomTabsBottomMargin = 16.dp
+private val BottomTabsSystemNavigationReserve = 36.dp
+private val BottomTabsListGap = 8.dp
+private val LibraryBottomClearanceExpanded =
+    BottomTabsExpandedHeight + BottomTabsBottomMargin + BottomTabsSystemNavigationReserve + BottomTabsListGap
+private val LibraryBottomClearanceCollapsed =
+    BottomTabsCollapsedHeight + BottomTabsBottomMargin + BottomTabsSystemNavigationReserve + BottomTabsListGap
+private val LibraryHorizontalPadding = 20.dp
+private val LibraryTopPadding = 14.dp
+private val LibraryHeaderBottomGap = 8.dp
+private val LibraryTopTabsMaxWidth = 360.dp
+private val LibraryCategoryRailWidth = 76.dp
+private val LibraryCategoryGap = 8.dp
+private val MusicListMaxWidth = 328.dp
+private val MusicListRowHeight = 82.dp
+private val MusicListRowSpacing = 3.dp
+private val LibraryMiniPlayerHeight = 60.dp
+private val LibraryMiniPlayerListGap = 8.dp
+private val LibraryMiniPlayerMaxWidth = 292.dp
+private val PlayingIndicatorColor = Color(0xFF77F56C)
+private const val EqualizerGainMinDb = -9f
+private const val EqualizerGainMaxDb = 9f
+private const val EqualizerGainStepDb = 0.5f
+
+private data class EqualizerBandSpec(
+    val name: String,
+    val frequency: String,
+)
+
+private val equalizerBandSpecs = listOf(
+    EqualizerBandSpec("超低", "31Hz"),
+    EqualizerBandSpec("低频", "62Hz"),
+    EqualizerBandSpec("低鼓", "125Hz"),
+    EqualizerBandSpec("厚度", "250Hz"),
+    EqualizerBandSpec("温暖", "500Hz"),
+    EqualizerBandSpec("中频", "1k"),
+    EqualizerBandSpec("人声", "2k"),
+    EqualizerBandSpec("清晰", "4k"),
+    EqualizerBandSpec("明亮", "8k"),
+    EqualizerBandSpec("空气", "16k"),
+)
+
 @Composable
 private fun FloatingBottomTabs(
     selectedTab: HomeTab,
@@ -324,12 +384,12 @@ private fun FloatingBottomTabs(
     onSelect: (HomeTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val tabHeight = if (visible) 78.dp else 38.dp
+    val tabHeight = if (visible) BottomTabsExpandedHeight else BottomTabsCollapsedHeight
     val containerModifier = modifier
         .fillMaxWidth()
         .zIndex(100f)
         .navigationBarsPadding()
-        .padding(start = 24.dp, end = 24.dp, bottom = 16.dp)
+        .padding(start = 24.dp, end = 24.dp, bottom = BottomTabsBottomMargin)
 
     Box(
         modifier = containerModifier,
@@ -344,23 +404,16 @@ private fun FloatingBottomTabs(
         if (!visible) {
             Box(
                 modifier = Modifier
-                    .width(156.dp)
-                    .height(34.dp)
+                    .width(240.dp)
+                    .height(54.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures { onReveal() }
+                    }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         onClick = onReveal,
-                    )
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0x1A1B5D86),
-                                Color(0x08091E37),
-                            ),
-                        ),
-                    )
-                    .border(1.dp, Color(0x22BEEBFF), RoundedCornerShape(999.dp)),
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
@@ -384,21 +437,6 @@ private fun FloatingBottomTabs(
                 modifier = Modifier
                     .widthIn(min = 286.dp, max = 360.dp)
                     .alpha(1f)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                Color(0xEE0C365C),
-                                Color(0xEC09264C),
-                                Color(0xF0061938),
-                            ),
-                        ),
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = Color(0x42A9E8FF),
-                        shape = RoundedCornerShape(24.dp),
-                    )
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
@@ -425,26 +463,10 @@ private fun FloatingBottomTabButton(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(18.dp)
-    val activeBrush = Brush.radialGradient(
-        colors = listOf(
-            Color(0x52FF78B6),
-            Color(0x3327C7FF),
-            Color.Transparent,
-        ),
-    )
-
     Box(
         modifier = Modifier
             .width(78.dp)
             .height(62.dp)
-            .clip(shape)
-            .background(if (selected) activeBrush else Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent)))
-            .border(
-                width = if (selected) 1.dp else 0.dp,
-                color = if (selected) Color(0x55BEEBFF) else Color.Transparent,
-                shape = shape,
-            )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -591,71 +613,1286 @@ private fun VividPageIcon(
 }
 
 @Composable
-private fun LibraryScreen(state: PlayerUiState, viewModel: PlayerViewModel) {
+private fun LibraryScreen(
+    state: PlayerUiState,
+    viewModel: PlayerViewModel,
+    bottomClearance: Dp,
+) {
     var actionTrack by remember { mutableStateOf<Track?>(null) }
-    val authToken = viewModel.authToken()
+    var categoryPickerTrack by remember { mutableStateOf<Track?>(null) }
+    var createCategoryVisible by rememberSaveable { mutableStateOf(false) }
+    var categoryAction by remember { mutableStateOf<FavoriteCategory?>(null) }
+    var renameCategory by remember { mutableStateOf<FavoriteCategory?>(null) }
+    var deleteCategory by remember { mutableStateOf<FavoriteCategory?>(null) }
+    var playbackModeMenuVisible by rememberSaveable { mutableStateOf(false) }
+    var equalizerPanelVisible by rememberSaveable { mutableStateOf(false) }
+    val trackListState = rememberLazyListState()
+    val activeCategory = state.favoriteCategories.firstOrNull { it.id == state.activeFavoriteCategoryId }
+    val membershipsByTrack = remember(state.categoryMemberships) {
+        state.categoryMemberships.groupBy { it.trackId }
+    }
+    val miniPlayerVisible = state.currentTrack != null
+
+    BackHandler(enabled = equalizerPanelVisible) {
+        equalizerPanelVisible = false
+    }
+
+    LaunchedEffect(trackListState.isScrollInProgress) {
+        if (trackListState.isScrollInProgress) {
+            actionTrack = null
+            categoryPickerTrack = null
+            playbackModeMenuVisible = false
+            equalizerPanelVisible = false
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(webBlueGradient()),
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 22.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    start = LibraryHorizontalPadding,
+                    top = LibraryTopPadding,
+                    end = LibraryHorizontalPadding,
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            item {
-                Row(
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = LibraryHeaderBottomGap),
+                contentAlignment = Alignment.Center,
+            ) {
+                LibraryTopTabs(
+                    state = state,
+                    onSelectQuality = viewModel::selectQuality,
+                    onSelectFavorites = viewModel::selectFavoriteTracks,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        TrackQuality.entries.forEach { quality ->
-                            AssistChip(
-                                onClick = { viewModel.selectQuality(quality) },
-                                label = { Text(quality.label) },
-                                leadingIcon = if (state.quality == quality) {
-                                    { Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                                } else {
-                                    null
-                                },
-                            )
+                        .widthIn(max = LibraryTopTabsMaxWidth)
+                        .fillMaxWidth(),
+                )
+                if (state.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(22.dp),
+                        strokeWidth = 3.dp,
+                    )
+                }
+            }
+
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                val density = LocalDensity.current
+                val rowHeightPx = with(density) { MusicListRowHeight.toPx() }
+                val rowSpacingPx = with(density) { MusicListRowSpacing.toPx() }
+                val availableHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(0f)
+                val completeRowCount = if (availableHeightPx < rowHeightPx) {
+                    0
+                } else {
+                    ((availableHeightPx + rowSpacingPx) / (rowHeightPx + rowSpacingPx)).toInt()
+                }.coerceAtLeast(0)
+                val completeListHeight = with(density) {
+                    (
+                        completeRowCount * rowHeightPx +
+                            maxOf(0, completeRowCount - 1) * rowSpacingPx
+                    ).toDp()
+                }
+
+                if (completeRowCount > 0) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(completeListHeight),
+                        horizontalArrangement = Arrangement.spacedBy(LibraryCategoryGap),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        FavoriteCategoryRail(
+                            categories = state.favoriteCategories,
+                            categoryLimit = state.favoriteCategoryLimit,
+                            activeCategoryId = state.activeFavoriteCategoryId,
+                            canCreate = state.favoriteCategories.size < state.favoriteCategoryLimit,
+                            actionCategoryId = categoryAction?.id,
+                            onSelectAll = { viewModel.selectFavoriteCategory(null) },
+                            onSelectCategory = viewModel::selectFavoriteCategory,
+                            onCategoryAction = { categoryAction = it },
+                            onRenameCategory = { category ->
+                                categoryAction = null
+                                renameCategory = category
+                            },
+                            onDeleteCategory = { category ->
+                                categoryAction = null
+                                deleteCategory = category
+                            },
+                            onDismissCategoryAction = { categoryAction = null },
+                            onCreate = { createCategoryVisible = true },
+                            modifier = Modifier
+                                .width(LibraryCategoryRailWidth)
+                                .fillMaxHeight(),
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            contentAlignment = Alignment.TopCenter,
+                        ) {
+                            if (!state.isLoading && state.tracks.isEmpty()) {
+                                Text(
+                                    text = libraryEmptyText(state, activeCategory),
+                                    color = Color(0xFFD8ECF6),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(top = 44.dp, start = 8.dp, end = 8.dp),
+                                )
+                            } else {
+                                LazyColumn(
+                                    state = trackListState,
+                                    modifier = Modifier
+                                        .widthIn(max = MusicListMaxWidth)
+                                        .fillMaxWidth()
+                                        .fillMaxHeight(),
+                                    contentPadding = PaddingValues(),
+                                    verticalArrangement = Arrangement.spacedBy(MusicListRowSpacing),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    items(state.tracks, key = { it.id }) { track ->
+                                        val memberships = membershipsByTrack[track.id].orEmpty()
+                                        val joinedCategoryIds = memberships.mapTo(mutableSetOf()) { it.categoryId }
+                                        val isInActiveCategory = activeCategory?.id?.let(joinedCategoryIds::contains) == true
+                                        val actionMenuVisible = actionTrack?.id == track.id
+                                        val categoryMenuVisible = categoryPickerTrack?.id == track.id
+                                        val isCached = track.id in state.cachedTrackIds
+                                        val isCaching = state.cachingTrackId == track.id
+                                        Box(modifier = Modifier.fillMaxWidth()) {
+                                            TrackRow(
+                                                track = track,
+                                                isCurrent = state.currentTrack?.id == track.id,
+                                                isPlaying = state.currentTrack?.id == track.id && state.isPlaying,
+                                                isFavorite = track.id in state.favoriteTrackIds,
+                                                showHighQualityBadge = state.libraryContent != LibraryContent.QUALITY && track.quality == TrackQuality.LOSSLESS,
+                                                onPlay = {
+                                                    playbackModeMenuVisible = false
+                                                    equalizerPanelVisible = false
+                                                    viewModel.playTrack(track)
+                                                },
+                                                onMore = {
+                                                    categoryPickerTrack = null
+                                                    actionTrack = track
+                                                },
+                                            )
+                                            TrackContextMenu(
+                                                expanded = actionMenuVisible || categoryMenuVisible,
+                                                showingCategories = categoryMenuVisible,
+                                                isFavorite = track.id in state.favoriteTrackIds,
+                                                isInActiveCategory = isInActiveCategory,
+                                                isCached = isCached,
+                                                isCaching = isCaching,
+                                                cacheActionEnabled = state.cachingTrackId == null || isCached,
+                                                categories = state.favoriteCategories,
+                                                joinedCategoryIds = joinedCategoryIds,
+                                                onToggleFavorite = {
+                                                    actionTrack = null
+                                                    viewModel.toggleFavorite(track)
+                                                },
+                                                onShowCategories = {
+                                                    actionTrack = null
+                                                    if (state.favoriteCategories.isEmpty()) {
+                                                        createCategoryVisible = true
+                                                    } else {
+                                                        categoryPickerTrack = track
+                                                    }
+                                                },
+                                                onAddToCategory = { category ->
+                                                    actionTrack = null
+                                                    categoryPickerTrack = null
+                                                    viewModel.addTrackToFavoriteCategory(track, category)
+                                                },
+                                                onCacheTrack = {
+                                                    actionTrack = null
+                                                    categoryPickerTrack = null
+                                                    viewModel.cacheTrack(track)
+                                                },
+                                                onRemoveCachedTrack = {
+                                                    actionTrack = null
+                                                    categoryPickerTrack = null
+                                                    viewModel.removeCachedTrack(track)
+                                                },
+                                                onRemoveFromCategory = activeCategory
+                                                    ?.takeIf { isInActiveCategory }
+                                                    ?.let { category ->
+                                                        {
+                                                            actionTrack = null
+                                                            viewModel.removeTrackFromFavoriteCategory(track, category.id)
+                                                        }
+                                                    },
+                                                onDismiss = {
+                                                    actionTrack = null
+                                                    categoryPickerTrack = null
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
-                    }
-                    if (state.isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
                     }
                 }
             }
-            items(state.tracks, key = { it.id }) { track ->
-                TrackRow(
-                    track = track,
-                    coverUrl = viewModel.coverUrl(track),
-                    authToken = authToken,
-                    isCurrent = state.currentTrack?.id == track.id,
-                    onPlay = { viewModel.playTrack(track) },
-                    onMore = { actionTrack = track },
+
+            if (miniPlayerVisible) {
+                Spacer(Modifier.height(LibraryMiniPlayerListGap))
+                LibraryMiniPlayerBar(
+                    state = state,
+                    playbackModeMenuExpanded = playbackModeMenuVisible,
+                    equalizerActive = equalizerPanelVisible || state.isEqualizerCustom || state.equalizerPreset != EqualizerPreset.FLAT,
+                    onOpenPlaybackMode = {
+                        playbackModeMenuVisible = !playbackModeMenuVisible
+                        equalizerPanelVisible = false
+                    },
+                    onDismissPlaybackMode = { playbackModeMenuVisible = false },
+                    onSelectPlaybackMode = { mode ->
+                        playbackModeMenuVisible = false
+                        viewModel.selectPlaybackMode(mode)
+                    },
+                    onOpenEqualizer = {
+                        equalizerPanelVisible = !equalizerPanelVisible
+                        playbackModeMenuVisible = false
+                    },
+                    onPrevious = viewModel::playPrevious,
+                    onTogglePlayback = viewModel::togglePlayback,
+                    onNext = viewModel::playNext,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+            Spacer(Modifier.height(bottomClearance))
+        }
+
+        if (miniPlayerVisible && equalizerPanelVisible) {
+            EqualizerBottomSheet(
+                state = state,
+                onSelectPreset = viewModel::selectEqualizerPreset,
+                onBandGainChange = viewModel::setEqualizerBandGain,
+                onDismiss = { equalizerPanelVisible = false },
+            )
+        }
+    }
+
+    renameCategory?.let { category ->
+        RenameFavoriteCategoryDialog(
+            category = category,
+            categoryNameMaxLength = state.favoriteCategoryNameMaxLength,
+            isSubmitting = state.isLoading,
+            onConfirm = { name ->
+                renameCategory = null
+                viewModel.renameFavoriteCategory(category, name)
+            },
+            onDismiss = { renameCategory = null },
+        )
+    }
+
+    if (createCategoryVisible) {
+        CreateFavoriteCategoryDialog(
+            categoryCount = state.favoriteCategories.size,
+            categoryLimit = state.favoriteCategoryLimit,
+            categoryNameMaxLength = state.favoriteCategoryNameMaxLength,
+            isSubmitting = state.isLoading,
+            onConfirm = { name ->
+                createCategoryVisible = false
+                viewModel.createFavoriteCategory(name)
+            },
+            onDismiss = { createCategoryVisible = false },
+        )
+    }
+
+    deleteCategory?.let { category ->
+        DeleteFavoriteCategoryDialog(
+            category = category,
+            onConfirm = {
+                deleteCategory = null
+                viewModel.deleteFavoriteCategory(category)
+            },
+            onDismiss = { deleteCategory = null },
+        )
+    }
+}
+
+@Composable
+private fun LibraryMiniPlayerBar(
+    state: PlayerUiState,
+    playbackModeMenuExpanded: Boolean,
+    equalizerActive: Boolean,
+    onOpenPlaybackMode: () -> Unit,
+    onDismissPlaybackMode: () -> Unit,
+    onSelectPlaybackMode: (PlaybackMode) -> Unit,
+    onOpenEqualizer: () -> Unit,
+    onPrevious: () -> Unit,
+    onTogglePlayback: () -> Unit,
+    onNext: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val track = state.currentTrack
+    val hasTrack = track != null
+    val playbackModeIcon = when (state.playbackMode) {
+        PlaybackMode.ORDER -> MiniPlayerIconKind.Repeat
+        PlaybackMode.REPEAT_ONE -> MiniPlayerIconKind.RepeatOne
+        PlaybackMode.SHUFFLE -> MiniPlayerIconKind.Shuffle
+    }
+
+    Box(
+        modifier = modifier
+            .widthIn(max = LibraryMiniPlayerMaxWidth)
+            .fillMaxWidth()
+            .height(LibraryMiniPlayerHeight)
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier.size(38.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MiniPlayerControlButton(
+                        icon = playbackModeIcon,
+                        contentDescription = "播放模式：${state.playbackMode.label}",
+                        selected = playbackModeMenuExpanded || state.playbackMode != PlaybackMode.ORDER,
+                        compact = true,
+                        onClick = onOpenPlaybackMode,
+                    )
+                    PlaybackModeDropdownMenu(
+                        expanded = playbackModeMenuExpanded,
+                        currentMode = state.playbackMode,
+                        onSelect = onSelectPlaybackMode,
+                        onDismiss = onDismissPlaybackMode,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(y = (-132).dp)
+                            .zIndex(20f),
+                    )
+                }
+                MiniPlayerControlButton(
+                    icon = MiniPlayerIconKind.Previous,
+                    contentDescription = "上一首",
+                    enabled = hasTrack,
+                    onClick = onPrevious,
+                )
+                MiniPlayerControlButton(
+                    icon = if (state.isPlaying) MiniPlayerIconKind.Pause else MiniPlayerIconKind.Play,
+                    contentDescription = if (state.isPlaying) "暂停" else "播放",
+                    enabled = hasTrack,
+                    primary = true,
+                    onClick = onTogglePlayback,
+                )
+                MiniPlayerControlButton(
+                    icon = MiniPlayerIconKind.Next,
+                    contentDescription = "下一曲",
+                    enabled = hasTrack,
+                    onClick = onNext,
+                )
+                MiniPlayerControlButton(
+                    icon = MiniPlayerIconKind.Equalizer,
+                    contentDescription = "音乐均衡器：${equalizerDisplayName(state)}",
+                    selected = equalizerActive,
+                    compact = true,
+                    onClick = onOpenEqualizer,
                 )
             }
         }
     }
+}
 
-    actionTrack?.let { track ->
-        TrackActionsDialog(
-            track = track,
-            isCaching = state.cachingTrackId == track.id,
-            cacheProgress = state.cacheProgress,
-            canCache = state.canCacheMoreMusic,
-            onCache = {
-                viewModel.cacheTrack(track)
-                actionTrack = null
-            },
-            onDismiss = { actionTrack = null },
+@Composable
+private fun EqualizerBottomSheet(
+    state: PlayerUiState,
+    onSelectPreset: (EqualizerPreset) -> Unit,
+    onBandGainChange: (Int, Float) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            EqualizerFloatingPanel(
+                state = state,
+                onSelectPreset = onSelectPreset,
+                onBandGainChange = onBandGainChange,
+                onDismiss = onDismiss,
+                modifier = Modifier
+                    .padding(horizontal = 10.dp)
+                    .navigationBarsPadding()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun EqualizerFloatingPanel(
+    state: PlayerUiState,
+    onSelectPreset: (EqualizerPreset) -> Unit,
+    onBandGainChange: (Int, Float) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val sliderHeight = 148.dp
+    val panelShape = RoundedCornerShape(24.dp)
+    Column(
+        modifier = modifier
+            .widthIn(max = 390.dp)
+            .fillMaxWidth()
+            .shadow(24.dp, panelShape, clip = false)
+            .clip(panelShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color(0xF50C365C),
+                        Color(0xF7082548),
+                        Color(0xF9051835),
+                    ),
+                ),
+            )
+            .border(1.dp, Color(0x52A9E8FF), panelShape)
+            .padding(start = 12.dp, top = 9.dp, end = 12.dp, bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .width(42.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0x66DDF7FF)),
         )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "音乐均衡器",
+                    color = Color(0xFFF4FDFF),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                )
+            }
+            EqualizerCurrentBadge(label = equalizerDisplayName(state))
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.size(34.dp),
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "关闭均衡器",
+                    tint = Color(0xFFE9FAFF),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            EqualizerPreset.values().forEach { preset ->
+                EqualizerPresetButton(
+                    preset = preset,
+                    selected = !state.isEqualizerCustom && preset == state.equalizerPreset,
+                    onClick = { onSelectPreset(preset) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            equalizerBandSpecs.forEachIndexed { index, band ->
+                EqualizerBandControl(
+                    band = band,
+                    gainDb = equalizerGainAt(state, index),
+                    sliderHeight = sliderHeight,
+                    onGainChange = { gainDb -> onBandGainChange(index, gainDb) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EqualizerCurrentBadge(label: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFFFFF469), Color(0xFFB3FF6D), Color(0xFF70F4FF)),
+                ),
+            )
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFF07244C),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun EqualizerPresetButton(
+    preset: EqualizerPreset,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val shape = RoundedCornerShape(10.dp)
+    val background = when {
+        selected -> Brush.linearGradient(listOf(Color(0xFFFFF469), Color(0xFFB3FF6D)))
+        pressed -> Brush.linearGradient(listOf(Color(0x3370F4FF), Color(0x2270F4FF)))
+        else -> Brush.linearGradient(listOf(Color(0x16FFFFFF), Color(0x0FFFFFFF)))
+    }
+    Box(
+        modifier = modifier
+            .height(32.dp)
+            .clip(shape)
+            .background(background)
+            .border(
+                width = 1.dp,
+                color = if (selected) Color(0x66FFFFFF) else Color(0x2AA5ECFF),
+                shape = shape,
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = preset.label,
+            color = if (selected) Color(0xFF07244C) else Color(0xDDEEFFFF),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun EqualizerBandControl(
+    band: EqualizerBandSpec,
+    gainDb: Float,
+    sliderHeight: Dp,
+    onGainChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = formatEqualizerGain(gainDb),
+            color = Color(0xFFFFF469),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+        )
+        EqualizerVerticalSlider(
+            gainDb = gainDb,
+            onGainChange = onGainChange,
+            modifier = Modifier
+                .height(sliderHeight)
+                .width(28.dp),
+        )
+        Text(
+            text = band.name,
+            color = Color(0xEAF4FDFF),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = band.frequency,
+            color = Color(0x93E2F6F9),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun EqualizerVerticalSlider(
+    gainDb: Float,
+    onGainChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clampedGain = clampEqualizerGainForUi(gainDb)
+    val level = equalizerLevelPercent(clampedGain)
+    Canvas(
+        modifier = modifier
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    fun updateGain(y: Float) {
+                        val height = size.height.toFloat().coerceAtLeast(1f)
+                        val ratio = 1f - (y / height).coerceIn(0f, 1f)
+                        onGainChange(clampEqualizerGainForUi(EqualizerGainMinDb + ratio * (EqualizerGainMaxDb - EqualizerGainMinDb)))
+                    }
+                    updateGain(down.position.y)
+                    drag(down.id) { change ->
+                        updateGain(change.position.y)
+                        change.consume()
+                    }
+                }
+            },
+    ) {
+        val trackWidth = 10.dp.toPx()
+        val thumbRadius = 10.5.dp.toPx()
+        val centerX = size.width / 2f
+        val trackTop = thumbRadius
+        val trackBottom = size.height - thumbRadius
+        val trackHeight = (trackBottom - trackTop).coerceAtLeast(1f)
+        val fillTop = trackTop + trackHeight * (1f - level)
+        val thumbY = fillTop.coerceIn(trackTop, trackBottom)
+
+        drawRoundRect(
+            brush = Brush.verticalGradient(
+                listOf(
+                    Color(0xB8FF70DA),
+                    Color(0xB870F4FF),
+                    Color(0xAEB3FF6D),
+                ),
+            ),
+            topLeft = Offset(centerX - trackWidth / 2f, trackTop),
+            size = Size(trackWidth, trackHeight),
+            cornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f),
+        )
+        drawRoundRect(
+            brush = Brush.verticalGradient(
+                listOf(Color(0xFFFFF469), Color(0xFF70F4FF)),
+            ),
+            topLeft = Offset(centerX - trackWidth / 2f, fillTop),
+            size = Size(trackWidth, trackBottom - fillTop),
+            cornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f),
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(
+                    Color.White,
+                    Color(0xFFFFF469),
+                    Color(0xFF70F4FF),
+                    Color(0xFFFF70DA),
+                ),
+            ),
+            radius = thumbRadius,
+            center = Offset(centerX, thumbY),
+        )
+        drawCircle(
+            color = Color(0xD9FFFFFF),
+            radius = thumbRadius,
+            center = Offset(centerX, thumbY),
+            style = Stroke(width = 2.dp.toPx()),
+        )
+    }
+}
+
+private fun equalizerDisplayName(state: PlayerUiState): String {
+    return if (state.isEqualizerCustom) "自定义" else state.equalizerPreset.label
+}
+
+private fun equalizerGainAt(state: PlayerUiState, index: Int): Float {
+    return clampEqualizerGainForUi(state.equalizerGainsDb.getOrElse(index) { 0f })
+}
+
+private fun equalizerLevelPercent(gainDb: Float): Float {
+    return ((clampEqualizerGainForUi(gainDb) - EqualizerGainMinDb) / (EqualizerGainMaxDb - EqualizerGainMinDb)).coerceIn(0f, 1f)
+}
+
+private fun clampEqualizerGainForUi(gainDb: Float): Float {
+    return ((gainDb.coerceIn(EqualizerGainMinDb, EqualizerGainMaxDb) / EqualizerGainStepDb).roundToInt() * EqualizerGainStepDb)
+}
+
+private fun formatEqualizerGain(gainDb: Float): String {
+    val halfSteps = (clampEqualizerGainForUi(gainDb) * 2f).roundToInt()
+    if (halfSteps == 0) {
+        return "0"
+    }
+    val sign = if (halfSteps > 0) "+" else ""
+    return if (halfSteps % 2 == 0) {
+        "$sign${halfSteps / 2}"
+    } else {
+        "$sign${halfSteps / 2f}"
+    }
+}
+
+@Composable
+private fun PlaybackModeDropdownMenu(
+    expanded: Boolean,
+    currentMode: PlaybackMode,
+    onSelect: (PlaybackMode) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!expanded) {
+        return
+    }
+    val menuShape = RoundedCornerShape(15.dp)
+    Column(
+        modifier = modifier
+            .requiredWidth(150.dp)
+            .requiredHeight(124.dp)
+            .shadow(18.dp, menuShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color(0xF40B3761),
+                        Color(0xF0082548),
+                        Color(0xF2051835),
+                    ),
+                ),
+                menuShape,
+            )
+            .border(1.dp, Color(0x46A9E8FF), menuShape)
+            .padding(vertical = 5.dp),
+    ) {
+        PlaybackMode.values().forEach { mode ->
+            PlaybackModeDropdownMenuItem(
+                mode = mode,
+                selected = mode == currentMode,
+                onClick = { onSelect(mode) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaybackModeDropdownMenuItem(
+    mode: PlaybackMode,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val itemShape = RoundedCornerShape(10.dp)
+    val icon = playbackModeMiniIcon(mode)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(38.dp)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(itemShape)
+            .background(
+                when {
+                    pressed -> Color(0x3670D7FF)
+                    selected -> Color(0x3B0A84FF)
+                    else -> Color.Transparent
+                },
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MiniPlayerControlIcon(
+            kind = icon,
+            modifier = Modifier.size(20.dp),
+            contentDescription = null,
+        )
+        Text(
+            text = mode.label,
+            color = if (selected) PlayingIndicatorColor else Color(0xF0EFFBFF),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(PlayingIndicatorColor),
+            )
+        }
+    }
+}
+
+private fun playbackModeMiniIcon(mode: PlaybackMode): MiniPlayerIconKind {
+    return when (mode) {
+        PlaybackMode.ORDER -> MiniPlayerIconKind.Repeat
+        PlaybackMode.REPEAT_ONE -> MiniPlayerIconKind.RepeatOne
+        PlaybackMode.SHUFFLE -> MiniPlayerIconKind.Shuffle
+    }
+}
+
+@Composable
+private fun MiniPlayerControlButton(
+    icon: MiniPlayerIconKind,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    primary: Boolean = false,
+    compact: Boolean = false,
+) {
+    val shape = CircleShape
+    val buttonSize = when {
+        primary -> 52.dp
+        compact -> 38.dp
+        else -> 43.dp
+    }
+    val iconSize = when {
+        primary -> 34.dp
+        compact -> 23.dp
+        else -> 28.dp
+    }
+    val elevation = when {
+        primary -> 13.dp
+        selected -> 8.dp
+        else -> 4.dp
+    }
+    val borderColor = when {
+        !enabled -> Color(0x1CA9E8FF)
+        primary -> Color(0x70FFFFFF)
+        selected -> Color(0x72B3FF6D)
+        icon == MiniPlayerIconKind.Equalizer -> Color(0x52B3FF6D)
+        else -> Color(0x3AA9E8FF)
+    }
+    val background = when {
+        primary -> Brush.radialGradient(
+            listOf(
+                Color(0xB5FFFFFF),
+                Color(0x62FF74DB),
+                Color(0x435BE7FF),
+            ),
+        )
+        selected -> Brush.radialGradient(
+            listOf(
+                Color(0x55FFF469),
+                Color(0x486FF6FF),
+                Color(0x2DFF5BCB),
+            ),
+        )
+        icon == MiniPlayerIconKind.Equalizer -> Brush.radialGradient(
+            listOf(
+                Color(0x36B3FF6D),
+                Color(0x2E5EEDFF),
+                Color(0x1BFF54CA),
+            ),
+        )
+        else -> Brush.radialGradient(
+            listOf(
+                Color(0x2AB9F7FF),
+                Color(0x245EF5FF),
+                Color(0x1778E7F2),
+            ),
+        )
+    }
+
+    Box(
+        modifier = modifier
+            .size(buttonSize)
+            .alpha(if (enabled) 1f else 0.42f)
+            .shadow(elevation, shape, clip = false)
+            .clip(shape)
+            .background(background)
+            .border(1.dp, borderColor, shape)
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        MiniPlayerControlIcon(
+            kind = icon,
+            modifier = Modifier.size(iconSize),
+            contentDescription = contentDescription,
+        )
+    }
+}
+
+private enum class MiniPlayerIconKind {
+    Repeat,
+    RepeatOne,
+    Shuffle,
+    Equalizer,
+    Previous,
+    Play,
+    Pause,
+    Next,
+}
+
+@Composable
+private fun MiniPlayerControlIcon(
+    kind: MiniPlayerIconKind,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+) {
+    when (kind) {
+        MiniPlayerIconKind.Previous -> WebTransportIcon(
+            kind = TransportIconKind.Previous,
+            modifier = modifier,
+            contentDescription = contentDescription,
+        )
+        MiniPlayerIconKind.Play -> WebTransportIcon(
+            kind = TransportIconKind.Play,
+            modifier = modifier,
+            contentDescription = contentDescription,
+        )
+        MiniPlayerIconKind.Pause -> WebTransportIcon(
+            kind = TransportIconKind.Pause,
+            modifier = modifier,
+            contentDescription = contentDescription,
+        )
+        MiniPlayerIconKind.Next -> WebTransportIcon(
+            kind = TransportIconKind.Next,
+            modifier = modifier,
+            contentDescription = contentDescription,
+        )
+        else -> Canvas(modifier = modifier) {
+            val sx = size.width / 24f
+            val sy = size.height / 24f
+            fun p(x: Float, y: Float) = Offset(x * sx, y * sy)
+            val core = Color(0xF7F9FEFF)
+            val cyan = Color(0xFF70F4FF)
+            val green = Color(0xFFB3FF6D)
+            val yellow = Color(0xFFFFF469)
+            val pink = Color(0xFFFF70DA)
+            val stroke = Stroke(width = 1.9f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val accentStroke = Stroke(width = 1.45f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+            when (kind) {
+                MiniPlayerIconKind.Repeat,
+                MiniPlayerIconKind.RepeatOne -> {
+                    val top = Path().apply {
+                        moveTo(6.2f * sx, 8f * sy)
+                        cubicTo(8.1f * sx, 5.9f * sy, 12.8f * sx, 5.8f * sy, 16.3f * sx, 7.7f * sy)
+                    }
+                    val bottom = Path().apply {
+                        moveTo(17.8f * sx, 16f * sy)
+                        cubicTo(15.9f * sx, 18.1f * sy, 11.2f * sx, 18.2f * sy, 7.7f * sx, 16.3f * sy)
+                    }
+                    drawPath(top, color = if (kind == MiniPlayerIconKind.RepeatOne) yellow else cyan, style = stroke)
+                    drawPath(bottom, color = core, style = stroke)
+                    drawLine(core, p(16.2f, 7.6f), p(13.8f, 5.7f), strokeWidth = 1.8f * sx, cap = StrokeCap.Round)
+                    drawLine(core, p(16.2f, 7.6f), p(13.9f, 9.7f), strokeWidth = 1.8f * sx, cap = StrokeCap.Round)
+                    drawLine(core, p(7.8f, 16.4f), p(10.2f, 18.3f), strokeWidth = 1.8f * sx, cap = StrokeCap.Round)
+                    drawLine(core, p(7.8f, 16.4f), p(10.1f, 14.3f), strokeWidth = 1.8f * sx, cap = StrokeCap.Round)
+                    if (kind == MiniPlayerIconKind.RepeatOne) {
+                        drawRoundRect(
+                            color = green,
+                            topLeft = p(11f, 9.2f),
+                            size = Size(2.1f * sx, 5.4f * sy),
+                            cornerRadius = CornerRadius(1f * sx, 1f * sy),
+                        )
+                    } else {
+                        drawCircle(color = pink, radius = 0.9f * sx, center = p(12f, 12f))
+                    }
+                }
+
+                MiniPlayerIconKind.Shuffle -> {
+                    val upper = Path().apply {
+                        moveTo(5.5f * sx, 8.2f * sy)
+                        cubicTo(9.1f * sx, 8.2f * sy, 10.3f * sx, 15.8f * sy, 15.4f * sx, 15.8f * sy)
+                    }
+                    val lower = Path().apply {
+                        moveTo(5.5f * sx, 16f * sy)
+                        cubicTo(9.5f * sx, 16f * sy, 10.2f * sx, 8.4f * sy, 15.4f * sx, 8.4f * sy)
+                    }
+                    drawPath(upper, color = green, style = stroke)
+                    drawPath(lower, color = core, style = stroke)
+                    drawLine(cyan, p(15.4f, 8.4f), p(18.7f, 6.5f), strokeWidth = 1.7f * sx, cap = StrokeCap.Round)
+                    drawLine(cyan, p(15.4f, 8.4f), p(18.7f, 10.3f), strokeWidth = 1.7f * sx, cap = StrokeCap.Round)
+                    drawLine(cyan, p(15.4f, 15.8f), p(18.7f, 13.9f), strokeWidth = 1.7f * sx, cap = StrokeCap.Round)
+                    drawLine(cyan, p(15.4f, 15.8f), p(18.7f, 17.7f), strokeWidth = 1.7f * sx, cap = StrokeCap.Round)
+                }
+
+                MiniPlayerIconKind.Equalizer -> {
+                    val barWidth = 3.1f * sx
+                    val radius = CornerRadius(1.5f * sx, 1.5f * sy)
+                    val bars = listOf(
+                        Triple(6.2f, 8.4f, 8.8f),
+                        Triple(10.4f, 5.6f, 11.6f),
+                        Triple(14.6f, 9.8f, 7.4f),
+                    )
+                    bars.forEachIndexed { index, (x, y, h) ->
+                        drawRoundRect(
+                            color = when (index) {
+                                0 -> green
+                                1 -> yellow
+                                else -> cyan
+                            },
+                            topLeft = p(x, y),
+                            size = Size(barWidth, h * sy),
+                            cornerRadius = radius,
+                        )
+                    }
+                    val wave = Path().apply {
+                        moveTo(4.9f * sx, 18.4f * sy)
+                        cubicTo(8.2f * sx, 16.7f * sy, 11.6f * sx, 20.1f * sy, 19.1f * sx, 17.6f * sy)
+                    }
+                    drawPath(wave, color = pink, style = accentStroke)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryTopTabs(
+    state: PlayerUiState,
+    onSelectQuality: (TrackQuality) -> Unit,
+    onSelectFavorites: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color(0x1AFFFFFF))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LibraryTopTabButton(
+            text = TrackQuality.LOSSLESS.label,
+            selected = state.libraryContent == LibraryContent.QUALITY && state.quality == TrackQuality.LOSSLESS,
+            onClick = { onSelectQuality(TrackQuality.LOSSLESS) },
+            modifier = Modifier.weight(1f),
+        )
+        LibraryTopTabButton(
+            text = TrackQuality.LOSSY.label,
+            selected = state.libraryContent == LibraryContent.QUALITY && state.quality == TrackQuality.LOSSY,
+            onClick = { onSelectQuality(TrackQuality.LOSSY) },
+            modifier = Modifier.weight(1f),
+        )
+        LibraryTopTabButton(
+            text = "我喜欢",
+            selected = state.libraryContent == LibraryContent.FAVORITES,
+            onClick = onSelectFavorites,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun LibraryTopTabButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) Color(0x332EEBD3) else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = if (selected) PlayingIndicatorColor else Color(0xFFD8ECF6),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = if (selected) FontWeight.Black else FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun FavoriteCategoryRail(
+    categories: List<FavoriteCategory>,
+    categoryLimit: Int,
+    activeCategoryId: Long?,
+    canCreate: Boolean,
+    actionCategoryId: Long?,
+    onSelectAll: () -> Unit,
+    onSelectCategory: (FavoriteCategory) -> Unit,
+    onCategoryAction: (FavoriteCategory) -> Unit,
+    onRenameCategory: (FavoriteCategory) -> Unit,
+    onDeleteCategory: (FavoriteCategory) -> Unit,
+    onDismissCategoryAction: () -> Unit,
+    onCreate: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        item(key = "all") {
+            FavoriteCategoryRailItem(
+                text = "全部",
+                badgeText = "${categories.size}/$categoryLimit",
+                selected = activeCategoryId == null,
+                onClick = onSelectAll,
+            )
+        }
+        items(categories, key = { it.id }) { category ->
+            Box(modifier = Modifier.fillMaxWidth()) {
+                FavoriteCategoryRailItem(
+                    text = category.name,
+                    selected = activeCategoryId == category.id,
+                    onClick = { onSelectCategory(category) },
+                    onLongClick = { onCategoryAction(category) },
+                )
+                FavoriteCategoryContextMenu(
+                    expanded = actionCategoryId == category.id,
+                    onRename = { onRenameCategory(category) },
+                    onDelete = { onDeleteCategory(category) },
+                    onDismiss = onDismissCategoryAction,
+                )
+            }
+        }
+        item(key = "create") {
+            FavoriteCategoryRailItem(
+                text = "＋",
+                selected = false,
+                enabled = canCreate,
+                onClick = onCreate,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FavoriteCategoryRailItem(
+    text: String,
+    badgeText: String? = null,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val textColor = when {
+        selected -> PlayingIndicatorColor
+        enabled -> Color(0xFFD7ECFF)
+        else -> Color(0x66D7ECFF)
+    }
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) Color(0x2A77F56C) else Color(0x0FFFFFFF))
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (badgeText.isNullOrBlank()) {
+            Text(
+                text = text,
+                color = textColor,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Black else FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        } else {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = text,
+                    color = textColor,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (selected) FontWeight.Black else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = badgeText,
+                    color = textColor,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+private fun libraryEmptyText(state: PlayerUiState, activeCategory: FavoriteCategory?): String {
+    val hasCategory = activeCategory != null
+    return when (state.libraryContent) {
+        LibraryContent.QUALITY -> when (state.quality) {
+            TrackQuality.LOSSLESS -> if (hasCategory) "该分类暂无高品质音乐" else "暂无高品质音乐"
+            TrackQuality.LOSSY -> if (hasCategory) "该分类暂无轻音乐" else "暂无轻音乐"
+        }
+        LibraryContent.FAVORITES,
+        LibraryContent.CATEGORY -> if (hasCategory) "该分类暂无喜欢的歌曲" else "还没有喜欢的歌曲"
     }
 }
 
@@ -663,17 +1900,21 @@ private fun LibraryScreen(state: PlayerUiState, viewModel: PlayerViewModel) {
 @Composable
 private fun TrackRow(
     track: Track,
-    coverUrl: String?,
-    authToken: String,
     isCurrent: Boolean,
+    isPlaying: Boolean,
+    isFavorite: Boolean,
+    showHighQualityBadge: Boolean,
     onPlay: () -> Unit,
     onMore: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
         color = if (isCurrent) Color(0x3339A4FF) else Color.Transparent,
-        shape = RoundedCornerShape(22.dp),
-        modifier = Modifier
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier
+            .widthIn(max = MusicListMaxWidth)
             .fillMaxWidth()
+            .height(MusicListRowHeight)
             .combinedClickable(
                 onClick = onPlay,
                 onLongClick = onMore,
@@ -681,25 +1922,17 @@ private fun TrackRow(
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .fillMaxSize()
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val titleColor = if (isCurrent) Color.White else Color(0xFFF3FAFF)
-            val artistColor = if (isCurrent) Color(0xFFD5F4FF) else Color(0xFFB9D2E6)
-            RemoteCoverArt(
-                url = coverUrl,
-                token = authToken,
-                maxImageSizePx = 192,
-                modifier = Modifier
-                    .size(58.dp)
-                    .shadow(8.dp, RoundedCornerShape(16.dp), clip = false)
-                    .clip(RoundedCornerShape(16.dp)),
-            )
+            val titleColor = if (isCurrent) PlayingIndicatorColor else Color(0xFFF3FAFF)
+            val artistColor = if (isCurrent) PlayingIndicatorColor else Color(0xFFB9D2E6)
+            val metaColor = if (isCurrent) PlayingIndicatorColor else Color(0xFFB8F3EF)
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
             ) {
                 Text(
                     text = track.title.ifBlank { "未知歌曲" },
@@ -709,13 +1942,46 @@ private fun TrackRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = track.artist.ifBlank { "未知歌手" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = artistColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = track.artist.ifBlank { "未知歌手" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = artistColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (showHighQualityBadge) {
+                        Text(
+                            text = "高品质",
+                            color = if (isCurrent) PlayingIndicatorColor else Color(0xFFFFF469),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 1,
+                        )
+                    }
+                    if (isFavorite) {
+                        Text(
+                            text = "我喜欢",
+                            color = metaColor,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            if (isCurrent) {
+                PlayingEqualizer(
+                    active = isPlaying,
+                    modifier = Modifier
+                        .width(26.dp)
+                        .height(24.dp),
                 )
             }
         }
@@ -723,45 +1989,612 @@ private fun TrackRow(
 }
 
 @Composable
-private fun TrackActionsDialog(
-    track: Track,
+private fun PlayingEqualizer(
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var phase by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(active) {
+        if (!active) {
+            phase = 0f
+            return@LaunchedEffect
+        }
+        while (true) {
+            withFrameNanos { frameTime ->
+                phase = (frameTime / 1_000_000_000f) * 4.2f
+            }
+        }
+    }
+
+    Canvas(modifier = modifier) {
+        val barWidth = size.width * 0.18f
+        val gap = size.width * 0.16f
+        val totalWidth = barWidth * 3f + gap * 2f
+        val startX = (size.width - totalWidth) / 2f
+        val minHeight = size.height * 0.24f
+        val maxHeight = size.height * 0.94f
+        val green = PlayingIndicatorColor
+        val inactiveGreen = PlayingIndicatorColor
+        val phases = listOf(0f, 1.72f, 3.41f)
+        val usedHeights = mutableListOf<Float>()
+
+        phases.forEachIndexed { index, offset ->
+            val wave = if (active) {
+                kotlin.math.sin((phase + offset).toDouble()).toFloat()
+            } else {
+                listOf(-0.25f, 0.35f, -0.55f)[index]
+            }
+            val normalized = ((wave + 1f) / 2f).coerceIn(0f, 1f)
+            val heightBias = listOf(0.00f, 0.12f, -0.10f)[index]
+            var barHeight = (minHeight + (maxHeight - minHeight) * normalized + size.height * heightBias)
+                .coerceIn(minHeight, maxHeight)
+            usedHeights.forEach { usedHeight ->
+                if (kotlin.math.abs(barHeight - usedHeight) < size.height * 0.08f) {
+                    barHeight = (barHeight + size.height * (0.11f + index * 0.04f)).coerceIn(minHeight, maxHeight)
+                    if (kotlin.math.abs(barHeight - usedHeight) < size.height * 0.08f) {
+                        barHeight = (barHeight - size.height * (0.17f + index * 0.03f)).coerceIn(minHeight, maxHeight)
+                    }
+                }
+            }
+            usedHeights += barHeight
+            val left = startX + index * (barWidth + gap)
+            val bounceWave = if (active) {
+                kotlin.math.sin((phase * 1.28f + offset * 1.37f).toDouble()).toFloat()
+            } else {
+                listOf(0.18f, -0.12f, 0.06f)[index]
+            }
+            val centerY = (size.height / 2f + bounceWave * size.height * 0.16f)
+                .coerceIn(barHeight / 2f, size.height - barHeight / 2f)
+            val top = (centerY - barHeight / 2f).coerceIn(0f, size.height - barHeight)
+
+            drawRoundRect(
+                color = if (active) green else inactiveGreen.copy(alpha = 0.78f),
+                topLeft = Offset(left, top),
+                size = Size(barWidth, barHeight),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrackContextMenu(
+    expanded: Boolean,
+    showingCategories: Boolean,
+    isFavorite: Boolean,
+    isInActiveCategory: Boolean,
+    isCached: Boolean,
     isCaching: Boolean,
-    cacheProgress: Float?,
-    canCache: Boolean,
-    onCache: () -> Unit,
+    cacheActionEnabled: Boolean,
+    categories: List<FavoriteCategory>,
+    joinedCategoryIds: Set<Long>,
+    onToggleFavorite: () -> Unit,
+    onShowCategories: () -> Unit,
+    onAddToCategory: (FavoriteCategory) -> Unit,
+    onCacheTrack: () -> Unit,
+    onRemoveCachedTrack: () -> Unit,
+    onRemoveFromCategory: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    val menuShape = RoundedCornerShape(14.dp)
+    val cacheActionText = when {
+        isCaching -> "缓存中..."
+        isCached -> "取消缓存"
+        else -> "缓存到本地"
+    }
+    val menuWidth = contextMenuWidthForLabels(
+        labels = if (showingCategories) {
+            if (categories.isEmpty()) listOf("暂无分类") else categories.map { it.name }
+        } else {
+            listOf(
+                if (isInActiveCategory && onRemoveFromCategory != null) "移出分类" else if (isFavorite) "取消收藏" else "收藏",
+                "加入分类",
+                cacheActionText,
+            )
+        },
+        hasTrailingText = showingCategories && categories.any { it.id in joinedCategoryIds },
+    )
+    DropdownMenu(
+        expanded = expanded,
         onDismissRequest = onDismiss,
-        title = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(track.artist.ifBlank { "未知歌手" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (isCaching) {
-                    LinearProgressIndicator(
-                        progress = { cacheProgress ?: 0f },
-                        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .width(menuWidth)
+            .shadow(18.dp, menuShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color(0xF00C365C),
+                        Color(0xE909264C),
+                        Color(0xEB061938),
+                    ),
+                ),
+                menuShape,
+            )
+            .border(1.dp, Color(0x38A2DCFF), menuShape),
+        shape = menuShape,
+        containerColor = Color.Transparent,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        if (showingCategories) {
+            if (categories.isEmpty()) {
+                CompactContextMenuItem(
+                    text = "暂无分类",
+                    enabled = false,
+                    onClick = {},
+                )
+            } else {
+                categories.forEach { category ->
+                    val joined = category.id in joinedCategoryIds
+                    CompactContextMenuItem(
+                        text = category.name,
+                        trailingText = if (joined) "已加入" else null,
+                        selected = joined,
+                        centered = false,
+                        enabled = !joined,
+                        onClick = { onAddToCategory(category) },
                     )
                 }
             }
-        },
-        confirmButton = {
-            if (track.isLosslessFlac) {
-                TextButton(onClick = onCache, enabled = !isCaching && canCache) {
-                    Text(
-                        when {
-                            isCaching -> "缓存中"
-                            !canCache -> "空间不足"
-                            else -> "缓存到本机"
-                        },
+        } else {
+            if (isInActiveCategory && onRemoveFromCategory != null) {
+                CompactContextMenuItem(
+                    text = "移出分类",
+                    onClick = onRemoveFromCategory,
+                )
+            } else {
+                CompactContextMenuItem(
+                    text = if (isFavorite) "取消收藏" else "收藏",
+                    onClick = onToggleFavorite,
+                )
+            }
+            CompactContextMenuItem(
+                text = "加入分类",
+                onClick = onShowCategories,
+            )
+            CompactContextMenuItem(
+                text = cacheActionText,
+                enabled = cacheActionEnabled && !isCaching,
+                onClick = if (isCached) onRemoveCachedTrack else onCacheTrack,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactContextMenuItem(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    trailingText: String? = null,
+    centered: Boolean = true,
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    contentColor: Color? = null,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val backgroundColor = when {
+        pressed -> Color(0x336EB9EE)
+        selected -> Color(0x2E0A84FF)
+        else -> Color.Transparent
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .padding(horizontal = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (centered && trailingText == null) Arrangement.Center else Arrangement.Start,
+    ) {
+        Text(
+            text = text,
+            color = contentColor ?: if (enabled || selected) Color(0xF0EFFBFF) else Color(0x8AEFFBFF),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = if (centered) TextAlign.Center else TextAlign.Start,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = if (centered && trailingText == null) Modifier else Modifier.weight(1f),
+        )
+        if (trailingText != null) {
+            Text(
+                text = trailingText,
+                color = Color(0xC484D0FF),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FavoriteCategoryContextMenu(
+    expanded: Boolean,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val menuShape = RoundedCornerShape(14.dp)
+    val menuWidth = contextMenuWidthForLabels(listOf("重命名", "删除"))
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        offset = DpOffset(x = 66.dp, y = (-4).dp),
+        modifier = Modifier
+            .width(menuWidth)
+            .shadow(18.dp, menuShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color(0xF00C365C),
+                        Color(0xE909264C),
+                        Color(0xEB061938),
+                    ),
+                ),
+                menuShape,
+            )
+            .border(1.dp, Color(0x38A2DCFF), menuShape),
+        shape = menuShape,
+        containerColor = Color.Transparent,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        CompactContextMenuItem(
+            text = "重命名",
+            centered = false,
+            onClick = onRename,
+        )
+        CompactContextMenuItem(
+            text = "删除",
+            centered = false,
+            contentColor = Color(0xFFFFB4AB),
+            onClick = onDelete,
+        )
+    }
+}
+
+private fun contextMenuWidthForLabels(
+    labels: List<String>,
+    hasTrailingText: Boolean = false,
+): Dp {
+    val maxTextUnits = labels.maxOfOrNull(::weightedTextUnits) ?: 0
+    val trailingReserve = if (hasTrailingText) 48 else 0
+    return (maxTextUnits * 8 + trailingReserve + 36).dp.coerceIn(112.dp, 220.dp)
+}
+
+private fun weightedTextUnits(text: String): Int {
+    return text.sumOf { char ->
+        if (char.code <= 0x7F) 1 else 2
+    }
+}
+
+@Composable
+private fun CompactAppDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+    actions: @Composable () -> Unit,
+) {
+    val panelShape = RoundedCornerShape(18.dp)
+    val backdropInteraction = remember { MutableInteractionSource() }
+    val panelInteraction = remember { MutableInteractionSource() }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x2405172B))
+                .clickable(
+                    interactionSource = backdropInteraction,
+                    indication = null,
+                    onClick = onDismiss,
+                )
+                .padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = modifier
+                    .widthIn(max = 320.dp)
+                    .shadow(18.dp, panelShape)
+                    .clip(panelShape)
+                    .background(compactOverlayBrush())
+                    .border(1.dp, Color(0x38A2DCFF), panelShape)
+                    .clickable(
+                        interactionSource = panelInteraction,
+                        indication = null,
+                        onClick = {},
                     )
+                    .padding(horizontal = 15.dp, vertical = 13.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = title,
+                    color = Color(0xFFF0FBFF),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                content()
+                Row(
+                    modifier = Modifier.align(Alignment.End),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    actions()
                 }
             }
+        }
+    }
+}
+
+private fun compactOverlayBrush(): Brush {
+    return Brush.linearGradient(
+        listOf(
+            Color(0xF20C365C),
+            Color(0xEE09264C),
+            Color(0xF0061938),
+        ),
+    )
+}
+
+@Composable
+private fun CompactDialogTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    maxLength: Int,
+) {
+    val fieldShape = RoundedCornerShape(11.dp)
+    val textLength = value.codePointCount(0, value.length)
+    Column(
+        modifier = Modifier
+            .widthIn(min = 220.dp, max = 280.dp)
+            .width(IntrinsicSize.Max),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = { onValueChange(it.truncateToCodePointLimit(maxLength)) },
+            singleLine = true,
+            cursorBrush = SolidColor(Color(0xFF8FEFE3)),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = Color(0xFFF1FBFF),
+                fontWeight = FontWeight.SemiBold,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .clip(fieldShape)
+                .background(Color(0x2A6EB9EE))
+                .border(1.dp, Color(0x42A2DCFF), fieldShape)
+                .padding(horizontal = 11.dp),
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            color = Color(0x8FD4EAF6),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    innerTextField()
+                }
+            },
+        )
+        Text(
+            text = "名称长度 $textLength/$maxLength",
+            color = Color(0xA6B7D8EC),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.align(Alignment.End),
+        )
+    }
+}
+
+@Composable
+private fun FavoriteCategoryQuotaLine(
+    categoryCount: Int,
+    categoryLimit: Int,
+) {
+    val isFull = categoryCount >= categoryLimit
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(
+            modifier = Modifier.widthIn(min = 220.dp, max = 280.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "自定义分类",
+                color = Color(0xCCD7ECF6),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "$categoryCount/$categoryLimit",
+                color = if (isFull) Color(0xFFFFB4AB) else PlayingIndicatorColor,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Black,
+            )
+        }
+        if (isFull) {
+            Text(
+                text = "已达上限，请先删除不需要的分类",
+                color = Color(0xFFFFB4AB),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+private fun String.truncateToCodePointLimit(maxCodePoints: Int): String {
+    if (maxCodePoints <= 0) return ""
+    return if (codePointCount(0, length) <= maxCodePoints) {
+        this
+    } else {
+        substring(0, offsetByCodePoints(0, maxCodePoints))
+    }
+}
+
+@Composable
+private fun CompactDialogAction(
+    text: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    primary: Boolean = false,
+    destructive: Boolean = false,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val shape = RoundedCornerShape(10.dp)
+    val backgroundColor = when {
+        !enabled -> Color(0x102B6C93)
+        destructive && pressed -> Color(0x42FF6B73)
+        destructive -> Color(0x24FF6B73)
+        primary && pressed -> Color(0x5C0A84FF)
+        primary -> Color(0x3D0A84FF)
+        pressed -> Color(0x336EB9EE)
+        else -> Color.Transparent
+    }
+    Box(
+        modifier = Modifier
+            .height(34.dp)
+            .clip(shape)
+            .background(backgroundColor)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = when {
+                !enabled -> Color(0x70D7EBF6)
+                destructive -> Color(0xFFFFB4AB)
+                primary -> Color(0xFFEAF9FF)
+                else -> Color(0xDDEAF7FF)
+            },
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun CreateFavoriteCategoryDialog(
+    categoryCount: Int,
+    categoryLimit: Int,
+    categoryNameMaxLength: Int,
+    isSubmitting: Boolean,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    val isCategoryFull = categoryCount >= categoryLimit
+    CompactAppDialog(
+        title = "新建分类",
+        onDismiss = onDismiss,
+        content = {
+            FavoriteCategoryQuotaLine(
+                categoryCount = categoryCount,
+                categoryLimit = categoryLimit,
+            )
+            CompactDialogTextField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "分类名称",
+                maxLength = categoryNameMaxLength,
+            )
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
-            }
+        actions = {
+            CompactDialogAction(text = "取消", onClick = onDismiss)
+            CompactDialogAction(
+                text = when {
+                    isSubmitting -> "创建中"
+                    isCategoryFull -> "已满"
+                    else -> "创建"
+                },
+                onClick = { onConfirm(name) },
+                enabled = name.isNotBlank() && !isSubmitting && !isCategoryFull,
+                primary = true,
+            )
+        },
+    )
+}
+
+@Composable
+private fun RenameFavoriteCategoryDialog(
+    category: FavoriteCategory,
+    categoryNameMaxLength: Int,
+    isSubmitting: Boolean,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by rememberSaveable(category.id) { mutableStateOf(category.name) }
+    val trimmedName = name.trim()
+
+    CompactAppDialog(
+        title = "重命名分类",
+        onDismiss = onDismiss,
+        content = {
+            CompactDialogTextField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "分类名称",
+                maxLength = categoryNameMaxLength,
+            )
+        },
+        actions = {
+            CompactDialogAction(text = "取消", onClick = onDismiss)
+            CompactDialogAction(
+                text = if (isSubmitting) "保存中" else "保存",
+                onClick = { onConfirm(name) },
+                enabled = trimmedName.isNotBlank() && trimmedName != category.name && !isSubmitting,
+                primary = true,
+            )
+        },
+    )
+}
+
+@Composable
+private fun DeleteFavoriteCategoryDialog(
+    category: FavoriteCategory,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    CompactAppDialog(
+        title = "删除分类",
+        onDismiss = onDismiss,
+        content = {
+            Text(
+                text = "确定删除“${category.name}”吗？歌曲和收藏不会被删除。",
+                color = Color(0xD7D9EEF8),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.widthIn(max = 280.dp),
+            )
+        },
+        actions = {
+            CompactDialogAction(text = "取消", onClick = onDismiss)
+            CompactDialogAction(text = "删除", onClick = onConfirm, destructive = true)
         },
     )
 }
@@ -776,11 +2609,7 @@ private fun LyricsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF0E3A5A), Color(0xFF071629), Color(0xFF040914)),
-                ),
-            )
+            .background(webBlueGradient())
             .padding(20.dp),
     ) {
         if (track == null) {
@@ -809,14 +2638,23 @@ private fun LyricsScreen(
                         Spacer(Modifier.height(8.dp))
                         AssistChip(
                             onClick = {},
-                            label = { Text("本地 FLAC 缓存播放") },
+                            label = { Text("本地音乐缓存播放") },
                         )
                     }
                 }
+                WebTransportButton(
+                    icon = if (state.isPlaying) TransportIconKind.Pause else TransportIconKind.Play,
+                    contentDescription = if (state.isPlaying) "暂停" else "播放",
+                    isPlayToggle = true,
+                    onClick = viewModel::togglePlayback,
+                )
             }
-            KaraokeLyrics(
+            LiveKaraokeLyrics(
                 lines = state.currentLyrics?.lines.orEmpty(),
-                positionSeconds = state.currentPositionMs / 1000.0,
+                trackId = track.id,
+                positionMs = state.currentPositionMs,
+                isPlaying = state.isPlaying,
+                viewModel = viewModel,
                 modifier = Modifier
                     .weight(1f)
                     .padding(bottom = lyricsBottomPadding),
@@ -825,18 +2663,59 @@ private fun LyricsScreen(
     }
 }
 
+@Composable
+private fun LiveKaraokeLyrics(
+    lines: List<LyricLine>,
+    trackId: Long,
+    positionMs: Long,
+    isPlaying: Boolean,
+    viewModel: PlayerViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val livePositionMs by produceState(
+        positionMs,
+        trackId,
+        isPlaying,
+        if (isPlaying) 0L else positionMs,
+    ) {
+        if (!isPlaying) {
+            value = positionMs
+            return@produceState
+        }
+        while (true) {
+            withFrameNanos { }
+            value = viewModel.playbackPositionMs()
+        }
+    }
+    KaraokeLyrics(
+        lines = lines,
+        positionSeconds = livePositionMs / 1_000.0,
+        onSeekAndPlay = { seconds ->
+            viewModel.seekToAndPlay((seconds * 1_000).toLong())
+        },
+        modifier = modifier,
+    )
+}
+
 private fun webBlueGradient(): Brush {
     return Brush.verticalGradient(
         listOf(
-            Color(0xFF081A37),
-            Color(0xFF153E62),
-            Color(0xFF071A30),
+            Color(0xFF8FB6C8),
+            Color(0xFF6695A7),
+            Color(0xFF48778A),
+            Color(0xFF2B5A70),
+            Color(0xFF153348),
         ),
     )
 }
 
 @Composable
-private fun KaraokeLyrics(lines: List<LyricLine>, positionSeconds: Double, modifier: Modifier = Modifier) {
+private fun KaraokeLyrics(
+    lines: List<LyricLine>,
+    positionSeconds: Double,
+    onSeekAndPlay: (Double) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     if (lines.isEmpty()) {
         EmptyState(title = "暂无歌词", subtitle = "服务器暂未返回这首歌的歌词。")
         return
@@ -844,55 +2723,329 @@ private fun KaraokeLyrics(lines: List<LyricLine>, positionSeconds: Double, modif
 
     val timedLines = lines.mapIndexedNotNull { index, line -> line.timeSeconds?.let { index to it } }
     val activeIndex = timedLines.lastOrNull { it.second <= positionSeconds }?.first ?: 0
-    val firstVisibleIndex = (activeIndex - 4).coerceAtLeast(0)
-    val lastVisibleIndexExclusive = (activeIndex + 5).coerceAtMost(lines.size)
-    val visibleLines = lines.subList(firstVisibleIndex, lastVisibleIndexExclusive)
+    val listState = rememberLazyListState()
+    val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
+    var isBrowsingLyrics by remember(lines) { mutableStateOf(false) }
+    var selectedLineIndex by remember(lines) { mutableStateOf<Int?>(null) }
+    var manualInteractionVersion by remember(lines) { mutableStateOf(0) }
 
-    Column(
+    LaunchedEffect(activeIndex, isBrowsingLyrics, lines.size) {
+        if (!isBrowsingLyrics) {
+            listState.scrollToItem((activeIndex - 4).coerceAtLeast(0))
+        }
+    }
+
+    LaunchedEffect(isUserDragging) {
+        if (isUserDragging) {
+            isBrowsingLyrics = true
+            manualInteractionVersion += 1
+        }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { isScrolling ->
+            if (!isScrolling && isBrowsingLyrics) {
+                selectedLineIndex = centeredTimedLyricIndex(listState, lines)
+                manualInteractionVersion += 1
+            }
+        }
+    }
+
+    LaunchedEffect(isBrowsingLyrics, manualInteractionVersion) {
+        if (isBrowsingLyrics) {
+            delay(5_000L)
+            isBrowsingLyrics = false
+            selectedLineIndex = null
+        }
+    }
+
+    LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxWidth()
             .fillMaxHeight()
             .padding(top = 12.dp),
+        contentPadding = PaddingValues(vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
     ) {
-        visibleLines.forEachIndexed { offset, line ->
-            val index = firstVisibleIndex + offset
+        items(lines.size) { index ->
+            val line = lines[index]
             val isActive = index == activeIndex
             val distanceFromActive = kotlin.math.abs(index - activeIndex)
-            Text(
-                text = karaokeLineText(line, positionSeconds, isActive),
-                style = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                fontWeight = if (isActive) FontWeight.Black else FontWeight.Medium,
-                color = if (isActive) Color.White else Color(0xFFB7D8F2),
+            val lineTimeSeconds = line.timeSeconds
+            val showJumpAction = isBrowsingLyrics &&
+                selectedLineIndex == index
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alpha(if (distanceFromActive >= 4) 0.72f else 1f),
-            )
+                    .heightIn(min = if (isActive) 42.dp else 34.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SmoothKaraokeLine(
+                    line = line,
+                    lineIndex = index,
+                    lines = lines,
+                    activeIndex = activeIndex,
+                    positionSeconds = positionSeconds,
+                    isActive = isActive,
+                    distanceFromActive = distanceFromActive,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = if (showJumpAction) 88.dp else 0.dp),
+                )
+                if (showJumpAction && lineTimeSeconds != null) {
+                    LyricLineJumpAction(
+                        timeSeconds = lineTimeSeconds,
+                        onClick = {
+                            isBrowsingLyrics = false
+                            selectedLineIndex = null
+                            onSeekAndPlay(lineTimeSeconds)
+                        },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 4.dp),
+                    )
+                }
+            }
         }
     }
 }
 
-private fun karaokeLineText(line: LyricLine, positionSeconds: Double, isActive: Boolean) = buildAnnotatedString {
-    if (line.words.isEmpty()) {
-        withStyle(SpanStyle(color = if (isActive) Color.White else Color(0xFFB7D8F2))) {
-            append(line.text)
+private fun centeredTimedLyricIndex(listState: LazyListState, lines: List<LyricLine>): Int? {
+    val layoutInfo = listState.layoutInfo
+    val visibleItems = layoutInfo.visibleItemsInfo
+    if (visibleItems.isEmpty()) {
+        return null
+    }
+    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+    return visibleItems
+        .filter { item -> lines.getOrNull(item.index)?.timeSeconds != null }
+        .minByOrNull { item ->
+            kotlin.math.abs(item.offset + item.size / 2 - viewportCenter)
         }
-        return@buildAnnotatedString
+        ?.index
+}
+
+@Composable
+private fun LyricLineJumpAction(
+    timeSeconds: Double,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0x33153348))
+            .border(1.dp, Color(0x55D6F6FF), RoundedCornerShape(999.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 9.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.PlayArrow,
+            contentDescription = null,
+            tint = Color(0xFFEAFBFF),
+            modifier = Modifier.size(15.dp),
+        )
+        Text(
+            text = formatDuration((timeSeconds * 1_000).toLong()),
+            color = Color(0xFFEAFBFF),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun SmoothKaraokeLine(
+    line: LyricLine,
+    lineIndex: Int,
+    lines: List<LyricLine>,
+    activeIndex: Int,
+    positionSeconds: Double,
+    isActive: Boolean,
+    distanceFromActive: Int,
+    modifier: Modifier = Modifier,
+) {
+    val lineText = remember(line) {
+        line.text.ifBlank { line.words.joinToString(separator = "") { word -> word.text } }
+    }
+    val textStyle = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium
+    val textWeight = if (isActive) FontWeight.Black else FontWeight.Medium
+    val lineAlpha = if (distanceFromActive >= 4) 0.72f else 1f
+
+    if (isActive) {
+        SmoothKaraokeActiveLine(
+            line = line,
+            fallbackText = lineText,
+            positionSeconds = positionSeconds,
+            style = textStyle,
+            modifier = modifier
+                .fillMaxWidth()
+                .alpha(lineAlpha),
+        )
+    } else {
+        Text(
+            text = lineText,
+            style = textStyle,
+            fontWeight = textWeight,
+            color = if (lineIndex < activeIndex) Color(0xFFE7F7FF) else Color(0xFFC2DDEE),
+            textAlign = TextAlign.Center,
+            softWrap = true,
+            overflow = TextOverflow.Visible,
+            modifier = modifier
+                .fillMaxWidth()
+                .alpha(lineAlpha),
+        )
+    }
+}
+
+@Composable
+private fun SmoothKaraokeActiveLine(
+    line: LyricLine,
+    fallbackText: String,
+    positionSeconds: Double,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    val timedText = remember(line, fallbackText) {
+        line.words.joinToString(separator = "") { word -> word.text }
+            .takeIf { it.isNotEmpty() }
+            ?: fallbackText
+    }
+    val reveal = calculateLyricReveal(
+        words = line.words,
+        text = timedText,
+        positionSeconds = positionSeconds,
+    )
+    var textLayout by remember(timedText) { mutableStateOf<TextLayoutResult?>(null) }
+
+    Box(modifier = modifier) {
+        Text(
+            text = timedText,
+            style = style,
+            fontWeight = FontWeight.Black,
+            color = Color(0xFFD6ECFA),
+            textAlign = TextAlign.Center,
+            softWrap = true,
+            overflow = TextOverflow.Visible,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = timedText,
+            style = style,
+            fontWeight = FontWeight.Black,
+            color = Color(0xFFFFF3C6),
+            textAlign = TextAlign.Center,
+            softWrap = true,
+            overflow = TextOverflow.Visible,
+            onTextLayout = { layout ->
+                if (textLayout != layout) {
+                    textLayout = layout
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawWithContent {
+                    val layout = textLayout ?: return@drawWithContent
+                    if (reveal.characterOffset >= timedText.length) {
+                        drawContent()
+                        return@drawWithContent
+                    }
+                    if (reveal.characterOffset <= 0 && reveal.characterProgress <= 0f) {
+                        return@drawWithContent
+                    }
+
+                    val offset = reveal.characterOffset.coerceIn(0, timedText.lastIndex)
+                    val activeLine = layout.getLineForOffset(offset)
+                    for (lineIndex in 0 until activeLine) {
+                        clipRect(
+                            left = layout.getLineLeft(lineIndex),
+                            top = layout.getLineTop(lineIndex),
+                            right = layout.getLineRight(lineIndex),
+                            bottom = layout.getLineBottom(lineIndex),
+                        ) {
+                            this@drawWithContent.drawContent()
+                        }
+                    }
+
+                    val lineStart = layout.getLineStart(activeLine)
+                    val lineEnd = layout.getLineEnd(activeLine, visibleEnd = true)
+                    val characterOffset = offset.coerceIn(lineStart, lineEnd)
+                    val characterStartX = layout.getHorizontalPosition(characterOffset, usePrimaryDirection = true)
+                    val nextOffset = (characterOffset + 1).coerceAtMost(lineEnd)
+                    val characterEndX = if (nextOffset > characterOffset) {
+                        layout.getHorizontalPosition(nextOffset, usePrimaryDirection = true)
+                    } else {
+                        characterStartX
+                    }
+                    val revealX = characterStartX +
+                        (characterEndX - characterStartX) * reveal.characterProgress
+                    val lineLeft = layout.getLineLeft(activeLine)
+                    val lineRight = layout.getLineRight(activeLine)
+                    clipRect(
+                        left = minOf(lineLeft, lineRight),
+                        top = layout.getLineTop(activeLine),
+                        right = revealX.coerceIn(minOf(lineLeft, lineRight), maxOf(lineLeft, lineRight)),
+                        bottom = layout.getLineBottom(activeLine),
+                    ) {
+                        this@drawWithContent.drawContent()
+                    }
+                },
+        )
+    }
+}
+
+private data class LyricReveal(
+    val characterOffset: Int,
+    val characterProgress: Float,
+)
+
+private fun calculateLyricReveal(
+    words: List<LyricWord>,
+    text: String,
+    positionSeconds: Double,
+): LyricReveal {
+    if (words.isEmpty() || text.isEmpty()) {
+        return LyricReveal(text.length, 0f)
     }
 
-    line.words.forEach { word ->
-        val finished = positionSeconds >= word.endSeconds
-        val active = positionSeconds in word.startSeconds..word.endSeconds
-        val color = when {
-            finished -> Color.White
-            active -> Color(0xFFFFF7AD)
-            isActive -> Color(0xFFD6ECFF)
-            else -> Color(0xFF8FB6D2)
+    var completedCharacters = 0
+    words.forEach { word ->
+        val characterCount = word.text.length
+        if (characterCount <= 0) {
+            return@forEach
         }
-        withStyle(SpanStyle(color = color)) {
-            append(word.text)
+        if (word.endSeconds <= word.startSeconds) {
+            if (positionSeconds < word.startSeconds) {
+                return LyricReveal(completedCharacters.coerceAtMost(text.length), 0f)
+            }
+            completedCharacters += characterCount
+            return@forEach
         }
+        if (positionSeconds >= word.endSeconds) {
+            completedCharacters += characterCount
+            return@forEach
+        }
+        if (positionSeconds <= word.startSeconds) {
+            return LyricReveal(completedCharacters.coerceAtMost(text.length), 0f)
+        }
+
+        val wordProgress = ((positionSeconds - word.startSeconds) /
+            (word.endSeconds - word.startSeconds)).toFloat().coerceIn(0f, 1f)
+        val preciseCharacters = characterCount * wordProgress
+        val wholeCharacters = preciseCharacters.toInt().coerceIn(0, characterCount)
+        return LyricReveal(
+            characterOffset = (completedCharacters + wholeCharacters).coerceAtMost(text.length),
+            characterProgress = preciseCharacters - wholeCharacters,
+        )
     }
+    return LyricReveal(text.length, 0f)
 }
 
 @Composable
@@ -936,7 +3089,9 @@ private fun ProfileHomeScreen(
     onOpenAbout: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(webBlueGradient()),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -946,29 +3101,19 @@ private fun ProfileHomeScreen(
             }
         }
         item {
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A294B)),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column {
-                    ProfileMenuItem(
-                        icon = Icons.Default.Settings,
-                        title = "设置",
-                        description = "缓存、播放与账户设置",
-                        onClick = onOpenSettings,
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 68.dp, end = 16.dp),
-                        color = Color(0x244DB0D6),
-                    )
-                    ProfileMenuItem(
-                        icon = Icons.Default.Info,
-                        title = "关于",
-                        description = "版本与产品信息",
-                        onClick = onOpenAbout,
-                    )
-                }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                ProfileMenuItem(
+                    icon = Icons.Default.Settings,
+                    title = "设置",
+                    description = "缓存、播放与账户设置",
+                    onClick = onOpenSettings,
+                )
+                ProfileMenuItem(
+                    icon = Icons.Default.Info,
+                    title = "关于",
+                    description = "版本与产品信息",
+                    onClick = onOpenAbout,
+                )
             }
         }
     }
@@ -991,9 +3136,7 @@ private fun ProfileMenuItem(
     ) {
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0x267BE7D5)),
+                .size(40.dp),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1031,10 +3174,14 @@ private fun ProfileSettingsScreen(
         viewModel.refreshCacheStorageLimits()
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(webBlueGradient()),
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item { ProfileSubpageHeader(title = "设置", onBack = onBack) }
@@ -1055,18 +3202,22 @@ private fun ProfileSettingsScreen(
                     onStop = viewModel::stopSleepTimer,
                 )
             }
-        }
-        TextButton(
-            onClick = viewModel::logout,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 20.dp),
-        ) {
-            Text(
-                text = "退出登录",
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleMedium,
-            )
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TextButton(onClick = viewModel::logout) {
+                        Text(
+                            text = "退出登录",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -1209,18 +3360,13 @@ private fun CacheSettingsCard(
                         }
                     },
                 )
-                Surface(
-                    color = Color(0x267DE8D6),
-                    shape = RoundedCornerShape(999.dp),
-                ) {
-                    Text(
-                        if (state.maxCacheLimitGb < 1) "空间不足" else "${state.cacheLimitGb}G",
-                        color = Color(0xFF91EDDE),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                    )
-                }
+                Text(
+                    if (state.maxCacheLimitGb < 1) "空间不足" else "${state.cacheLimitGb}G",
+                    color = Color(0xFF91EDDE),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 5.dp),
+                )
             }
             TextButton(onClick = onManageMusicFiles) {
                 Icon(Icons.Default.MusicNote, contentDescription = null)
@@ -1244,6 +3390,12 @@ private fun CacheManagementDialog(
     } else {
         0f
     }
+    val maxTitleUnits = state.cachedMusicFiles.maxOfOrNull { weightedTextUnits(it.title) } ?: 0
+    val adaptiveWidth = (maxTitleUnits * 6 + 130).dp.coerceIn(280.dp, 360.dp)
+    val adaptiveHeight = (288 + state.cachedMusicFiles.size.coerceIn(0, 5) * 56).dp
+    val panelShape = RoundedCornerShape(18.dp)
+    val backdropInteraction = remember { MutableInteractionSource() }
+    val panelInteraction = remember { MutableInteractionSource() }
 
     LaunchedEffect(cachedTrackIds) {
         selectedTrackIds = selectedTrackIds.intersect(cachedTrackIds)
@@ -1253,42 +3405,65 @@ private fun CacheManagementDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .fillMaxHeight(0.82f),
-            shape = RoundedCornerShape(28.dp),
-            color = Color(0xFF092641),
-            tonalElevation = 8.dp,
+                .fillMaxSize()
+                .background(Color(0x2405172B))
+                .clickable(
+                    interactionSource = backdropInteraction,
+                    indication = null,
+                    onClick = onDismiss,
+                )
+                .padding(20.dp),
+            contentAlignment = Alignment.Center,
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier
+                    .width(adaptiveWidth)
+                    .height(adaptiveHeight)
+                    .shadow(18.dp, panelShape)
+                    .clip(panelShape)
+                    .background(compactOverlayBrush())
+                    .border(1.dp, Color(0x38A2DCFF), panelShape)
+                    .clickable(
+                        interactionSource = panelInteraction,
+                        indication = null,
+                        onClick = {},
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "管理音乐文件",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Black,
-                        )
-                    }
-                    IconButton(onClick = onDismiss) {
+                    Text(
+                        text = "管理音乐文件",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFFF0FBFF),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "关闭",
                             tint = Color(0xFFC8E8F7),
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         text = "${formatBytes(state.cacheStats.totalBytes)} / ${formatBytes(state.cacheStats.maxBytes)}",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF93F0DE),
                     )
@@ -1296,24 +3471,11 @@ private fun CacheManagementDialog(
                         progress = { usageProgress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(6.dp)
+                            .height(4.dp)
                             .clip(CircleShape),
                         color = Color(0xFF71E4D2),
                         trackColor = Color(0xFF234A65),
                     )
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "当前缓存 ${formatBytes(state.cacheStats.totalBytes)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFA9CCE1),
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(
-                            text = "容量 ${formatBytes(state.cacheStats.maxBytes)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFA9CCE1),
-                        )
-                    }
                 }
 
                 Row(
@@ -1327,13 +3489,12 @@ private fun CacheManagementDialog(
                         modifier = Modifier.weight(1f),
                     )
                     if (cachedTrackIds.isNotEmpty()) {
-                        TextButton(
+                        CompactDialogAction(
+                            text = if (allSelected) "取消全选" else "全选",
                             onClick = {
                                 selectedTrackIds = if (allSelected) emptySet() else cachedTrackIds
                             },
-                        ) {
-                            Text(if (allSelected) "取消全选" else "全选")
-                        }
+                        )
                     }
                 }
 
@@ -1370,8 +3531,8 @@ private fun CacheManagementDialog(
                                                     selectedTrackIds + file.trackId
                                                 }
                                             }
-                                            .padding(vertical = 10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            .padding(vertical = 7.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Checkbox(
@@ -1383,6 +3544,7 @@ private fun CacheManagementDialog(
                                                     selectedTrackIds - file.trackId
                                                 }
                                             },
+                                            modifier = Modifier.size(30.dp),
                                         )
                                         Column(
                                             modifier = Modifier.weight(1f),
@@ -1414,19 +3576,24 @@ private fun CacheManagementDialog(
                     }
                 }
 
-                Button(
-                    onClick = {
+                val clearEnabled = selectedTrackIds.isNotEmpty() && !state.isLoading
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(if (clearEnabled) Color(0x3D0A84FF) else Color(0x102B6C93))
+                        .clickable(enabled = clearEnabled) {
                         val trackIds = selectedTrackIds
                         selectedTrackIds = emptySet()
                         onClearSelected(trackIds)
-                    },
-                    enabled = selectedTrackIds.isNotEmpty() && !state.isLoading,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
+                        },
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = if (selectedTrackIds.isEmpty()) "清除" else "清除（${selectedTrackIds.size}）",
                         fontWeight = FontWeight.Bold,
+                        color = if (clearEnabled) Color(0xFFEAF9FF) else Color(0x70D7EBF6),
                     )
                 }
             }
@@ -1525,7 +3692,9 @@ private fun CompactCacheSlider(
 @Composable
 private fun ProfileAboutScreen(onBack: () -> Unit) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(webBlueGradient()),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -1593,164 +3762,71 @@ private fun ProfileHeader(user: AuthUser) {
     val nickname = user.nickname.trim().ifBlank { "音乐用户" }
     val logoText = nickname.firstOrNull()?.toString()?.uppercase() ?: "H"
 
-    Card(
-        shape = RoundedCornerShape(30.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        modifier = Modifier.fillMaxWidth(),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 12.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            Color(0xFF123F6B),
-                            Color(0xFF0B3157),
-                            Color(0xFF142C52),
-                        ),
-                    ),
-                )
-                .padding(20.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(modifier = Modifier.size(88.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(Color(0xFF64E6D2), Color(0xFF6A9CFF), Color(0xFFF2A86F)),
-                                ),
-                            )
-                            .border(1.dp, Color(0x99E6FBFF), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = logoText,
-                            color = Color(0xFF082540),
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.Black,
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF0A2848))
-                            .border(1.dp, Color(0xFF77E8D5), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = null,
-                            tint = Color(0xFF8AF0DF),
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(7.dp),
+            Box(modifier = Modifier.size(88.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF64E6D2), Color(0xFF6A9CFF), Color(0xFFF2A86F)),
+                            ),
+                        ),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = nickname,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        text = logoText,
+                        color = Color(0xFF082540),
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Black,
                     )
-                    Text(
-                        text = user.phone,
-                        color = Color(0xFFC1D9EA),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Surface(
-                        color = Color(0x2E8CEAD8),
-                        shape = RoundedCornerShape(999.dp),
-                    ) {
-                        Text(
-                            text = user.role.label,
-                            color = Color(0xFF8EF0DE),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
-                        )
-                    }
                 }
+                Icon(
+                    imageVector = Icons.Default.MusicNote,
+                    contentDescription = null,
+                    tint = Color(0xFF8AF0DF),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(24.dp),
+                )
             }
 
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text(
+                    text = nickname,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = user.phone,
+                    color = Color(0xFFC1D9EA),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = user.role.label,
+                    color = Color(0xFF8EF0DE),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun LyricsPlaybackControls(
-    state: PlayerUiState,
-    viewModel: PlayerViewModel,
-    modifier: Modifier = Modifier,
-) {
-    state.currentTrack ?: return
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        WebTransportControls(
-            isPlaying = state.isPlaying,
-            onPrevious = viewModel::playPrevious,
-            onToggle = viewModel::togglePlayback,
-            onNext = viewModel::playNext,
-        )
-
-        WebStyleProgressGroup(
-            positionMs = state.currentPositionMs,
-            durationMs = state.durationMs,
-            bufferedPositionMs = state.bufferedPositionMs,
-            onSeek = viewModel::seekTo,
-        )
-    }
-}
-
-@Composable
-private fun WebTransportControls(
-    isPlaying: Boolean,
-    onPrevious: () -> Unit,
-    onToggle: () -> Unit,
-    onNext: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        WebTransportButton(
-            icon = TransportIconKind.Previous,
-            contentDescription = "上一首",
-            onClick = onPrevious,
-        )
-        Spacer(Modifier.width(13.dp))
-        WebTransportButton(
-            icon = if (isPlaying) TransportIconKind.Pause else TransportIconKind.Play,
-            contentDescription = if (isPlaying) "暂停" else "播放",
-            isPlayToggle = true,
-            onClick = onToggle,
-        )
-        Spacer(Modifier.width(13.dp))
-        WebTransportButton(
-            icon = TransportIconKind.Next,
-            contentDescription = "下一首",
-            onClick = onNext,
-        )
     }
 }
 
@@ -1768,16 +3844,16 @@ private fun WebTransportButton(
         Brush.radialGradient(
             listOf(
                 Color(0xA8FFFFFF),
-                Color(0x57FF74DB),
+                Color(0x5778E7F2),
                 Color(0x335BE7FF),
             ),
         )
     } else {
         Brush.radialGradient(
             listOf(
-                Color(0x1FFFF26F),
+                Color(0x1FB9F7FF),
                 Color(0x335EF5FF),
-                Color(0x1FFF54CA),
+                Color(0x1F78E7F2),
             ),
         )
     }
@@ -1822,12 +3898,12 @@ private fun WebTransportIcon(
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
 ) {
-    val fillColor = when (kind) {
-        TransportIconKind.Previous,
-        TransportIconKind.Next -> Color(0xFFADFF69)
-        TransportIconKind.Play -> Color(0xFFFFF15E)
-        TransportIconKind.Pause -> Color(0xFF74F2FF)
-    }
+        val fillColor = when (kind) {
+            TransportIconKind.Previous,
+            TransportIconKind.Next -> Color(0xFFBDF8FF)
+            TransportIconKind.Play -> Color(0xFFEAFBFF)
+            TransportIconKind.Pause -> Color(0xFF9DF4FF)
+        }
 
     Canvas(modifier = modifier) {
         val sx = size.width / 24f
@@ -1835,9 +3911,9 @@ private fun WebTransportIcon(
         fun p(x: Float, y: Float) = Offset(x * sx, y * sy)
 
         val coreColor = Color(0xF5F9FEFF)
-        val accentColor = Color(0xF5FF6FDB)
-        val sparkColor = Color(0xFFFFF469)
-        val dotColor = Color(0xFFFF70DA)
+        val accentColor = Color(0xF56EE8F2)
+        val sparkColor = Color(0xFFE8FCFF)
+        val dotColor = Color(0xFF8AF2FF)
         val coreStroke = Stroke(width = 1.8f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round)
         val accentStroke = Stroke(width = 1.65f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round)
         val fillStroke = Stroke(width = 0.9f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -1957,235 +4033,6 @@ private fun WebTransportIcon(
 }
 
 @Composable
-private fun WebStyleProgressGroup(
-    positionMs: Long,
-    durationMs: Long,
-    bufferedPositionMs: Long,
-    onSeek: (Long) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = formatDuration(positionMs),
-            color = Color(0xD1FFFFFF),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.ExtraBold,
-            modifier = Modifier.width(48.dp),
-        )
-        WebStyleProgressSlider(
-            positionMs = positionMs,
-            durationMs = durationMs,
-            bufferedPositionMs = bufferedPositionMs,
-            onSeek = onSeek,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = formatDuration(durationMs),
-            color = Color(0xD1FFFFFF),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.ExtraBold,
-            modifier = Modifier.width(48.dp),
-        )
-    }
-}
-
-@Composable
-private fun WebStyleProgressSlider(
-    positionMs: Long,
-    durationMs: Long,
-    bufferedPositionMs: Long,
-    onSeek: (Long) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val progress = if (durationMs > 0) {
-        (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val bufferedProgress = if (durationMs > 0) {
-        (bufferedPositionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(progress, 1f)
-    } else {
-        0f
-    }
-
-    Box(
-        modifier = modifier
-            .height(34.dp)
-            .pointerInput(durationMs) {
-                detectTapGestures { offset ->
-                    if (durationMs > 0 && size.width > 0) {
-                        val ratio = (offset.x / size.width).coerceIn(0f, 1f)
-                        onSeek((durationMs.toFloat() * ratio).toLong())
-                    }
-                }
-            }
-            .pointerInput(durationMs) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        if (durationMs > 0 && size.width > 0) {
-                            val ratio = (offset.x / size.width).coerceIn(0f, 1f)
-                            onSeek((durationMs.toFloat() * ratio).toLong())
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        if (durationMs > 0 && size.width > 0) {
-                            val ratio = (change.position.x / size.width).coerceIn(0f, 1f)
-                            onSeek((durationMs.toFloat() * ratio).toLong())
-                            change.consume()
-                        }
-                    },
-                )
-            },
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val trackHeight = 16.dp.toPx()
-            val trackTop = (size.height - trackHeight) / 2f
-            val trackSize = Size(size.width, trackHeight)
-            val radius = CornerRadius(trackHeight / 2f, trackHeight / 2f)
-            val fillWidth = (size.width * progress).coerceIn(0f, size.width)
-            val visibleFillWidth = if (fillWidth > 0f) fillWidth.coerceAtLeast(10.dp.toPx()).coerceAtMost(size.width) else 0f
-            val bufferedWidth = (size.width * bufferedProgress).coerceIn(0f, size.width)
-            val visibleBufferedWidth = if (bufferedWidth > 0f) bufferedWidth.coerceAtLeast(10.dp.toPx()).coerceAtMost(size.width) else 0f
-            val centerY = size.height / 2f
-
-            drawRoundRect(
-                brush = Brush.linearGradient(
-                    colors = listOf(Color(0xE00A2247), Color(0xD10D3B67)),
-                    start = Offset.Zero,
-                    end = Offset(size.width, 0f),
-                ),
-                topLeft = Offset(0f, trackTop),
-                size = trackSize,
-                cornerRadius = radius,
-            )
-            drawRoundRect(
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color(0x33FFFFFF), Color(0x0AFFFFFF)),
-                    startY = trackTop,
-                    endY = trackTop + trackHeight,
-                ),
-                topLeft = Offset(0f, trackTop),
-                size = trackSize,
-                cornerRadius = radius,
-            )
-            drawRoundRect(
-                color = Color(0x3DB3EFFF),
-                topLeft = Offset(0f, trackTop),
-                size = trackSize,
-                cornerRadius = radius,
-                style = Stroke(width = 1.dp.toPx()),
-            )
-
-            if (visibleBufferedWidth > 0f) {
-                val bufferInset = 3.dp.toPx()
-                val bufferHeight = (trackHeight - bufferInset * 2f).coerceAtLeast(1f)
-                drawRoundRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color(0x5583ECFF),
-                            Color(0x7AC0F7FF),
-                            Color(0x5583ECFF),
-                        ),
-                        start = Offset(0f, centerY),
-                        end = Offset(visibleBufferedWidth, centerY),
-                    ),
-                    topLeft = Offset(0f, trackTop + bufferInset),
-                    size = Size(visibleBufferedWidth, bufferHeight),
-                    cornerRadius = CornerRadius(bufferHeight / 2f, bufferHeight / 2f),
-                )
-                drawRoundRect(
-                    color = Color(0x4FC3FAFF),
-                    topLeft = Offset(0f, trackTop + bufferInset),
-                    size = Size(visibleBufferedWidth, bufferHeight),
-                    cornerRadius = CornerRadius(bufferHeight / 2f, bufferHeight / 2f),
-                    style = Stroke(width = 1.dp.toPx()),
-                )
-            }
-
-            val tickWidth = 2.dp.toPx()
-            val tickGap = 18.dp.toPx()
-            val tickHeight = 5.dp.toPx()
-            var tickX = 10.dp.toPx()
-            while (tickX < size.width - 10.dp.toPx()) {
-                drawRoundRect(
-                    color = Color.White.copy(alpha = 0.22f),
-                    topLeft = Offset(tickX, centerY - tickHeight / 2f),
-                    size = Size(tickWidth, tickHeight),
-                    cornerRadius = CornerRadius(tickWidth, tickWidth),
-                )
-                tickX += tickGap
-            }
-
-            if (visibleFillWidth > 0f) {
-                drawRoundRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFFA9FF64),
-                            Color(0xFF70F4FF),
-                            Color(0xFFFF60CF),
-                        ),
-                        start = Offset(0f, centerY),
-                        end = Offset(visibleFillWidth, centerY),
-                    ),
-                    topLeft = Offset(0f, trackTop),
-                    size = Size(visibleFillWidth, trackHeight),
-                    cornerRadius = radius,
-                )
-                drawRoundRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(Color(0xB8FFFFFF), Color.Transparent),
-                        start = Offset(8.dp.toPx(), trackTop),
-                        end = Offset(visibleFillWidth, trackTop),
-                    ),
-                    topLeft = Offset(8.dp.toPx().coerceAtMost(visibleFillWidth), trackTop + 2.dp.toPx()),
-                    size = Size((visibleFillWidth - 16.dp.toPx()).coerceAtLeast(0f), 5.dp.toPx()),
-                    cornerRadius = CornerRadius(999f, 999f),
-                )
-            }
-
-            val thumbX = (size.width * progress).coerceIn(0f, size.width)
-            drawCircle(
-                color = Color(0x2470F4FF),
-                radius = 16.dp.toPx(),
-                center = Offset(thumbX, centerY),
-            )
-            drawCircle(
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFFFFF669),
-                        Color(0xFF6FF6FF),
-                        Color(0xFFFF5BCB),
-                    ),
-                    start = Offset(thumbX - 12.dp.toPx(), centerY - 12.dp.toPx()),
-                    end = Offset(thumbX + 12.dp.toPx(), centerY + 12.dp.toPx()),
-                ),
-                radius = 12.dp.toPx(),
-                center = Offset(thumbX, centerY),
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.96f),
-                radius = 12.dp.toPx(),
-                center = Offset(thumbX, centerY),
-                style = Stroke(width = 2.dp.toPx()),
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.88f),
-                radius = 2.8.dp.toPx(),
-                center = Offset(thumbX - 3.dp.toPx(), centerY - 4.dp.toPx()),
-            )
-            drawCircle(
-                color = Color(0x3D072553),
-                radius = 3.dp.toPx(),
-                center = Offset(thumbX + 4.dp.toPx(), centerY + 4.dp.toPx()),
-            )
-        }
-    }
-}
-
-@Composable
 private fun RemoteCoverArt(
     url: String?,
     token: String,
@@ -2199,7 +4046,7 @@ private fun RemoteCoverArt(
         modifier = modifier
             .background(
                 Brush.linearGradient(
-                    listOf(Color(0xFF164E76), Color(0xFF312E81)),
+                    listOf(Color(0xFF164E76), Color(0xFF12394F)),
                 ),
             ),
         contentAlignment = Alignment.Center,
@@ -2268,21 +4115,29 @@ private fun EmptyState(title: String, subtitle: String) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ErrorDialog(message: String?, onDismiss: () -> Unit) {
     if (message.isNullOrBlank()) {
         return
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("知道了")
-            }
+    CompactAppDialog(
+        title = "提示",
+        onDismiss = onDismiss,
+        content = {
+            Text(
+                text = message,
+                color = Color(0xD7D9EEF8),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.widthIn(max = 280.dp),
+            )
         },
-        title = { Text("提示") },
-        text = { Text(message) },
+        actions = {
+            CompactDialogAction(
+                text = "知道了",
+                onClick = onDismiss,
+                primary = true,
+            )
+        },
     )
 }
 
