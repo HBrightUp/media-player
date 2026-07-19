@@ -16,6 +16,8 @@ library:
     music_directory: "D:/MusicLossy"
     lyrics_directory: "D:/Lyrics/Lossy"
   watch_poll_interval: "2m"
+client_apps:
+  directory: "D:/Apps"
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +42,9 @@ library:
 	}
 	if cfg.LossyLyricsDirectory != "D:/Lyrics/Lossy" {
 		t.Fatalf("lossy lyrics = %q", cfg.LossyLyricsDirectory)
+	}
+	if cfg.ClientAppsDirectory != "D:/Apps" {
+		t.Fatalf("client apps = %q", cfg.ClientAppsDirectory)
 	}
 	if cfg.LibraryWatchPollInterval != 2*time.Minute {
 		t.Fatalf("poll interval = %s", cfg.LibraryWatchPollInterval)

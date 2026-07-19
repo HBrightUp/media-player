@@ -6,6 +6,7 @@ import type {
   AudioFilesResponse,
   AuthResponse,
   AuthUser,
+  ClientAppsResponse,
   FavoriteCategory,
   FavoriteCategoryRequest,
   FavoriteCategoryTrackRequest,
@@ -85,6 +86,14 @@ export class ApiError extends Error {
 
 export function setApiSessionToken(token: string | null | undefined) {
   apiSessionToken = token?.trim() ?? "";
+}
+
+export function apiURL(path: string): string {
+  const trimmedPath = path.trim();
+  if (!trimmedPath || /^https?:\/\//i.test(trimmedPath)) {
+    return trimmedPath;
+  }
+  return `${API_BASE}${trimmedPath.startsWith("/") ? trimmedPath : `/${trimmedPath}`}`;
 }
 
 function audioAccessHeaders(accessToken: string) {
@@ -200,6 +209,10 @@ export function getTracks(quality?: "lossless" | "lossy"): Promise<TracksRespons
     params.set("quality", quality);
   }
   return request<TracksResponse>(params.size ? `/api/tracks?${params.toString()}` : "/api/tracks");
+}
+
+export function getClientApps(): Promise<ClientAppsResponse> {
+  return request<ClientAppsResponse>("/api/client-apps");
 }
 
 export function refreshTracks(userID: number): Promise<TracksResponse> {

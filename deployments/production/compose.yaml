@@ -67,6 +67,7 @@ services:
       LOSSY_MUSIC_DIRECTORY: "/lossy-music"
       LOSSY_LYRICS_DIRECTORY: "/lossy-lyrics"
       SHARED_LYRICS_DIRECTORY: "/shared-lyrics"
+      CLIENT_APPS_DIRECTORY: "/client-apps"
       LIBRARY_WATCH_POLL_INTERVAL: "${LIBRARY_WATCH_POLL_INTERVAL:-1m}"
       LIBRARY_WATCH_DEBOUNCE: "${LIBRARY_WATCH_DEBOUNCE:-30s}"
       LIBRARY_AUTO_SCAN_INTERVAL: "${LIBRARY_AUTO_SCAN_INTERVAL:-0}"
@@ -78,6 +79,7 @@ services:
       - ${LOSSY_MUSIC_DIRECTORY:-/opt/media-player/lossy-music}:/lossy-music:rw
       - ${LOSSY_LYRICS_DIRECTORY:-/opt/media-player/lossy-lyrics}:/lossy-lyrics:rw
       - ${SHARED_LYRICS_DIRECTORY:-/opt/media-player/shared-lyrics}:/shared-lyrics:rw
+      - ${CLIENT_APPS_DIRECTORY:-/opt/media-player/apps}:/client-apps:ro
 
 volumes:
   media_player_caddy_data:

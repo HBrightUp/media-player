@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -5,6 +7,32 @@ plugins {
 
 val apiBaseUrlProvider = providers.gradleProperty("apiBaseUrl").orElse("http://10.0.2.2:9000")
 val releaseDateProvider = providers.gradleProperty("releaseDate").orElse("2026-07-18")
+val releaseKeystorePropertiesFile = providers.gradleProperty("hmlReleaseKeystoreProperties")
+    .map { file(it) }
+    .orElse(
+        providers.provider {
+            file("${System.getProperty("user.home")}/.hml-media-player/keystore/keystore.properties")
+        },
+    )
+val releaseKeystoreProperties = Properties()
+val resolvedReleaseKeystorePropertiesFile = releaseKeystorePropertiesFile.get()
+if (resolvedReleaseKeystorePropertiesFile.isFile) {
+    resolvedReleaseKeystorePropertiesFile.inputStream().use(releaseKeystoreProperties::load)
+}
+
+fun releaseSigningProperty(name: String): String? {
+    return providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+        ?: releaseKeystoreProperties.getProperty(name)
+}
+
+val releaseSigningStoreFilePath = releaseSigningProperty("HML_RELEASE_STORE_FILE")
+val releaseSigningConfigured =
+    !releaseSigningStoreFilePath.isNullOrBlank() &&
+        file(releaseSigningStoreFilePath).isFile &&
+        !releaseSigningProperty("HML_RELEASE_STORE_PASSWORD").isNullOrBlank() &&
+        !releaseSigningProperty("HML_RELEASE_KEY_ALIAS").isNullOrBlank() &&
+        !releaseSigningProperty("HML_RELEASE_KEY_PASSWORD").isNullOrBlank()
 
 android {
     namespace = "com.hml.mediaplayer"
@@ -30,6 +58,25 @@ android {
         buildConfigField("String", "RELEASE_DATE", "\"${releaseDateProvider.get()}\"")
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseSigningStoreFilePath!!)
+                storePassword = releaseSigningProperty("HML_RELEASE_STORE_PASSWORD")!!
+                keyAlias = releaseSigningProperty("HML_RELEASE_KEY_ALIAS")!!
+                keyPassword = releaseSigningProperty("HML_RELEASE_KEY_PASSWORD")!!
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     buildFeatures {
         buildConfig = true
         compose = true
@@ -44,6 +91,18 @@ android {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    val releaseApkRequested = allTasks.any { task ->
+        task.name in setOf("assembleRelease", "bundleRelease", "packageRelease")
+    }
+    if (releaseApkRequested && !releaseSigningConfigured) {
+        throw org.gradle.api.GradleException(
+            "缺少 release 签名配置。请确认 ${resolvedReleaseKeystorePropertiesFile.absolutePath} 存在，" +
+                "或通过 HML_RELEASE_STORE_FILE/HML_RELEASE_STORE_PASSWORD/HML_RELEASE_KEY_ALIAS/HML_RELEASE_KEY_PASSWORD 提供配置。",
+        )
     }
 }
 

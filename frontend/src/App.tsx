@@ -23,6 +23,7 @@ import {
   addFavoriteTrack,
   addFavoriteTrackToCategory,
   ApiError,
+  apiURL,
   authorizeAudioFileAccess,
   createManagedUser,
   createFavoriteCategory,
@@ -36,6 +37,7 @@ import {
   deleteNote,
   deleteNoteFolder,
   getAudioFiles,
+  getClientApps,
   getCurrentUser,
   getFavoriteCategories,
   getFavoriteTracks,
@@ -66,7 +68,7 @@ import {
   updateNoteFolder
 } from "./api";
 import type { UploadProgressSnapshot } from "./api";
-import type { AudioFileArea, AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, FavoriteCategory, GrowthNote, LyricLine, ManagedUser, ManagedUserRequest, NoteFolder, OnlineUser, PlaybackSessionResponse, ServerAudioFile, ServerManagedFile, Track, TrackCategoryMembership, TrackLyrics, UserRole } from "./types";
+import type { AudioFileArea, AudioFileImportItemResult, AudioFileImportLimits, AudioFileImportReport, AuthResponse, AuthUser, ClientAppRelease, FavoriteCategory, GrowthNote, LyricLine, ManagedUser, ManagedUserRequest, NoteFolder, OnlineUser, PlaybackSessionResponse, ServerAudioFile, ServerManagedFile, Track, TrackCategoryMembership, TrackLyrics, UserRole } from "./types";
 
 type PlaybackMode = "all" | "one" | "shuffle";
 type AppPage = "music" | "lyrics" | "discover" | "profile";
@@ -212,7 +214,21 @@ type LyricsScenePalette = {
   thread: string;
 };
 type TrackSortKey = "title" | "artist";
-type ProfileView = "main" | "settings" | "audioFiles" | "users" | "about";
+type ProfileView = "main" | "settings" | "downloads" | "audioFiles" | "users" | "about";
+type AppDownloadStatus = "available" | "coming_soon";
+type AndroidAppDownloadMetadata = {
+  platform: "android";
+  status: AppDownloadStatus;
+  versionCode: number | null;
+  versionName: string;
+  fileName: string;
+  apkUrl: string;
+  sizeBytes: number | null;
+  sha256: string;
+  releaseDate: string;
+  minAndroid: string;
+  releaseNotes: string[];
+};
 type PlaybackQueueScope = { kind: "library" | "favorites" | "category" | "search"; categoryId?: number | null };
 type DetachedCurrentTrack = {
   track: Track;
@@ -300,7 +316,28 @@ const appReleaseDate = "2026.07.10";
 const baseProfileViewTabs: { id: ProfileView; label: string }[] = [
   { id: "main", label: "个人" },
   { id: "settings", label: "设置" },
+  { id: "downloads", label: "客户端" },
   { id: "about", label: "关于" }
+];
+const androidAppIconURL = "/downloads/hml-media-player-icon.png";
+const defaultAndroidDownloadMetadata: AndroidAppDownloadMetadata = {
+  platform: "android",
+  status: "coming_soon",
+  versionCode: null,
+  versionName: "0.1.0",
+  fileName: "",
+  apkUrl: "",
+  sizeBytes: null,
+  sha256: "",
+  releaseDate: "待发布",
+  minAndroid: "Android 8.0+",
+  releaseNotes: ["支持高品质/轻音乐播放", "支持歌词页面、收藏和自定义分类", "支持本地缓存与迷你播放器"]
+};
+const futureClientPlatforms = [
+  { id: "ios", title: "iPhone / iPad", subtitle: "未来可接入 App Store 或 TestFlight" },
+  { id: "windows", title: "Windows", subtitle: "未来提供桌面安装包" },
+  { id: "macos", title: "macOS", subtitle: "未来提供 macOS 版本" },
+  { id: "linux", title: "Linux", subtitle: "未来提供 Linux 桌面版本" }
 ];
 const authSessionStorageKey = "media-player-auth-session";
 const authProfileStorageKey = "media-player-auth-profile";
@@ -709,8 +746,11 @@ function App() {
   const lyricsClockFrameRef = useRef<number | null>(null);
   const lyricsClockLastPaintAtRef = useRef(0);
   const lastAppliedAudioSourceRef = useRef("");
+  const currentTrackRef = useRef<Track | null>(null);
+  const currentTrackStreamURLRef = useRef("");
   const playbackIntentRef = useRef(false);
   const ignoreAudioPauseUntilRef = useRef(0);
+  const forceAudioPlaybackUntilRef = useRef(0);
   const nextTrackPreloadAudioRef = useRef<HTMLAudioElement | null>(null);
   const nextTrackPreloadURLRef = useRef("");
   const audioStreamRecoveryRef = useRef<AudioStreamRecoveryState | null>(null);
@@ -849,6 +889,8 @@ function App() {
   }, [currentTrackId, detachedCurrentTrack, playbackQueue]);
   const currentStreamTicket = playbackSession?.streamTicket ?? "";
   const currentTrackStreamURL = currentTrack?.stream_url && currentStreamTicket ? streamURL(currentTrack, currentStreamTicket) : "";
+  currentTrackRef.current = currentTrack;
+  currentTrackStreamURLRef.current = currentTrackStreamURL;
   const nextTrackToPreload = useMemo(() => {
     const currentTrackInQueue = Boolean(currentTrack?.id && playbackQueue.some((track) => track.id === currentTrack.id));
     if (
@@ -1505,6 +1547,26 @@ function App() {
   }, [activePage, authSession?.token, currentTrack?.id, nextTrackToPreload?.id]);
 
   useEffect(() => {
+    if (
+      activePage !== "lyrics" ||
+      !authSession?.userId ||
+      !currentTrack?.stream_url ||
+      currentTrackStreamURL ||
+      isPlaying
+    ) {
+      return;
+    }
+    const track = currentTrack;
+    const timerID = window.setTimeout(() => {
+      void ensurePlaybackSessionForTrack(track, {
+        allowTakeover: true,
+        state: "paused"
+      });
+    }, 180);
+    return () => window.clearTimeout(timerID);
+  }, [activePage, authSession?.userId, currentTrack?.id, currentTrack?.stream_url, currentTrackStreamURL, isPlaying]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -1512,6 +1574,7 @@ function App() {
     playbackIntentRef.current = isPlaying;
     if (!currentTrackStreamURL) {
       lastAppliedAudioSourceRef.current = "";
+      audio.autoplay = false;
       audioPlayRequestIdRef.current += 1;
       ignoreAudioPauseUntilRef.current = 0;
       setIsAudioLoading(false);
@@ -1526,6 +1589,7 @@ function App() {
     }
     if (lastAppliedAudioSourceRef.current !== currentTrackStreamURL) {
       lastAppliedAudioSourceRef.current = currentTrackStreamURL;
+      audio.autoplay = isPlaying || Date.now() < forceAudioPlaybackUntilRef.current;
       if (audio.getAttribute("src") !== currentTrackStreamURL) {
         audio.src = currentTrackStreamURL;
       }
@@ -1536,24 +1600,7 @@ function App() {
       audio.load();
     }
     if (isPlaying) {
-      prepareEqualizerForPlayback(currentTrack);
-      if (audio.readyState < audioReadyStateHasFutureData) {
-        setIsAudioLoading(true);
-      }
-      const playRequestId = audioPlayRequestIdRef.current + 1;
-      audioPlayRequestIdRef.current = playRequestId;
-      void audio.play().catch((error) => {
-        if (audioPlayRequestIdRef.current !== playRequestId) {
-          return;
-        }
-        const errorName = error instanceof Error ? error.name : "";
-        if (errorName === "AbortError") {
-          return;
-        }
-        showToast(describeAudioPlayFailure(error, audio, currentTrack));
-        setIsAudioLoading(false);
-        setIsPlaying(false);
-      });
+      requestCurrentAudioPlayback(audio);
     } else {
       audioPlayRequestIdRef.current += 1;
       ignoreAudioPauseUntilRef.current = 0;
@@ -3298,7 +3345,11 @@ function App() {
 
   async function ensurePlaybackSessionForTrack(
     track: Track,
-    { allowTakeover = true, forceClaim = false }: { allowTakeover?: boolean; forceClaim?: boolean } = {}
+    {
+      allowTakeover = true,
+      forceClaim = false,
+      state = "playing"
+    }: { allowTakeover?: boolean; forceClaim?: boolean; state?: PlaybackSessionState["state"] | "playing" | "paused" } = {}
   ) {
     if (!authSession?.userId) {
       showToast("请先登录后播放音乐");
@@ -3320,7 +3371,7 @@ function App() {
           track_id: track.id,
           device_id: deviceID,
           tab_id: tabID,
-          state: "playing"
+          state
         });
         applyPlaybackSession(response);
         return true;
@@ -3347,10 +3398,13 @@ function App() {
         track_id: track.id,
         device_id: deviceID,
         tab_id: tabID,
-        device_name: getPlaybackDeviceName()
+        device_name: getPlaybackDeviceName(),
+        state
       });
       applyPlaybackSession(response);
-      broadcastPlaybackClaim();
+      if (state === "playing") {
+        broadcastPlaybackClaim();
+      }
       return true;
     } catch (error) {
       showToast(error instanceof Error ? error.message : "申请播放权失败");
@@ -3986,8 +4040,10 @@ function App() {
       queue,
       scope,
       reveal = false,
-      allowTakeover = true
-    }: { queue?: Track[]; scope?: PlaybackQueueScope; reveal?: boolean; allowTakeover?: boolean } = {}
+      allowTakeover = true,
+      startTime = null,
+      playImmediately = false
+    }: { queue?: Track[]; scope?: PlaybackQueueScope; reveal?: boolean; allowTakeover?: boolean; startTime?: number | null; playImmediately?: boolean } = {}
   ) {
     const canResumeCurrentStream =
       currentTrack?.id === track.id &&
@@ -3997,6 +4053,9 @@ function App() {
     playbackRequestIdRef.current = requestID;
     audioStreamRecoveryRef.current = null;
     pendingAudioResumeTimeRef.current = null;
+    if (typeof startTime === "number" && Number.isFinite(startTime) && startTime > 0) {
+      pendingAudioResumeTimeRef.current = Math.max(0, startTime);
+    }
     clearPendingTrackPlay();
     setDetachedCurrentTrack(null);
     if (queue) {
@@ -4027,7 +4086,12 @@ function App() {
     }
 
     setIsAudioLoading(true);
-    setIsPlaying(false);
+    if (playImmediately) {
+      playbackIntentRef.current = true;
+      setIsPlaying(true);
+    } else {
+      setIsPlaying(false);
+    }
     const canPlay = await ensurePlaybackSessionForTrack(track, { allowTakeover });
     if (playbackRequestIdRef.current !== requestID) {
       return;
@@ -4331,17 +4395,82 @@ function App() {
     stepTrack(1, { allowTakeover: false });
   }
 
+  function requestCurrentAudioPlayback(audio: HTMLAudioElement) {
+    const track = currentTrackRef.current;
+    playbackIntentRef.current = true;
+    prepareEqualizerForPlayback(track);
+    if (audio.readyState < audioReadyStateHasFutureData) {
+      setIsAudioLoading(true);
+    }
+    const playRequestId = audioPlayRequestIdRef.current + 1;
+    audioPlayRequestIdRef.current = playRequestId;
+    void audio.play().catch((error) => {
+      if (audioPlayRequestIdRef.current !== playRequestId) {
+        return;
+      }
+      const errorName = error instanceof Error ? error.name : "";
+      if (errorName === "AbortError") {
+        if (playbackIntentRef.current) {
+          setIsAudioLoading(true);
+        }
+        return;
+      }
+      showToast(describeAudioPlayFailure(error, audio, track));
+      forceAudioPlaybackUntilRef.current = 0;
+      playbackIntentRef.current = false;
+      setIsAudioLoading(false);
+      setIsPlaying(false);
+    });
+  }
+
   function handleSeek(value: string) {
     const nextTime = Number(value);
     if (!Number.isFinite(nextTime)) {
       return;
     }
     const clampedTime = clampSeekTime(nextTime);
-    if (audioRef.current && currentTrack?.stream_url) {
+    if (audioRef.current && currentTrackRef.current?.stream_url) {
       audioRef.current.currentTime = clampedTime;
     }
     commitCurrentTime(clampedTime);
     setSeekPreviewTime(null);
+  }
+
+  function handleLyricsSeekAndPlay(time: number) {
+    const track = currentTrackRef.current;
+    if (!track) {
+      return;
+    }
+    const clampedTime = clampSeekTime(time);
+    forceAudioPlaybackUntilRef.current = Date.now() + 6000;
+    playbackIntentRef.current = true;
+    setIsPlaying(true);
+    handleSeek(String(clampedTime));
+
+    if (!track.stream_url) {
+      setIsAudioLoading(false);
+      setIsPlaying(false);
+      return;
+    }
+
+    if (currentTrackStreamURLRef.current) {
+      const audio = audioRef.current;
+      playbackIntentRef.current = true;
+      prepareEqualizerForPlayback(track);
+      setIsAudioLoading(Boolean(audio && audio.readyState < audioReadyStateHasFutureData));
+      setIsPlaying(true);
+      void sendPlaybackHeartbeat("playing");
+      if (audio) {
+        requestCurrentAudioPlayback(audio);
+      }
+      return;
+    }
+
+    void startTrackPlayback(track, {
+      allowTakeover: true,
+      startTime: clampedTime,
+      playImmediately: true
+    });
   }
 
   function clampSeekTime(value: number) {
@@ -5024,7 +5153,7 @@ function App() {
             isPlaying={isPlaying}
             savedScroll={lyricsScrollStateRef.current}
             onScrollPositionChange={updateLyricsScrollPosition}
-            onSeek={(time) => handleSeek(String(time))}
+            onSeekAndPlay={handleLyricsSeekAndPlay}
             onPreviousTrack={() => stepTrack(-1)}
             onNextTrack={() => stepTrack(1)}
             onToggleFullscreen={toggleFullscreen}
@@ -5118,6 +5247,7 @@ function App() {
       <audio
         key={`${currentTrack ? getTrackQuality(currentTrack) : "empty"}-${audioElementGeneration}`}
         ref={audioRef}
+        autoPlay={isPlaying}
         preload="auto"
         onLoadStart={() => {
           if (playbackIntentRef.current) {
@@ -5148,10 +5278,16 @@ function App() {
         onCanPlay={(event) => {
           updateBufferedRanges(event.currentTarget);
           setIsAudioLoading(false);
+          if ((playbackIntentRef.current || Date.now() < forceAudioPlaybackUntilRef.current) && event.currentTarget.paused) {
+            requestCurrentAudioPlayback(event.currentTarget);
+          }
         }}
         onCanPlayThrough={(event) => {
           updateBufferedRanges(event.currentTarget);
           setIsAudioLoading(false);
+          if ((playbackIntentRef.current || Date.now() < forceAudioPlaybackUntilRef.current) && event.currentTarget.paused) {
+            requestCurrentAudioPlayback(event.currentTarget);
+          }
         }}
         onWaiting={() => {
           if (playbackIntentRef.current) {
@@ -5166,47 +5302,48 @@ function App() {
         onTimeUpdate={(event) => {
           syncCurrentTimeFromAudio(event.currentTarget.currentTime);
         }}
+        onSeeked={(event) => {
+          if ((playbackIntentRef.current || Date.now() < forceAudioPlaybackUntilRef.current) && event.currentTarget.paused) {
+            requestCurrentAudioPlayback(event.currentTarget);
+          }
+        }}
         onPlay={() => {
           playbackIntentRef.current = true;
           setIsPlaying(true);
         }}
         onPlaying={() => {
           ignoreAudioPauseUntilRef.current = 0;
+          forceAudioPlaybackUntilRef.current = 0;
           playbackIntentRef.current = true;
           setIsAudioLoading(false);
           setIsPlaying(true);
         }}
         onPause={() => {
-          if (playbackIntentRef.current && Date.now() < ignoreAudioPauseUntilRef.current) {
+          const now = Date.now();
+          if ((playbackIntentRef.current || now < forceAudioPlaybackUntilRef.current) && now < ignoreAudioPauseUntilRef.current) {
             return;
           }
           const audio = audioRef.current;
           const hasPlayableRemainder =
             Boolean(audio && currentTrackStreamURL && !audio.ended && audio.currentTime < Math.max(0, activeDuration - 0.75));
-          if (playbackIntentRef.current && hasPlayableRemainder) {
+          if ((playbackIntentRef.current || now < forceAudioPlaybackUntilRef.current) && hasPlayableRemainder) {
             const playRequestId = audioPlayRequestIdRef.current + 1;
             audioPlayRequestIdRef.current = playRequestId;
             window.setTimeout(() => {
               const currentAudio = audioRef.current;
-              if (!currentAudio || audioPlayRequestIdRef.current !== playRequestId || !playbackIntentRef.current || !currentAudio.paused) {
+              if (
+                !currentAudio ||
+                audioPlayRequestIdRef.current !== playRequestId ||
+                (!playbackIntentRef.current && Date.now() >= forceAudioPlaybackUntilRef.current) ||
+                !currentAudio.paused
+              ) {
                 return;
               }
-              prepareEqualizerForPlayback(currentTrack);
-              void currentAudio.play().catch((error) => {
-                if (audioPlayRequestIdRef.current !== playRequestId) {
-                  return;
-                }
-                const errorName = error instanceof Error ? error.name : "";
-                if (errorName === "AbortError") {
-                  return;
-                }
-                playbackIntentRef.current = false;
-                setIsAudioLoading(false);
-                setIsPlaying(false);
-              });
+              requestCurrentAudioPlayback(currentAudio);
             }, unexpectedPauseResumeDelayMs);
             return;
           }
+          forceAudioPlaybackUntilRef.current = 0;
           playbackIntentRef.current = false;
           setIsAudioLoading(false);
           setIsPlaying(false);
@@ -5619,7 +5756,7 @@ type FullLyricsPageProps = {
   isPlaying: boolean;
   savedScroll: LyricsScrollState;
   onScrollPositionChange: (trackID: number, top: number, activeLineIndex: number) => void;
-  onSeek: (time: number) => void;
+  onSeekAndPlay: (time: number) => void;
   onPreviousTrack: () => void;
   onNextTrack: () => void;
   onToggleFullscreen: () => void | Promise<void>;
@@ -5635,7 +5772,7 @@ function FullLyricsPage({
   isPlaying,
   savedScroll,
   onScrollPositionChange,
-  onSeek,
+  onSeekAndPlay,
   onPreviousTrack,
   onNextTrack,
   onToggleFullscreen
@@ -5650,10 +5787,10 @@ function FullLyricsPage({
   const lastLyricsTapRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const lyricsFullscreenLockUntilRef = useRef(0);
   const lyricsSyntheticMouseBlockUntilRef = useRef(0);
+  const lyricsSeekIndicatorActivatedAtRef = useRef(0);
   const lyricsSideControlsHideTimerRef = useRef<number | null>(null);
   const lyricsSideControlsVisibleRef = useRef(false);
   const userScrollPausedUntilRef = useRef(0);
-  const lyricsSeekCommitTimerRef = useRef<number | null>(null);
   const lyricsSeekPreviewRef = useRef<{ index: number; time: number } | null>(null);
   const lyricsScrubPointerRef = useRef<{
     pointerId: number;
@@ -5718,26 +5855,18 @@ function FullLyricsPage({
       if (lyricsSideControlsHideTimerRef.current) {
         window.clearTimeout(lyricsSideControlsHideTimerRef.current);
       }
-      if (lyricsSeekCommitTimerRef.current) {
-        window.clearTimeout(lyricsSeekCommitTimerRef.current);
-      }
     };
   }, []);
 
   useEffect(() => {
     userScrollPausedUntilRef.current = 0;
-    lyricsSeekPreviewRef.current = null;
     lyricsScrubPointerRef.current = null;
     setIsUserBrowsingLyrics(false);
-    setLyricsSeekPreview(null);
+    clearLyricsSeekPreview();
     hideLyricsSideControls();
     if (followResumeTimerRef.current) {
       window.clearTimeout(followResumeTimerRef.current);
       followResumeTimerRef.current = null;
-    }
-    if (lyricsSeekCommitTimerRef.current) {
-      window.clearTimeout(lyricsSeekCommitTimerRef.current);
-      lyricsSeekCommitTimerRef.current = null;
     }
   }, [currentTrack?.id]);
 
@@ -5826,6 +5955,7 @@ function FullLyricsPage({
       followResumeTimerRef.current = null;
       userScrollPausedUntilRef.current = 0;
       setIsUserBrowsingLyrics(false);
+      clearLyricsSeekPreview();
       syncActiveLyricIntoView(shouldReduceMotion() ? "auto" : "smooth");
     }, 4800);
   }
@@ -5852,19 +5982,19 @@ function FullLyricsPage({
     return nearest ? { index: nearest.index, time: nearest.time } : null;
   }
 
+  function clearLyricsSeekPreview() {
+    lyricsSeekPreviewRef.current = null;
+    setLyricsSeekPreview(null);
+  }
+
   function commitLyricsSeekPreview() {
     const preview = lyricsSeekPreviewRef.current;
     if (!preview) {
       return;
     }
-    if (lyricsSeekCommitTimerRef.current) {
-      window.clearTimeout(lyricsSeekCommitTimerRef.current);
-      lyricsSeekCommitTimerRef.current = null;
-    }
-    lyricsSeekPreviewRef.current = null;
-    setLyricsSeekPreview(null);
+    clearLyricsSeekPreview();
     lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 600;
-    onSeek(preview.time);
+    onSeekAndPlay(preview.time);
 
     userScrollPausedUntilRef.current = Date.now() + 900;
     if (followResumeTimerRef.current) {
@@ -5875,20 +6005,6 @@ function FullLyricsPage({
       userScrollPausedUntilRef.current = 0;
       setIsUserBrowsingLyrics(false);
     }, 900);
-  }
-
-  function scheduleLyricsSeekCommit(delayMs = 190) {
-    if (lyricsSeekCommitTimerRef.current) {
-      window.clearTimeout(lyricsSeekCommitTimerRef.current);
-    }
-    lyricsSeekCommitTimerRef.current = window.setTimeout(() => {
-      lyricsSeekCommitTimerRef.current = null;
-      if (lyricsScrubPointerRef.current) {
-        scheduleLyricsSeekCommit(90);
-        return;
-      }
-      commitLyricsSeekPreview();
-    }, delayMs);
   }
 
   function handleLyricsScroll(top: number) {
@@ -5912,7 +6028,6 @@ function FullLyricsPage({
     setLyricsSeekPreview((previous) =>
       previous && previous.index === preview.index && previous.time === preview.time ? previous : preview
     );
-    scheduleLyricsSeekCommit();
   }
 
   function handleLyricsPointerMove(event: ReactPointerEvent<HTMLElement>) {
@@ -5982,11 +6097,18 @@ function FullLyricsPage({
   }
 
   function handleLyricsClickCapture(event: ReactMouseEvent<HTMLElement>) {
+    if (isLyricsInlineSeekControl(event.target)) {
+      return;
+    }
     if (Date.now() >= lyricsSyntheticMouseBlockUntilRef.current) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
+  }
+
+  function isLyricsInlineSeekControl(target: EventTarget | null) {
+    return target instanceof Element && Boolean(target.closest(".lyrics-inline-seek-indicator"));
   }
 
   function requestLyricsFullscreenToggle() {
@@ -6061,6 +6183,43 @@ function FullLyricsPage({
     onNextTrack();
   }
 
+  function primeLyricsSeekIndicatorPlayback() {
+    const preview = lyricsSeekPreviewRef.current;
+    if (!preview) {
+      return;
+    }
+    lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
+    onSeekAndPlay(preview.time);
+  }
+
+  function handleLyricsSeekIndicatorPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+    primeLyricsSeekIndicatorPlayback();
+  }
+
+  function activateLyricsSeekIndicator() {
+    const now = Date.now();
+    if (now - lyricsSeekIndicatorActivatedAtRef.current < 180) {
+      return;
+    }
+    lyricsSeekIndicatorActivatedAtRef.current = now;
+    lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
+    commitLyricsSeekPreview();
+  }
+
+  function handleLyricsSeekIndicatorPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    activateLyricsSeekIndicator();
+  }
+
+  function handleLyricsSeekIndicatorClick(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    activateLyricsSeekIndicator();
+  }
+
   function handleLyricsPointerDown(event: ReactPointerEvent<HTMLElement>) {
     const lyricsList = lyricsListRef.current;
     if (lyricsList && event.currentTarget === lyricsList) {
@@ -6107,7 +6266,6 @@ function FullLyricsPage({
         event.preventDefault();
         event.stopPropagation();
         lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
-        scheduleLyricsSeekCommit(event.pointerType === "mouse" ? 60 : 170);
       }
     }
 
@@ -6149,7 +6307,6 @@ function FullLyricsPage({
       lyricsScrubPointerRef.current = null;
       if (wasScrubbing) {
         lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
-        scheduleLyricsSeekCommit(210);
       }
     }
     if (event.pointerType === "touch") {
@@ -6230,13 +6387,16 @@ function FullLyricsPage({
       >
         {lines.map((line, index) => {
           const isActive = index === activeLineIndex;
+          const isSeekPreviewTarget = index === lyricsSeekPreview?.index;
+          const seekPreviewDirection = lyricsSeekPreview && lyricsSeekPreview.time >= currentTime ? "快进" : "快退";
           const hasKaraokeWords = isActive && Boolean(line.words?.length);
           const karaokeDisplayTime = currentTime + karaokeTimingLeadSeconds;
           const distance = Math.abs(index - displayFocalLineIndex);
           const lineClassName = [
             isActive ? "active" : "",
             hasKaraokeWords ? "has-karaoke" : "",
-            index === lyricsSeekPreview?.index ? "scrub-target" : "",
+            isSeekPreviewTarget ? "scrub-target" : "",
+            isSeekPreviewTarget ? "has-inline-seek" : "",
             distance === 1 ? "near" : "",
             distance > 4 ? "far" : "",
             distance > 6 ? "outside-window" : "",
@@ -6277,6 +6437,29 @@ function FullLyricsPage({
                   })}
                 </span>
               ) : line.text}
+              {isSeekPreviewTarget && lyricsSeekPreview ? (
+                <button
+                  className={`lyrics-inline-seek-indicator ${seekPreviewDirection === "快退" ? "is-backward" : "is-forward"}`}
+                  type="button"
+                  aria-label={`${seekPreviewDirection}到 ${formatDuration(lyricsSeekPreview.time)}`}
+                  title={`${seekPreviewDirection}到 ${formatDuration(lyricsSeekPreview.time)}`}
+                  onClick={handleLyricsSeekIndicatorClick}
+                  onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onPointerDown={handleLyricsSeekIndicatorPointerDown}
+                  onPointerUp={handleLyricsSeekIndicatorPointerUp}
+                >
+                  <svg className="lyrics-inline-seek-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    {seekPreviewDirection === "快退" ? (
+                      <path d="M14.8 6.7v10.6L6.7 12l8.1-5.3Z" />
+                    ) : (
+                      <path d="M9.2 6.7v10.6l8.1-5.3-8.1-5.3Z" />
+                    )}
+                  </svg>
+                </button>
+              ) : null}
             </p>
           );
         })}
@@ -6370,12 +6553,6 @@ function FullLyricsPage({
       </nav>
       <section className={`lyrics-page-body ${lyricsSeekPreview ? "is-scrubbing" : ""}`} aria-live="polite">
         {content}
-        {lyricsSeekPreview ? (
-          <div className="lyrics-seek-indicator" aria-hidden="true">
-            <span>{lyricsSeekPreview.time >= currentTime ? "快进" : "快退"}</span>
-            <strong>{formatDuration(lyricsSeekPreview.time)}</strong>
-          </div>
-        ) : null}
       </section>
     </section>
   );
@@ -11601,10 +11778,10 @@ function EmptyPage({
   const profileAvatarText = authSession ? getProfileAvatarText(authSession) : "";
   const onlineSummary = formatOnlinePresence(onlineUsers, onlineCount);
   const profileViewTabs: { id: ProfileView; label: string }[] = [
-    ...baseProfileViewTabs.slice(0, 2),
+    ...baseProfileViewTabs.slice(0, 3),
     ...(canRoleManageAudioFiles(authSession?.role) ? [{ id: "audioFiles" as const, label: "管理" }] : []),
     ...(canRoleManageUsers(authSession?.role) ? [{ id: "users" as const, label: "用户" }] : []),
-    ...baseProfileViewTabs.slice(2)
+    ...baseProfileViewTabs.slice(3)
   ];
   const profileSummaryCard = (
     <div className="profile-summary-card" aria-label="用户信息">
@@ -11716,6 +11893,8 @@ function EmptyPage({
                   onStop={onStopSleepTimer}
                 />
               </div>
+            ) : profileView === "downloads" ? (
+              <ClientDownloadsPage />
             ) : profileView === "about" ? (
               <div className="profile-tab-panel">
                 <div className="profile-row app-version-row" aria-label="软件版本">
@@ -11749,6 +11928,192 @@ function EmptyPage({
       )}
     </section>
   );
+}
+
+function ClientDownloadsPage() {
+  const [androidDownload, setAndroidDownload] = useState<AndroidAppDownloadMetadata>(defaultAndroidDownloadMetadata);
+  const [metadataState, setMetadataState] = useState<"loading" | "ready" | "fallback">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    getClientApps()
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const androidApp = payload.apps.find((app) => app.platform === "android");
+        setAndroidDownload(normalizeAndroidDownloadMetadata(androidDownloadMetadataFromRelease(androidApp)));
+        setMetadataState("ready");
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setAndroidDownload(defaultAndroidDownloadMetadata);
+        setMetadataState("fallback");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const isAndroidAvailable = androidDownload.status === "available" && androidDownload.apkUrl.trim().length > 0;
+  const downloadLabel = isAndroidAvailable ? "立即下载 Android APK" : "正式包待上传";
+  const versionLabel = androidDownload.versionName ? `v${androidDownload.versionName}` : "待发布";
+  const sizeLabel = androidDownload.sizeBytes ? formatBytes(androidDownload.sizeBytes) : "待发布";
+  const shaLabel = androidDownload.sha256 || "待正式包生成";
+  const metadataHint = metadataState === "loading"
+    ? "正在读取后端发布信息"
+    : metadataState === "fallback"
+      ? "未读取到后端发布信息，当前显示默认规划"
+      : isAndroidAvailable
+        ? "当前 Android 安装包已可下载"
+        : "Android 版本入口已准备好，等待上传正式安装包";
+
+  return (
+    <div className="client-downloads-page profile-tab-panel">
+      <header className="client-downloads-hero">
+        <div>
+          <span className="client-downloads-kicker">客户端下载</span>
+          <h2>把播放器装进你的设备</h2>
+          <p>这里会统一管理 Android、Apple 和桌面端版本。当前先准备 Android 下载入口，其它平台保留扩展位置。</p>
+        </div>
+        <span className="client-downloads-status">{metadataHint}</span>
+      </header>
+
+      <section className="client-download-card android-download-card" aria-label="Android 客户端下载">
+        <div className="client-download-icon-wrap" aria-hidden="true">
+          <img src={androidAppIconURL} alt="" loading="lazy" />
+        </div>
+        <div className="client-download-main">
+          <div className="client-download-title-row">
+            <div>
+              <span className="client-download-platform">Android</span>
+              <h3>HML Media Player Android 版</h3>
+            </div>
+            <span className={isAndroidAvailable ? "client-download-badge available" : "client-download-badge"}>
+              {isAndroidAvailable ? "可下载" : "待发布"}
+            </span>
+          </div>
+
+          <dl className="client-download-meta">
+            <div>
+              <dt>版本</dt>
+              <dd>{versionLabel}</dd>
+            </div>
+            <div>
+              <dt>大小</dt>
+              <dd>{sizeLabel}</dd>
+            </div>
+            <div>
+              <dt>更新</dt>
+              <dd>{androidDownload.releaseDate || "待发布"}</dd>
+            </div>
+            <div>
+              <dt>系统</dt>
+              <dd>{androidDownload.minAndroid || "Android 8.0+"}</dd>
+            </div>
+          </dl>
+
+          <div className="client-download-actions">
+            {isAndroidAvailable ? (
+              <a className="client-download-primary" href={androidDownload.apkUrl} download={androidDownload.fileName || undefined}>
+                {downloadLabel}
+              </a>
+            ) : (
+              <button className="client-download-primary" type="button" disabled>
+                {downloadLabel}
+              </button>
+            )}
+            <div className="client-download-qr" aria-label={isAndroidAvailable ? "下载二维码预留区域" : "二维码待生成"}>
+              <span>{isAndroidAvailable ? "QR" : "待生成"}</span>
+              <small>{isAndroidAvailable ? "扫码下载" : "上传 APK 后生成"}</small>
+            </div>
+          </div>
+
+          <div className="client-download-checksum">
+            <span>SHA256</span>
+            <code>{shaLabel}</code>
+          </div>
+
+          <div className="client-download-notes">
+            <span>版本说明</span>
+            <ul>
+              {androidDownload.releaseNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </div>
+
+          <ol className="client-install-steps" aria-label="Android 安装说明">
+            <li>在手机浏览器打开当前网站，进入“我 / 客户端”。</li>
+            <li>下载 APK 后，如果系统提示未知来源，请允许浏览器安装应用。</li>
+            <li>安装完成后打开 APP，连接生产服务并登录使用。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section className="client-platform-grid" aria-label="未来客户端平台">
+        {futureClientPlatforms.map((platform) => (
+          <article key={platform.id} className="client-platform-card">
+            <div>
+              <span>{platform.title}</span>
+              <p>{platform.subtitle}</p>
+            </div>
+            <strong>即将推出</strong>
+          </article>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function normalizeAndroidDownloadMetadata(payload: Partial<AndroidAppDownloadMetadata>): AndroidAppDownloadMetadata {
+  const releaseNotes = Array.isArray(payload.releaseNotes) && payload.releaseNotes.length
+    ? payload.releaseNotes.filter((note): note is string => typeof note === "string" && note.trim().length > 0)
+    : defaultAndroidDownloadMetadata.releaseNotes;
+  const sizeBytes = typeof payload.sizeBytes === "number" && Number.isFinite(payload.sizeBytes) && payload.sizeBytes > 0
+    ? payload.sizeBytes
+    : null;
+  const versionCode = typeof payload.versionCode === "number" && Number.isFinite(payload.versionCode)
+    ? payload.versionCode
+    : null;
+
+  return {
+    ...defaultAndroidDownloadMetadata,
+    ...payload,
+    platform: "android",
+    status: payload.status === "available" ? "available" : "coming_soon",
+    versionCode,
+    versionName: typeof payload.versionName === "string" ? payload.versionName : defaultAndroidDownloadMetadata.versionName,
+    fileName: typeof payload.fileName === "string" ? payload.fileName : "",
+    apkUrl: typeof payload.apkUrl === "string" ? payload.apkUrl : "",
+    sizeBytes,
+    sha256: typeof payload.sha256 === "string" ? payload.sha256 : "",
+    releaseDate: typeof payload.releaseDate === "string" ? payload.releaseDate : defaultAndroidDownloadMetadata.releaseDate,
+    minAndroid: typeof payload.minAndroid === "string" ? payload.minAndroid : defaultAndroidDownloadMetadata.minAndroid,
+    releaseNotes
+  };
+}
+
+function androidDownloadMetadataFromRelease(release: ClientAppRelease | undefined): Partial<AndroidAppDownloadMetadata> {
+  if (!release) {
+    return {};
+  }
+  return {
+    platform: "android",
+    status: release.status,
+    versionCode: release.version_code,
+    versionName: release.version_name,
+    fileName: release.file_name,
+    apkUrl: apiURL(release.download_url),
+    sizeBytes: release.size_bytes,
+    sha256: release.sha256,
+    releaseDate: release.release_date,
+    minAndroid: release.min_system,
+    releaseNotes: release.release_notes
+  };
 }
 
 function UserManagementPage({

@@ -26,6 +26,7 @@ type Config struct {
 	LosslessLyricsDirectory  string
 	LossyMusicDirectory      string
 	LossyLyricsDirectory     string
+	ClientAppsDirectory      string
 	LibraryAutoScanInterval  time.Duration
 	LibraryWatchPollInterval time.Duration
 	LibraryWatchDebounce     time.Duration
@@ -66,6 +67,7 @@ func Load() (Config, error) {
 	cfg.LosslessLyricsDirectory = getenv("LOSSLESS_LYRICS_DIRECTORY", cfg.LosslessLyricsDirectory)
 	cfg.LossyMusicDirectory = getenv("LOSSY_MUSIC_DIRECTORY", cfg.LossyMusicDirectory)
 	cfg.LossyLyricsDirectory = getenv("LOSSY_LYRICS_DIRECTORY", cfg.LossyLyricsDirectory)
+	cfg.ClientAppsDirectory = getenv("CLIENT_APPS_DIRECTORY", cfg.ClientAppsDirectory)
 	if cfg.LosslessMusicDirectory == "" {
 		cfg.LosslessMusicDirectory = cfg.MusicDirectory
 	}
@@ -271,6 +273,8 @@ func applyYAML(cfg *Config, values map[string]string) error {
 			cfg.LossyMusicDirectory = value
 		case "lossy_lyrics_directory", "library.lossy_lyrics_directory", "library.lossy.lyrics_directory", "library.lossy.lyrics":
 			cfg.LossyLyricsDirectory = value
+		case "client_apps_directory", "client_apps.directory", "clients.directory", "apps.directory":
+			cfg.ClientAppsDirectory = value
 		case "library.auto_scan_interval", "auto_scan_interval":
 			interval, err := parseDurationValue(value)
 			if err != nil {

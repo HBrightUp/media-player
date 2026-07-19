@@ -63,6 +63,7 @@ LOSSLESS_LYRICS_DIRECTORY=/opt/media-player/lyrics
 LOSSY_MUSIC_DIRECTORY=/opt/media-player/lossy-music
 LOSSY_LYRICS_DIRECTORY=/opt/media-player/lossy-lyrics
 SHARED_LYRICS_DIRECTORY=/opt/media-player/shared-lyrics
+CLIENT_APPS_DIRECTORY=/opt/media-player/apps
 ```
 
 `MUSIC_DIRECTORY` and `LYRICS_DIRECTORY` remain as legacy aliases. The default
@@ -113,7 +114,24 @@ possible, for example:
 /opt/media-player/shared-lyrics/artist/song.lrc
 ```
 
-## 5. Deploy
+## 5. Add Client Installers
+
+Client installers are served by the backend from `CLIENT_APPS_DIRECTORY`, with
+one subdirectory per platform:
+
+```text
+/opt/media-player/apps/android/media-player-v0.1.0.apk
+/opt/media-player/apps/ios/
+/opt/media-player/apps/windows/
+/opt/media-player/apps/macos/
+/opt/media-player/apps/linux/
+```
+
+The web “我 / 客户端” page reads `/api/client-apps`. For Android, the backend
+automatically selects the latest `media-player-v*.apk` under the `android`
+folder and exposes `/api/client-apps/android/download`.
+
+## 6. Deploy
 
 Run from the repository root on the server:
 
@@ -133,7 +151,7 @@ docker compose \
   up -d --build
 ```
 
-## 6. Verify
+## 7. Verify
 
 ```bash
 docker compose --env-file deployments/production/.env -f deployments/production/compose.yaml ps

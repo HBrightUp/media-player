@@ -23,6 +23,12 @@ frontend/vite.config.d.ts
 # Android
 android/.gradle/
 android/local.properties
+android/keystore.properties
+android/*.jks
+android/*.keystore
+android/**/keystore.properties
+android/**/*.jks
+android/**/*.keystore
 android/app/build/
 android/build/
 android/**/build/

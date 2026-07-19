@@ -118,6 +118,7 @@ type playbackSessionRequest struct {
 	DeviceID   string `json:"device_id"`
 	TabID      string `json:"tab_id"`
 	DeviceName string `json:"device_name"`
+	State      string `json:"state"`
 }
 
 type playbackHeartbeatRequest struct {
@@ -157,6 +158,11 @@ func (s *Server) handlePlaybackSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
+	state := database.NormalizePlaybackState(request.State)
+	ttl := playbackSessionTTL
+	if state == database.PlaybackStatePaused {
+		ttl = playbackPauseTTL
+	}
 	token, tokenHash, err := newAuthSessionToken(playbackSessionTokenSize)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "生成播放会话失败")
@@ -170,9 +176,9 @@ func (s *Server) handlePlaybackSession(w http.ResponseWriter, r *http.Request) {
 		TabID:                tabID,
 		DeviceName:           deviceName,
 		TrackID:              track.ID,
-		State:                database.PlaybackStatePlaying,
+		State:                state,
 		Now:                  now,
-		ExpiresAt:            now.Add(playbackSessionTTL),
+		ExpiresAt:            now.Add(ttl),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "申请播放权失败")

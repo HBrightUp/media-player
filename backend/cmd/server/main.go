@@ -66,10 +66,11 @@ func main() {
 		log.Printf("redis runtime cache enabled: addr=%s prefix=%s", redisClient.Options().Addr, cfg.RedisKeyPrefix)
 	}
 
-	apiOptions := make([]httpapi.Option, 0, 1)
+	apiOptions := make([]httpapi.Option, 0, 2)
 	if redisClient != nil {
 		apiOptions = append(apiOptions, httpapi.WithRedis(redisClient, cfg.RedisKeyPrefix))
 	}
+	apiOptions = append(apiOptions, httpapi.WithClientAppsDirectory(cfg.ClientAppsDirectory))
 	api := httpapi.New(store, scanner, cfg.CORSOrigin, apiOptions...)
 	server := &http.Server{
 		Addr:              cfg.Addr,

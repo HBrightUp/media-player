@@ -29,3 +29,8 @@ redis:
   addr: "127.0.0.1:16379"
   db: 0
   key_prefix: "media-player"
+
+client_apps:
+  # 所有客户端安装包统一放在此根目录下，并按平台建立子目录。
+  # 例如：/Users/jhlhd/Music/apps/android/media-player-v0.1.0.apk
+  directory: "/Users/jhlhd/Music/apps"

@@ -149,6 +149,7 @@ export type PlaybackSessionRequest = {
   device_id: string;
   tab_id: string;
   device_name: string;
+  state?: PlaybackSessionState;
 };
 
 export type PlaybackSessionHeartbeatRequest = {
@@ -170,6 +171,30 @@ export type PlaybackSessionResponse = {
   device_name: string;
   stream_ticket?: string;
   stream_ticket_expires_at?: string;
+};
+
+export type ClientAppPlatform = "android" | "ios" | "windows" | "macos" | "linux";
+
+export type ClientAppStatus = "available" | "coming_soon";
+
+export type ClientAppRelease = {
+  platform: ClientAppPlatform;
+  title: string;
+  description: string;
+  status: ClientAppStatus;
+  version_code: number | null;
+  version_name: string;
+  file_name: string;
+  download_url: string;
+  size_bytes: number | null;
+  sha256: string;
+  release_date: string;
+  min_system: string;
+  release_notes: string[];
+};
+
+export type ClientAppsResponse = {
+  apps: ClientAppRelease[];
 };
 
 export type AudioFileImportLimits = {

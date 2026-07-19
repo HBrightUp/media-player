@@ -75,6 +75,7 @@ type Server struct {
 	streamTickets       *streamTicketManager
 	redisRuntime        *redisRuntimeStore
 	authAuditSweeper    *authAuditSweeper
+	clientAppsDirectory string
 }
 
 type setLibraryRequest struct {
@@ -199,6 +200,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	mux.HandleFunc("/api/admin/users/", s.handleAdminUserRoute)
+	mux.HandleFunc("/api/client-apps", s.handleClientApps)
+	mux.HandleFunc("/api/client-apps/", s.handleClientAppRoute)
 	mux.HandleFunc("/api/presence/heartbeat", s.handlePresenceHeartbeat)
 	mux.HandleFunc("/api/presence/offline", s.handlePresenceOffline)
 	mux.HandleFunc("/api/playback/session", s.handlePlaybackSession)
