@@ -57,6 +57,17 @@ for directory in \
   "$CLIENT_APPS_DIRECTORY/macos" \
   "$CLIENT_APPS_DIRECTORY/linux"; do
   chown "$MEDIA_PLAYER_FILE_OWNER" "$directory"
+  chmod 0755 "$directory"
+done
+
+for directory in \
+  "$LOSSLESS_MUSIC_DIRECTORY" \
+  "$LOSSY_MUSIC_DIRECTORY" \
+  "$SHARED_LYRICS_DIRECTORY" \
+  "$CLIENT_APPS_DIRECTORY"; do
+  find "$directory" -type d -exec chown "$MEDIA_PLAYER_FILE_OWNER" {} +
+  find "$directory" -type d -exec chmod 0755 {} +
+  find "$directory" -type f -exec chmod u+rw,go+r {} +
 done
 
 BACKEND_IMAGE="${BACKEND_IMAGE:-production-backend:latest}"
