@@ -14,8 +14,8 @@ FROM alpine:3.22
 RUN sed -i 's#https://dl-cdn.alpinelinux.org/alpine#https://mirrors.aliyun.com/alpine#g' /etc/apk/repositories \
 	&& apk add --no-cache ffmpeg \
 	&& adduser -D -H app \
-	&& mkdir -p /music /lyrics /lossless-music /lossless-lyrics /lossy-music /lossy-lyrics /shared-lyrics /config \
-	&& chown -R app:app /music /lyrics /lossless-music /lossless-lyrics /lossy-music /lossy-lyrics /shared-lyrics /config
+	&& mkdir -p /music /lossless-music /lossy-music /shared-lyrics /config \
+	&& chown -R app:app /music /lossless-music /lossy-music /shared-lyrics /config
 
 WORKDIR /app
 
