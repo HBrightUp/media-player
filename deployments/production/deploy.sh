@@ -74,7 +74,8 @@ if [ ! -f "$ROOT_DIR/frontend/dist/index.html" ]; then
   exit 1
 fi
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d postgres redis backend
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d postgres redis
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
 docker rm -f media-player-frontend >/dev/null 2>&1 || true
 
 if command -v caddy >/dev/null 2>&1 && [ -f /etc/caddy/Caddyfile ]; then
