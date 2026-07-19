@@ -1,67 +1,12 @@
-@font-face {
-  font-family: "LXGW WenKai Screen";
-  font-style: normal;
-  font-weight: 300 900;
-  font-display: swap;
-  src: url("/fonts/lxgw-wenkai-screen/LXGWWenKaiScreen.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: "Ma Shan Zheng";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/ma-shan-zheng/MaShanZheng-Regular.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: "Noto Sans SC";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/noto-sans-sc/NotoSansSC-Regular.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: "Noto Sans SC";
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("/fonts/noto-sans-sc/NotoSansSC-Medium.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: "Noto Sans SC";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("/fonts/noto-sans-sc/NotoSansSC-SemiBold.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: "Noto Sans SC";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("/fonts/noto-sans-sc/NotoSansSC-Bold.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: "Noto Sans SC";
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-  src: url("/fonts/noto-sans-sc/NotoSansSC-ExtraBold.ttf") format("truetype");
-}
-
 :root {
   color-scheme: dark;
   font-family:
-    "Noto Sans SC",
-    "Source Han Sans SC",
-    "HarmonyOS Sans SC",
     "PingFang SC",
+    "Hiragino Sans GB",
     "Microsoft YaHei",
+    "HarmonyOS Sans SC",
+    "Source Han Sans SC",
+    "Noto Sans SC",
     "MiSans",
     system-ui,
     -apple-system,
@@ -3171,7 +3116,7 @@ form.search-dialog .search-actions button {
 }
 
 .growth-page {
-  font-family: "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+  font-family: "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Noto Sans SC", sans-serif;
   font-weight: 400;
 }
 
@@ -3511,7 +3456,7 @@ form.search-dialog .search-actions button {
 .lyrics-album-fallback-copy strong {
   min-width: 0;
   overflow: hidden;
-  font-family: "Ma Shan Zheng", "HanziPen SC", "STXingkai", "KaiTi", cursive;
+  font-family: "HanziPen SC", "STXingkai", "KaiTi", cursive;
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3853,7 +3798,7 @@ form.search-dialog .search-actions button {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  font-family: "LXGW WenKai Screen", "STKaiti", "KaiTi", "Noto Sans SC", sans-serif;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "STKaiti", "KaiTi", sans-serif;
   font-kerning: normal;
   font-feature-settings: "kern" 1;
   overscroll-behavior: contain;
@@ -6204,7 +6149,7 @@ form.search-dialog.audio-file-dialog .search-actions button,
 .transport-icon .icon-number {
   fill: rgb(6, 38, 75);
   stroke: none;
-  font-family: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+  font-family: "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
   font-size: 7px;
   font-weight: 900;
 }

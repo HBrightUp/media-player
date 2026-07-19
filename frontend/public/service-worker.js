@@ -1,4 +1,4 @@
-const cacheName = "media-player-shell-v4";
+const cacheName = "media-player-shell-v5";
 const shellAssets = [
   "/",
   "/manifest.webmanifest",
@@ -44,7 +44,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (["script", "style", "image", "font", "manifest"].includes(request.destination)) {
+  if (["script", "style", "image", "manifest"].includes(request.destination)) {
     event.respondWith(
       caches.open(cacheName).then(async (cache) => {
         const cached = await cache.match(request);
