@@ -759,6 +759,7 @@ function App() {
   const nextTrackPreloadURLRef = useRef("");
   const audioStreamRecoveryRef = useRef<AudioStreamRecoveryState | null>(null);
   const playbackToggleRef = useRef<() => void>(() => undefined);
+  const trackStepShortcutRef = useRef<(direction: 1 | -1) => void>(() => undefined);
   const nextTrackPreloadTimerRef = useRef<number | null>(null);
   const trackLyricsCacheRef = useRef<Map<number, TrackLyrics>>(new Map());
   const trackLyricsRequestRef = useRef<Map<number, Promise<TrackLyrics>>>(new Map());
@@ -1162,6 +1163,35 @@ function App() {
     window.addEventListener("keydown", togglePlaybackOnSpaceKeyDown, true);
     return () => {
       window.removeEventListener("keydown", togglePlaybackOnSpaceKeyDown, true);
+    };
+  }, [activePage]);
+
+  useEffect(() => {
+    if (activePage !== "lyrics") {
+      return;
+    }
+
+    const switchTrackOnArrowKeyDown = (event: KeyboardEvent) => {
+      const isTrackStepKey = event.key === "ArrowLeft" || event.key === "ArrowRight";
+      if (
+        !isTrackStepKey ||
+        event.defaultPrevented ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isLyricsShortcutSuppressedTarget(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      trackStepShortcutRef.current(event.key === "ArrowLeft" ? -1 : 1);
+    };
+
+    window.addEventListener("keydown", switchTrackOnArrowKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", switchTrackOnArrowKeyDown, true);
     };
   }, [activePage]);
 
@@ -4153,6 +4183,8 @@ function App() {
     playTrackFromQueue(nextTrack, { allowTakeover });
   }
 
+  trackStepShortcutRef.current = (direction) => stepTrack(direction);
+
   function playRandomTrack({ allowTakeover = true }: { allowTakeover?: boolean } = {}) {
     if (!playbackQueue.length) {
       clearDetachedPlayback();
@@ -6105,6 +6137,9 @@ function FullLyricsPage({
   }
 
   function handleLyricsDoubleClick(event: ReactMouseEvent<HTMLElement>) {
+    if (isLyricsFullscreenControlTarget(event.target)) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     if (Date.now() < lyricsSyntheticMouseBlockUntilRef.current) {
@@ -6114,7 +6149,7 @@ function FullLyricsPage({
   }
 
   function handleLyricsClickCapture(event: ReactMouseEvent<HTMLElement>) {
-    if (isLyricsInlineSeekControl(event.target)) {
+    if (isLyricsFullscreenControlTarget(event.target)) {
       return;
     }
     if (Date.now() >= lyricsSyntheticMouseBlockUntilRef.current) {
@@ -6124,8 +6159,32 @@ function FullLyricsPage({
     event.stopPropagation();
   }
 
-  function isLyricsInlineSeekControl(target: EventTarget | null) {
-    return target instanceof Element && Boolean(target.closest(".lyrics-inline-seek-indicator"));
+  function isLyricsFullscreenControlTarget(target: EventTarget | null) {
+    if (!(target instanceof Element)) {
+      return false;
+    }
+    return Boolean(
+      target.closest(
+        [
+          ".lyrics-inline-seek-indicator",
+          ".lyrics-side-controls",
+          "a[href]",
+          "button",
+          "input",
+          "textarea",
+          "select",
+          "[contenteditable='true']",
+          "[role='button']",
+          "[role='checkbox']",
+          "[role='menuitem']",
+          "[role='option']",
+          "[role='radio']",
+          "[role='switch']",
+          "[role='tab']",
+          "[role='textbox']"
+        ].join(",")
+      )
+    );
   }
 
   function requestLyricsFullscreenToggle() {
@@ -6164,21 +6223,21 @@ function FullLyricsPage({
     setLyricsSideControlsVisible(false);
   }
 
-  function handleLyricsSidePointerEnter(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handleLyricsSidePointerEnter(event: ReactPointerEvent<HTMLElement>) {
     if (event.pointerType === "touch") {
       return;
     }
     revealLyricsSideControls();
   }
 
-  function handleLyricsSidePointerLeave(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handleLyricsSidePointerLeave(event: ReactPointerEvent<HTMLElement>) {
     if (event.pointerType === "touch") {
       return;
     }
     hideLyricsSideControls();
   }
 
-  function handleLyricsSidePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handleLyricsSidePointerDown(event: ReactPointerEvent<HTMLElement>) {
     event.stopPropagation();
     lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 900;
     revealLyricsSideControls(event.pointerType === "touch");
@@ -6198,6 +6257,11 @@ function FullLyricsPage({
       return;
     }
     onNextTrack();
+  }
+
+  function handleLyricsSideZoneClick(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function primeLyricsSeekIndicatorPlayback() {
@@ -6237,31 +6301,22 @@ function FullLyricsPage({
     activateLyricsSeekIndicator();
   }
 
-  function handleLyricsPointerDown(event: ReactPointerEvent<HTMLElement>) {
-    const lyricsList = lyricsListRef.current;
-    if (lyricsList && event.currentTarget === lyricsList) {
-      if (event.pointerType === "mouse" && event.button !== 0) {
-        return;
-      }
-      lyricsScrubPointerRef.current = {
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        startY: event.clientY,
-        startScrollTop: lyricsList.scrollTop,
-        moved: false
-      };
-      if (event.pointerType === "mouse") {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }
-    }
+  function resetLyricsTapGesture() {
+    lyricsTapStartRef.current = null;
+    lastLyricsTapRef.current = null;
+  }
 
+  function handleLyricsPagePointerDown(event: ReactPointerEvent<HTMLElement>) {
     if (event.pointerType !== "touch") {
+      return;
+    }
+    if (isLyricsFullscreenControlTarget(event.target)) {
+      resetLyricsTapGesture();
       return;
     }
     const lastTap = lastLyricsTapRef.current;
     if (lastTap && Date.now() - lastTap.at <= 360 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= 34) {
       event.preventDefault();
-      event.stopPropagation();
     }
     lyricsTapStartRef.current = {
       pointerId: event.pointerId,
@@ -6271,24 +6326,12 @@ function FullLyricsPage({
     };
   }
 
-  function handleLyricsPointerUp(event: ReactPointerEvent<HTMLElement>) {
-    const scrubPointer = lyricsScrubPointerRef.current;
-    const completedScrub = Boolean(scrubPointer && scrubPointer.pointerId === event.pointerId && scrubPointer.moved);
-    if (scrubPointer?.pointerId === event.pointerId) {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      lyricsScrubPointerRef.current = null;
-      if (completedScrub) {
-        event.preventDefault();
-        event.stopPropagation();
-        lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
-      }
+  function handleLyricsPagePointerUp(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch") {
+      return;
     }
-
-    if (event.pointerType !== "touch" || completedScrub) {
-      lyricsTapStartRef.current = null;
-      lastLyricsTapRef.current = null;
+    if (isLyricsFullscreenControlTarget(event.target)) {
+      resetLyricsTapGesture();
       return;
     }
     const tapStart = lyricsTapStartRef.current;
@@ -6317,6 +6360,47 @@ function FullLyricsPage({
     lastLyricsTapRef.current = { x: event.clientX, y: event.clientY, at: now };
   }
 
+  function handleLyricsPagePointerCancel(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType === "touch") {
+      resetLyricsTapGesture();
+    }
+  }
+
+  function handleLyricsPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    const lyricsList = lyricsListRef.current;
+    if (lyricsList && event.currentTarget === lyricsList) {
+      if (event.pointerType === "mouse" && event.button !== 0) {
+        return;
+      }
+      lyricsScrubPointerRef.current = {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startY: event.clientY,
+        startScrollTop: lyricsList.scrollTop,
+        moved: false
+      };
+      if (event.pointerType === "mouse") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+    }
+  }
+
+  function handleLyricsPointerUp(event: ReactPointerEvent<HTMLElement>) {
+    const scrubPointer = lyricsScrubPointerRef.current;
+    const completedScrub = Boolean(scrubPointer && scrubPointer.pointerId === event.pointerId && scrubPointer.moved);
+    if (scrubPointer?.pointerId === event.pointerId) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      lyricsScrubPointerRef.current = null;
+      if (completedScrub) {
+        event.preventDefault();
+        event.stopPropagation();
+        lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
+      }
+    }
+  }
+
   function handleLyricsPointerCancel(event: ReactPointerEvent<HTMLElement>) {
     const scrubPointer = lyricsScrubPointerRef.current;
     if (scrubPointer?.pointerId === event.pointerId) {
@@ -6326,62 +6410,30 @@ function FullLyricsPage({
         lyricsSyntheticMouseBlockUntilRef.current = Date.now() + 700;
       }
     }
-    if (event.pointerType === "touch") {
-      lyricsTapStartRef.current = null;
-      lastLyricsTapRef.current = null;
-    }
   }
 
   let content: ReactNode;
   if (!currentTrack) {
     content = (
-      <div
-        className="full-lyrics-empty"
-        onPointerDown={handleLyricsPointerDown}
-        onPointerUp={handleLyricsPointerUp}
-        onPointerCancel={handleLyricsPointerCancel}
-        onClickCapture={handleLyricsClickCapture}
-        onDoubleClick={handleLyricsDoubleClick}
-      >
+      <div className="full-lyrics-empty">
         请选择歌曲
       </div>
     );
   } else if (status === "loading") {
     content = (
-      <div
-        className="full-lyrics-empty"
-        onPointerDown={handleLyricsPointerDown}
-        onPointerUp={handleLyricsPointerUp}
-        onPointerCancel={handleLyricsPointerCancel}
-        onClickCapture={handleLyricsClickCapture}
-        onDoubleClick={handleLyricsDoubleClick}
-      >
+      <div className="full-lyrics-empty">
         正在加载歌词
       </div>
     );
   } else if (status === "error") {
     content = (
-      <div
-        className="full-lyrics-empty"
-        onPointerDown={handleLyricsPointerDown}
-        onPointerUp={handleLyricsPointerUp}
-        onPointerCancel={handleLyricsPointerCancel}
-        onClickCapture={handleLyricsClickCapture}
-        onDoubleClick={handleLyricsDoubleClick}
-      >
+      <div className="full-lyrics-empty">
         歌词加载失败
       </div>
     );
   } else if (!lines.length) {
     content = (
-      <div
-        className="full-lyrics-empty"
-        onPointerDown={handleLyricsPointerDown}
-        onPointerUp={handleLyricsPointerUp}
-        onPointerCancel={handleLyricsPointerCancel}
-        onClickCapture={handleLyricsClickCapture}
-        onDoubleClick={handleLyricsDoubleClick}
-      >
+      <div className="full-lyrics-empty">
         暂无歌词
       </div>
     );
@@ -6399,8 +6451,6 @@ function FullLyricsPage({
         onPointerMove={handleLyricsPointerMove}
         onPointerUp={handleLyricsPointerUp}
         onPointerCancel={handleLyricsPointerCancel}
-        onClickCapture={handleLyricsClickCapture}
-        onDoubleClick={handleLyricsDoubleClick}
       >
         {lines.map((line, index) => {
           const isActive = index === activeLineIndex;
@@ -6485,7 +6535,16 @@ function FullLyricsPage({
   }
 
   return (
-    <section className="lyrics-page" style={lyricsPaletteStyle} aria-label="歌词">
+    <section
+      className="lyrics-page"
+      style={lyricsPaletteStyle}
+      aria-label="歌词"
+      onPointerDown={handleLyricsPagePointerDown}
+      onPointerUp={handleLyricsPagePointerUp}
+      onPointerCancel={handleLyricsPagePointerCancel}
+      onClickCapture={handleLyricsClickCapture}
+      onDoubleClick={handleLyricsDoubleClick}
+    >
       <div className={`lyrics-cinematic-scene ${isPlaying ? "is-playing" : "is-paused"} ${coverImageURL ? "has-cover" : "no-cover"}`} style={sceneMotionStyle} aria-hidden="true">
         <span className="lyrics-cover-art" style={coverImageStyle} />
         <span className="lyrics-color-field base" />
@@ -6529,44 +6588,54 @@ function FullLyricsPage({
         </div>
       ) : null}
       <nav className={`lyrics-side-controls ${lyricsSideControlsVisible ? "is-visible" : ""}`} aria-label="歌词页切歌">
-        <button
-          className="lyrics-side-control previous"
-          type="button"
-          aria-label="上一首"
-          title="上一首"
-          onBlur={hideLyricsSideControls}
-          onClick={(event) => handleLyricsSideClick(event, -1)}
-          onFocus={() => revealLyricsSideControls()}
+        <div
+          className="lyrics-side-zone previous"
+          onClick={handleLyricsSideZoneClick}
           onPointerDown={handleLyricsSidePointerDown}
           onPointerEnter={handleLyricsSidePointerEnter}
           onPointerLeave={handleLyricsSidePointerLeave}
           onPointerUp={(event) => event.stopPropagation()}
         >
-          <span className="lyrics-side-control-icon" aria-hidden="true">
-            <svg className="lyrics-side-chevron" viewBox="0 0 24 24" focusable="false">
-              <path d="M14.4 6.4 8.8 12l5.6 5.6" />
-            </svg>
-          </span>
-        </button>
-        <button
-          className="lyrics-side-control next"
-          type="button"
-          aria-label="下一首"
-          title="下一首"
-          onBlur={hideLyricsSideControls}
-          onClick={(event) => handleLyricsSideClick(event, 1)}
-          onFocus={() => revealLyricsSideControls()}
+          <button
+            className="lyrics-side-control"
+            type="button"
+            aria-label="上一首"
+            title="上一首"
+            onBlur={hideLyricsSideControls}
+            onClick={(event) => handleLyricsSideClick(event, -1)}
+            onFocus={() => revealLyricsSideControls()}
+          >
+            <span className="lyrics-side-control-icon" aria-hidden="true">
+              <svg className="lyrics-side-chevron" viewBox="0 0 24 24" focusable="false">
+                <path d="M14.4 6.4 8.8 12l5.6 5.6" />
+              </svg>
+            </span>
+          </button>
+        </div>
+        <div
+          className="lyrics-side-zone next"
+          onClick={handleLyricsSideZoneClick}
           onPointerDown={handleLyricsSidePointerDown}
           onPointerEnter={handleLyricsSidePointerEnter}
           onPointerLeave={handleLyricsSidePointerLeave}
           onPointerUp={(event) => event.stopPropagation()}
         >
-          <span className="lyrics-side-control-icon" aria-hidden="true">
-            <svg className="lyrics-side-chevron" viewBox="0 0 24 24" focusable="false">
-              <path d="M9.6 6.4 15.2 12l-5.6 5.6" />
-            </svg>
-          </span>
-        </button>
+          <button
+            className="lyrics-side-control"
+            type="button"
+            aria-label="下一首"
+            title="下一首"
+            onBlur={hideLyricsSideControls}
+            onClick={(event) => handleLyricsSideClick(event, 1)}
+            onFocus={() => revealLyricsSideControls()}
+          >
+            <span className="lyrics-side-control-icon" aria-hidden="true">
+              <svg className="lyrics-side-chevron" viewBox="0 0 24 24" focusable="false">
+                <path d="M9.6 6.4 15.2 12l-5.6 5.6" />
+              </svg>
+            </span>
+          </button>
+        </div>
       </nav>
       <section className={`lyrics-page-body ${lyricsSeekPreview ? "is-scrubbing" : ""}`} aria-live="polite">
         {content}

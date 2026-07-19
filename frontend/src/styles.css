@@ -3643,39 +3643,49 @@ form.search-dialog .search-actions button {
   --lyrics-controls-offset: clamp(220px, 22vw, 440px);
   --lyrics-control-width: 72px;
   --lyrics-control-half-width: 36px;
+  --lyrics-control-zone-height: 96px;
   --lyrics-control-icon-size: 48px;
   --lyrics-control-chevron-size: 26px;
 }
 
-.lyrics-side-control {
+.lyrics-side-zone {
   position: absolute;
-  top: 12%;
-  bottom: 12%;
+  top: 50%;
   width: var(--lyrics-control-width);
+  height: var(--lyrics-control-zone-height);
   display: grid;
-  align-items: center;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: pan-y manipulation;
+  transform: translateY(-50%);
+}
+
+.lyrics-side-control {
+  position: relative;
+  width: var(--lyrics-control-icon-size);
+  height: var(--lyrics-control-icon-size);
+  display: grid;
+  place-items: center;
   padding: 0;
   border: 0;
   color: rgba(248, 254, 255, 0.94);
   background: transparent;
   cursor: pointer;
   pointer-events: auto;
-  touch-action: pan-y manipulation;
+  touch-action: manipulation;
   appearance: none;
   -webkit-tap-highlight-color: transparent;
   transform: none;
   transition: none;
 }
 
-.lyrics-side-control.previous {
+.lyrics-side-zone.previous {
   left: calc(50% + var(--lyrics-controls-center-shift) - var(--lyrics-controls-offset) - var(--lyrics-control-half-width));
-  justify-items: center;
 }
 
-.lyrics-side-control.next {
+.lyrics-side-zone.next {
   right: auto;
   left: calc(50% + var(--lyrics-controls-center-shift) + var(--lyrics-controls-offset) - var(--lyrics-control-half-width));
-  justify-items: center;
 }
 
 .lyrics-side-control:active:not(:disabled) {
@@ -3686,6 +3696,7 @@ form.search-dialog .search-actions button {
   .lyrics-side-controls {
     --lyrics-controls-center-shift: clamp(136px, 15.7vw, 189px);
     --lyrics-controls-offset: clamp(190px, 22vw, 260px);
+    --lyrics-control-zone-height: 90px;
     --lyrics-control-icon-size: 46px;
     --lyrics-control-chevron-size: 24px;
   }
@@ -3697,6 +3708,7 @@ form.search-dialog .search-actions button {
     --lyrics-controls-offset: calc(50vw - 40px);
     --lyrics-control-width: 64px;
     --lyrics-control-half-width: 32px;
+    --lyrics-control-zone-height: 82px;
     --lyrics-control-icon-size: 40px;
     --lyrics-control-chevron-size: 22px;
   }
@@ -3748,6 +3760,8 @@ form.search-dialog .search-actions button {
 }
 
 .lyrics-side-controls.is-visible .lyrics-side-control-icon,
+.lyrics-side-zone:hover .lyrics-side-control-icon,
+.lyrics-side-zone:focus-within .lyrics-side-control-icon,
 .lyrics-side-control:hover .lyrics-side-control-icon,
 .lyrics-side-control:focus-visible .lyrics-side-control-icon {
   border-color: rgba(216, 244, 255, 0.44);
@@ -3767,10 +3781,9 @@ form.search-dialog .search-actions button {
 }
 
 @media (hover: none), (pointer: coarse) {
-  .lyrics-side-control {
-    top: 16%;
-    bottom: 16%;
+  .lyrics-side-zone {
     width: var(--lyrics-control-width);
+    height: var(--lyrics-control-zone-height);
   }
 
   .lyrics-side-control-icon {
@@ -3780,12 +3793,14 @@ form.search-dialog .search-actions button {
     transform: none;
   }
 
+  .lyrics-side-zone:hover .lyrics-side-control-icon,
   .lyrics-side-control:hover .lyrics-side-control-icon {
     opacity: 0;
     transform: none;
   }
 
   .lyrics-side-controls.is-visible .lyrics-side-control-icon,
+  .lyrics-side-zone:focus-within .lyrics-side-control-icon,
   .lyrics-side-control:active .lyrics-side-control-icon,
   .lyrics-side-control:focus-visible .lyrics-side-control-icon {
     opacity: 1;

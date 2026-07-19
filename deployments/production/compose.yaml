@@ -1,20 +1,4 @@
 services:
-  frontend:
-    build:
-      context: ../../frontend
-    container_name: media-player-frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    environment:
-      MEDIA_PLAYER_SITE_ADDRESS: ${MEDIA_PLAYER_SITE_ADDRESS:?MEDIA_PLAYER_SITE_ADDRESS is required}
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - media_player_caddy_data:/data
-      - media_player_caddy_config:/config
-
   postgres:
     image: postgres:16-alpine
     container_name: media-player-postgres
@@ -45,8 +29,7 @@ services:
       retries: 10
 
   backend:
-    build:
-      context: ../../backend
+    image: ${BACKEND_IMAGE:-production-backend:latest}
     container_name: media-player-backend
     restart: unless-stopped
     depends_on:
@@ -77,7 +60,5 @@ services:
       - ${CLIENT_APPS_DIRECTORY:-/opt/media-player/apps}:/client-apps:ro
 
 volumes:
-  media_player_caddy_data:
-  media_player_caddy_config:
   media_player_pgdata:
   media_player_redisdata:
